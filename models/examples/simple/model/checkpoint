@@ -1,0 +1,2 @@
+model_checkpoint_path: "model-{current_date}_model_best.ckpt"
+all_model_checkpoint_paths: "model-{current_date}_model_best.ckpt"

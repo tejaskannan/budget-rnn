@@ -3,6 +3,7 @@ from dpu_utils.utils import RichPath
 from enum import Enum, auto
 from typing import Union, Dict, Any, DefaultDict, List, Generator
 from collections import defaultdict
+from more_itertools import ichunked
 
 from utils.file_utils import to_rich_path
 
@@ -26,9 +27,9 @@ class Dataset:
 
         # Load the dataset partitions
         self.dataset = {
-            DataSeries.TRAIN: load_series(DataSeries.TRAIN),
-            DataSeries.VALID: load_series(DataSeries.VALID),
-            DataSeries.TEST: load_series(DataSeries.TEST)
+            DataSeries.TRAIN: self.load_series(self.data_folders[DataSeries.TRAIN]),
+            DataSeries.VALID: self.load_series(self.data_folders[DataSeries.VALID]),
+            DataSeries.TEST: self.load_series(self.data_folders[DataSeries.TEST])
         }
 
     def tensorize(self, sample: Dict[str, Any], metadata: Dict[str, Any]) -> Dict[str, np.ndarray]:
@@ -46,24 +47,23 @@ class Dataset:
         """
         return raw_sample
 
-    def load_series(self, series: DataSeries) -> List[Dict[str, Any]]:
+    def load_series(self, data_folder: RichPath) -> List[Dict[str, Any]]:
         """
         Loads data from the given series into memory. Only accepts data files
         which are stored as compressed .jsonl.gz files.
 
         Args:
-            series: Series to load (TRAIN, VALID or TEST)
+            data_folder: The folder to load data from (TRAIN, VALID or TEST)
         Returns:
             A list of loaded data samples.
         """
-        data_folder = self.data_folders[series]
-
         samples: List[Dict[str, Any]] = []
         for data_file in data_folder.iterate_filtered_files_in_dir('*.jsonl.gz'):
             for raw_sample in data_file.read_by_file_suffix():
                 samples.append(self.process_raw_sample(raw_sample))
 
         return samples
+
 
     def minibatch_generator(self, series: DataSeries,
                                   batch_size: int,
@@ -98,7 +98,7 @@ class Dataset:
             feed_dict: DefaultDict[str, List[Any]] = defaultdict(list)
             for sample in minibatch:
                 tensorized_sample = self.tensorize(sample, metadata)
-                for key, tensor in tensorized_sample.values():
+                for key, tensor in tensorized_sample.items():
                     feed_dict[key].append(tensor)
 
             yield feed_dict
