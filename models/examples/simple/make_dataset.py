@@ -8,8 +8,8 @@ from utils.file_utils import to_rich_path
 
 def make_sample(input_value: int, fn: Callable[[int], int]) -> Dict[str, int]:
     return {
-        'input': int(input_value),
-        'output': int(fn(input_value))
+        'input': float(input_value),
+        'output': float(fn(input_value))
     }
 
 
@@ -29,7 +29,7 @@ def create_dataset(output_folder: str, num_samples: int, train_frac: float, vali
 
     # Create dataset samples
     dataset: List[Dict[str, int]] = []
-    inputs = np.arange(start=int(-num_samples / 2), stop=int(num_samples / 2) + 1, dtype=int)
+    inputs = np.random.standard_normal(size=num_samples)
     for input_value in inputs:
         dataset.append(make_sample(input_value, lambda x: x * x))
 

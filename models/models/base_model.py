@@ -2,12 +2,14 @@ import tensorflow as tf
 import numpy as np
 from dpu_utils.utils import RichPath
 from datetime import datetime
-from typing import Optional, Iterable, Dict, Any, Union, List
+from collections import defaultdict
+from typing import Optional, Iterable, Dict, Any, Union, List, DefaultDict
 
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import get_optimizer
 from utils.file_utils import to_rich_path
+from utils.constants import BIG_NUMBER
 
 
 class Model:
@@ -51,6 +53,18 @@ class Model:
         """
         pass
 
+    def predict(self, samples: List[Dict[str, Any]], dataset: Dataset) -> Dict[Any, Any]:
+        """
+        Execute the model to produce a prediction for the given input sample.
+
+        Args:
+            samples: Input samples to predict outputs for.
+            dataset: Dataset object used to create input tensors.
+        Returns:
+            The predicted output produced by the model.
+        """
+        pass
+
     def batch_to_feed_dict(self, batch: Dict[str, np.ndarray], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
         """
         Converts the batch value dictionary into a tensorflow feed dictionary.
@@ -71,6 +85,16 @@ class Model:
             init_op = tf.global_variables_initializer()
             self._sess.run(init_op)
 
+    def make(self):
+        """
+        Creates model and optimizer op.
+        """
+        with self._sess.graph.as_default():
+            self.make_placeholders()
+            self.make_model()
+            self.make_loss()
+            self.make_training_step()
+
     def make_training_step(self, trainable_vars: Optional[Iterable[tf.Tensor]] = None):
         """
         Creates the training step for this model. Gradients are clipped
@@ -84,7 +108,7 @@ class Model:
             raise ValueError('Must define a loss before the training step can be created.')
 
         # Compute Gradients
-        if trainable_vars is not None:
+        if trainable_vars is None:
             trainable_vars = self._sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
         gradients = tf.gradients(self._ops['loss'], trainable_vars)
 
@@ -95,7 +119,7 @@ class Model:
         pruned_gradients = [(grad, var) for grad, var in zip(clipped_gradients, trainable_vars) if grad is not None]
 
         # Apply the gradients to the specified variables
-        self._ops['train_op'] = self._optimizer.apply_gradients(pruned_gradients)
+        self._ops['optimizer_op'] = self._optimizer.apply_gradients(pruned_gradients)
 
     def execute(self, feed_dict: Dict[tf.Tensor, List[Any]], ops: Optional[List[str]] = None) -> Dict[str, Any]:
         """
@@ -116,7 +140,7 @@ class Model:
             op_results = self._sess.run(ops_to_run, feed_dict)
             return op_results
 
-    def train(self, dataset: Dataset) -> Dict[str, Any]:
+    def train(self, dataset: Dataset) -> DefaultDict[str, List[float]]:
         """
         Trains the model on the given dataset.
 
@@ -127,18 +151,16 @@ class Model:
         """
         self.load_metadata(dataset)
 
-        with self._sess.graph.as_default():
-            self.make_placeholders()
-            self.make_model()
-            self.make_loss()
-
         current_date = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
-        name = '{current_date}_model_best'
+        name = f'{current_date}_model_best'
 
-        # Initialize variables
+        # Make Model and Initialize variables
+        self.make()
         self.init()
 
-        best_valid_loss = 1e10
+        metrics_dict: DefaultDict[str, List[float]] = defaultdict(list)
+
+        best_valid_loss = BIG_NUMBER
         for epoch in range(self.hypers.epochs):
             print(f'-------- Epoch {epoch} --------')
 
@@ -149,11 +171,11 @@ class Model:
                                                           should_shuffle=True)
             for i, batch in enumerate(train_generator):
                 feed_dict = self.batch_to_feed_dict(batch, is_train=True)
-                train_results = self.execute(feed_dict, ['train_op', 'loss'])
+                train_results = self.execute(feed_dict, ['optimizer_op', 'loss'])
                 train_losses.append(train_results['loss'])
 
                 avg_loss = np.average(train_losses)
-                print(f'Train Batch {i}. Average loss so far: {avg_loss:.2f}', end='\r')
+                print(f'Train Batch {i}. Average loss so far: {avg_loss:.5f}', end='\r')
             print()
 
             valid_losses: List[float] = []
@@ -163,34 +185,41 @@ class Model:
                                                           should_shuffle=False)
             for i, batch in enumerate(valid_generator):
                 feed_dict = self.batch_to_feed_dict(batch, is_train=False)
-                valid_results = self.execute(feed_dict, 'loss')
+                valid_results = self.execute(feed_dict, ['output', 'loss'])
                 valid_losses.append(valid_results['loss'])
 
                 avg_loss = np.average(valid_losses)
-                print(f'Valid Batch {i}. Average loss so far: {avg_loss:.2f}', end='\r')
+                print(f'Valid Batch {i}. Average loss so far: {avg_loss:5f}', end='\r')
             print()
 
+            train_loss = np.average(train_losses)
             valid_loss = np.average(valid_losses)
-            if valid_loss > best_valid_loss:
+
+            metrics_dict['train'].append(train_loss)
+            metrics_dict['valid'].append(valid_loss)
+
+            if valid_loss >= best_valid_loss:
                 num_not_improved += 1
             else:
+                print('Saving model...')
                 self.save(name)
-                valid_loss = best_valid_loss
+                best_valid_loss = valid_loss
                 num_not_improved = 0
 
             if num_not_improved >= self.hypers.patience:
                 print('Exiting due to Early Stopping')
-                return
+                break
 
+        return metrics_dict
 
     def save(self, name: str):
         """
         Save model weights and hyper-parameters.
         """
-        params_path = self.save_folder.join('hyper_params.pkl.gz')
+        params_path = self.save_folder.join(f'model-hyper-params-{name}.pkl.gz')
         params_path.save_as_compressed_file(self.hypers.__dict__())
 
-        metadata_path = self.save_folder.join('metadata.pkl.gz')
+        metadata_path = self.save_folder.join(f'model-metadata-{name}.pkl.gz')
         metadata_path.save_as_compressed_file(self.metadata)
 
         with self._sess.graph.as_default():
@@ -202,13 +231,14 @@ class Model:
         """
         Restore model weights and hyperparameters.
         """
-        params_path = self.save_folder.join('hyper_params.pkl.gz')
+        params_path = self.save_folder.join(f'model-hyper-params-{name}.pkl.gz')
         self.hypers = HyperParameters(params_path)
 
-        metadata_path = self.save_folder.join('metadata.pkl.gz')
-        self.metadata = metadata.read_by_file_suffix()
+        metadata_path = self.save_folder.join(f'model-metadata-{name}.pkl.gz')
+        self.metadata = metadata_path.read_by_file_suffix()
 
         with self._sess.graph.as_default():
+            self.make()
             model_path = self.save_folder.join(f'model-{name}.ckpt')
             saver = tf.train.Saver()
             saver.restore(self._sess, model_path.path)

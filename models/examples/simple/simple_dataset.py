@@ -10,6 +10,6 @@ class SimpleDataset(Dataset):
         normalized_output = metadata['output_scaler'].transform([[sample['output']]])
  
         return {
-            'input': normalized_input,
-            'output': normalized_output
+            'input': np.array(normalized_input),
+            'output': np.array(normalized_output)
         }

@@ -19,3 +19,7 @@ if __name__ == '__main__':
     hypers = HyperParameters(args.params_file)
     model = SimpleModel(hyper_parameters=hypers, save_folder=args.save_folder)
     model.train(dataset)
+
+    test_sample = {'input': 2, 'output': 4}
+    predictions = model.predict([test_sample], dataset)
+    print(predictions)
