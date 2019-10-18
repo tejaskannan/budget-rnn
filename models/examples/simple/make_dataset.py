@@ -31,7 +31,7 @@ def create_dataset(output_folder: str, num_samples: int, train_frac: float, vali
     dataset: List[Dict[str, int]] = []
     inputs = np.random.standard_normal(size=num_samples)
     for input_value in inputs:
-        dataset.append(make_sample(input_value, lambda x: x * x))
+        dataset.append(make_sample(input_value, lambda x: x))
 
     # Shuffle Samples
     np.random.shuffle(dataset)

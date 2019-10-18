@@ -53,8 +53,8 @@ class SimpleModel(Model):
         with tf.variable_scope('simple_model'):
             predictions = mlp(inputs=self._placeholders['input_ph'],
                               output_size=1,
-                              hidden_sizes=[8, 8],
-                              activations='tanh',
+                              hidden_sizes=[4],
+                              activations=None,
                               dropout_keep_rate=self._placeholders['dropout_keep_rate'],
                               name='model',
                               should_activate_final=False,
@@ -71,6 +71,8 @@ class SimpleModel(Model):
 
         feed_dict = self.batch_to_feed_dict(batch, is_train=False)
         op_result = self.execute(feed_dict, 'output')
+
+        print(batch)
 
         original_inputs = self.metadata['input_scaler'].inverse_transform(np.array(batch['input']).reshape(-1, 1))
         outputs = self.metadata['output_scaler'].inverse_transform(op_result['output'].reshape(-1, 1))
