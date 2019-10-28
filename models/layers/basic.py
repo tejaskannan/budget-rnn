@@ -1,6 +1,27 @@
 import tensorflow as tf
 from dpu_utils.tfutils import get_activation
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Any
+
+from utils.constants import BIG_NUMBER
+
+
+def pool_sequence(embeddings: tf.Tensor, mask: tf.Tensor, pool_mode: str) -> tf.Tensor:
+    """
+    Args:
+        embeddings: A B x T x K tensor
+        seq_lengths: A B x T
+    """
+    
+    pool_mode = pool_mode.lower()
+    if pool_mode == 'sum':
+        masked_embeddings = embeddings * tf.cast(tf.expand_dims(mask), dtype=embeddings.dtype)
+        return tf.reduce_sum(masked_embeddings, axis=-2)
+    elif pool_mode == 'max':
+        inverted_mask = -BIG_NUMBER * (1.0 - tf.cast(tf.expand_dims(mask), dtype=embeddings.dtype))
+        masked_embeddings = embeddings + inverted_mask
+        return tf.reduce_max(masked_embeddings)
+    else:
+        raise ValueError(f'Unknown pool mode {pool_mode}!')
 
 
 def mlp(inputs: tf.Tensor,
@@ -73,3 +94,65 @@ def mlp(inputs: tf.Tensor,
         result = tf.nn.dropout(result, keep_prob=dropout_keep_rate)
 
     return result
+
+
+def weighted_average(inputs: tf.Tensor,
+                     mask: tf.Tensor,
+                     activation: Optional[str],
+                     dropout_keep_rate: tf.Tensor):
+    """
+    A simple attention layer which computes the weighted average
+    over the final two dimensions of the given inputs.
+
+    Args:
+        inputs: A B x ... x T x K tensor
+        mask: A B x ... x T binary (float) tensor to mask out certain entries
+        activation: activation function to apply to get
+            the activation weights
+        dropout_keep_rate: Dropout to apply to attention weights
+    Returns:
+        A B x ... x K tensor containing the aggregated vectors
+    """
+    raw_weights = mlp(inputs=inputs,
+                      output_size=1,
+                      hidden_sizes=None,
+                      activation_fns=activation,
+                      name='attention-weights')
+
+    # Mask out vectors by setting the mask values to a large negative number.
+    # Applying softmax to these values will zero the masked-values out.
+    attention_mask = (1.0 - tf.expand_dims(mask, axis=-1)) * -BIG_NUMBER  # B x ... x T x 1
+    masked_weights = attention_mask + raw_weights
+
+    attention_weights = tf.nn.softmax(masked_weights, axis=-1)  # B x ... x T x 1
+
+    weighted_inputs = inputs * attention_weights  # B x ... x T x K
+    return tf.reduce_sum(weighted_inputs, axis=-2)  # B x ... x K
+
+
+def rnn_cell(cell_type: str,
+             num_units: int,
+             activation: str,
+             dropout_keep_rate: float,
+             name: str,
+             dtype: Any) -> tf.nn.rnn_cell.RNNCell:
+    cell_type = cell_type.lower()
+
+    cell = None
+    if cell_type in {'rnn', 'basic', 'vanilla'}:
+        cell = tf.nn.rnn_cell.BasicRNNCell
+    elif cell_type == 'gru':
+        cell = tf.nn.rnn_cell.GRUCell
+    elif cell_type == 'lstm':
+        cell = tf.nn.rnn_cell.LSTMCell
+    else:
+        raise ValueError(f'Unrecognized cell type {cell_type}!')
+
+    rnn_cell = cell(num_units=num_units,
+                    activation=get_activation(activation),
+                    name=name,
+                    dtype=dtype)
+    cell_with_dropout = tf.nn.rnn_cell.DropoutWrapper(cell=rnn_cell,
+                                                      input_keep_prob=dropout_keep_rate,
+                                                      state_keep_prob=dropout_keep_rate)
+    return cell_with_dropout
