@@ -1,4 +1,5 @@
 import numpy as np
+import re
 from dpu_utils.utils import RichPath
 from enum import Enum, auto
 from typing import Union, Dict, Any, DefaultDict, List, Generator
@@ -24,6 +25,9 @@ class Dataset:
                 DataSeries.VALID: to_rich_path(valid_folder),
                 DataSeries.TEST: to_rich_path(test_folder)
         }
+
+        match = re.match('^.+/(.+)/.+$', self.data_folders[DataSeries.TRAIN].path)
+        self.dataset_name = match.group(1).replace('_', '-')
 
         # Load the dataset partitions
         self.dataset = {
@@ -91,14 +95,16 @@ class Dataset:
             np.random.shuffle(data_series)
 
         for minibatch in ichunked(data_series, batch_size):
-            if drop_incomplete_batches and len(minibatch) < batch_size:
-                continue
-
             # Turn minibatch into a feed dict
             feed_dict: DefaultDict[str, List[Any]] = defaultdict(list)
+            num_samples = 0
             for sample in minibatch:
                 tensorized_sample = self.tensorize(sample, metadata)
                 for key, tensor in tensorized_sample.items():
                     feed_dict[key].append(tensor)
+                num_samples += 1
+
+            if drop_incomplete_batches and num_samples < batch_size:
+                continue
 
             yield feed_dict

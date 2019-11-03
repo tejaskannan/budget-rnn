@@ -3,19 +3,23 @@ import json
 import matplotlib.pyplot as plt
 import numpy as np
 from argparse import ArgumentParser
-from collections import OrderedDict
+from collections import defaultdict, OrderedDict
+from dpu_utils.utils import RichPath
 from os.path import split, join, exists
-from typing import Dict, Tuple, List, Optional
+from os import mkdir
+from typing import Dict, Tuple, List, Optional, DefaultDict, Any
 
-from rnn_sample_model import RNNSampleModel
+from rnn_sample_model import RNNSampleModel, TestMetrics
 from rnn_sample_dataset import RNNSampleDataset
 from utils.hyperparameters import HyperParameters
 
 
 def extract_model_name(model_file: str) -> str:
-    match = re.match(r'model-([^\.]+)\.ckpt.*', model_file)
+    match = re.match(r'^model-([^\.]+)\.ckpt.*$', model_file)
     if not match:
-        return model_file.replace('model-', '')
+        if model_file.startswith('model-'):
+            return model_file[len('model-'):]
+        return model_file
     return match.group(1)
 
 
@@ -26,7 +30,10 @@ def evaluate_model(model_params: Dict[str, str], dataset: RNNSampleDataset,
     path_tokens = split(model_params['model_path'])
     folder, file_name = path_tokens[0], path_tokens[1]
     model = RNNSampleModel(hypers, folder)
+    
+    print(file_name)
     model_name = extract_model_name(file_name)
+    print(model_name)
 
     model.restore_parameters(model_name)
     model.make(is_train=False)
@@ -37,17 +44,22 @@ def evaluate_model(model_params: Dict[str, str], dataset: RNNSampleDataset,
     return metrics
 
 
-def plot_results(accuracy_metrics: List[OrderedDict], latency_metrics: List[OrderedDict], labels: List[str], sample_frac: float):
+def plot_results(error_metrics: DefaultDict[str, TestMetrics],
+                 latency_metrics: DefaultDict[str, TestMetrics],
+                 labels: List[str],
+                 prediction_ops: List[str],
+                 sample_frac: float,
+                 output_folder: Optional[str],
+                 test_params: Dict[str, Any]):
     plt.style.use('ggplot')
 
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 9))
-    fig.tight_layout()
 
-    # Layer Number vs Accuracy
-    x = [(i+1) * sample_frac for i in range(len(accuracy_metrics[0]))]
-    ys = [list(acc.values()) for acc in accuracy_metrics]
-    for y, label in zip(ys, labels):
-        ax1.plot(x, y, marker='o', label=label)
+    # Sample Fraction vs Error
+    x = [(i+1) * sample_frac for i in range(len(error_metrics))]
+    for i, label in enumerate(labels):
+        y = [error_metrics[op][i].mean for op in prediction_ops]
+        ax1.errorbar(x=x, y=y, fmt='-o', label=label)
 
     ax1.legend()
     ax1.set_xlabel('Sample Fraction')
@@ -56,10 +68,11 @@ def plot_results(accuracy_metrics: List[OrderedDict], latency_metrics: List[Orde
     ax1.set_xticks(ticks=x)
 
     # Layer Number vs Latency
-    x = [(i+1) * sample_frac for i in range(len(latency_metrics[0]))]
-    ys = [[v * 1000.0 for v in latency.values()] for latency in latency_metrics]
-    for y, label in zip(ys, labels):
-        ax2.plot(x, y, marker='o', label=label)
+    x = [(i+1) * sample_frac for i in range(len(latency_metrics))]
+    for i, label in enumerate(labels):
+        y = [latency_metrics[op][i].mean for op in prediction_ops]
+        yerr = [latency_metrics[op][i].std for op in prediction_ops]
+        ax2.errorbar(x, y, yerr=yerr, fmt='-o', capsize=3.0, label=label)
 
     ax2.legend()
     ax2.set_xlabel('Sample Fraction')
@@ -69,56 +82,91 @@ def plot_results(accuracy_metrics: List[OrderedDict], latency_metrics: List[Orde
 
     # Error vs Latency
     min_latency, max_latency = 1e10, 0.0
-    for error, latency, label in zip(accuracy_metrics, latency_metrics, labels):
-        x = [v * 1000.0 for v in latency.values()]
-        y = list(error.values())
+    for i, label in enumerate(labels):
+        x = [latency_metrics[op][i].mean for op in prediction_ops]
+        y = [error_metrics[op][i].mean for op in prediction_ops]
+
         ax3.plot(x, y, marker='o', label=label)
+
+        # Update min and max for formating reasons
         max_latency = max(max_latency, np.max(x))
         min_latency = min(min_latency, np.min(x))
 
     ax3.legend()
-    ax3.set_xlabel('Latency (ms)')
-    ax3.set_ylabel('MSE')
+    ax3.set_xlabel('Latency (ms)', fontsize=10)
+    ax3.set_ylabel('MSE', fontsize=10)
     ax3.set_title('Inference Latency vs Mean Squared Error')
     ax3.set_xlim(left=min_latency - 0.01, right=max_latency + 0.01)
 
-    plt.show()
+    plt.tight_layout()
+
+    if output_folder is None:
+        plt.show()
+        return
+
+    output_folder_path = RichPath.create(output_folder)
+    output_folder_path.make_as_dir()
+
+    output_folder_name = split(output_folder)[1]
+    plot_file = output_folder_path.join(output_folder_name + '.pdf')
+    params_file = output_folder_path.join(output_folder_name  + '_params.jsonl.gz')
+    
+    plt.savefig(plot_file.path)
+    params_file.save_as_compressed_file([test_params])
+
 
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--test-params-file', type=str, required=True)
-    parser.add_argument('--data-folder', type=str, required=True)
-    parser.add_argument('--batch-size', type=int)
-    parser.add_argument('--num-batches', type=int)
     args = parser.parse_args()
 
     assert exists(args.test_params_file), f'The file {args.test_params_file} does not exist!'
     with open(args.test_params_file, 'r') as test_params_file:
         test_params = json.load(test_params_file)
 
+    data_folder = test_params.get('data_folder')
+    assert data_folder is not None, 'Must prove a data folder.'
+    assert exists(data_folder), f'The folder {data_folder} does not exist!'
+
     # Get and validate data folders
-    train_folder = join(args.data_folder, 'train')
-    valid_folder = join(args.data_folder, 'valid')
-    test_folder = join(args.data_folder, 'test')
+    train_folder = join(data_folder, 'train')
+    valid_folder = join(data_folder, 'valid')
+    test_folder = join(data_folder, 'test')
     assert exists(train_folder), f'The folder {train_folder} does not exist!'
     assert exists(valid_folder), f'The folder {valid_folder} does not exist!'
     assert exists(test_folder), f'The folder {test_folder} does not exist!'
 
     dataset = RNNSampleDataset(train_folder, valid_folder, test_folder)
-    
-    accuracy_metrics: List[Dict[str, float]] = []
-    latency_metrics: List[Dict[str, float]] = []
+
+    # Valiate the hyperparameters to ensure like-for-like comparisons
+    sample_frac: float = 0.0
+    for i, model_config in enumerate(test_params['models']):
+        hypers = HyperParameters(model_config['params_file'])
+        if i > 0:
+            assert sample_frac == hypers.model_params['sample_frac'], f'Sample Fractions are not equal!'
+        else:
+            sample_frac = hypers.model_params['sample_frac']
+
+    # Number of model outputs and prediction operations
+    num_outputs = int(1.0 / sample_frac)
+    prediction_ops = [f'prediction_{i}' for i in range(num_outputs)]
+
+    # Inference parameters
+    batch_size, num_batches = test_params.get('batch_size'), test_params.get('num_batches')
+
+    error_metrics: DefaultDict[str, TestMetrics] = defaultdict(list)
+    latency_metrics: DefaultDict[str, TestMetrics] = defaultdict(list)
+    labels: List[str] = []
     for model_params in test_params['models']:
-        accuracy, latency = evaluate_model(model_params, dataset, args.batch_size, args.num_batches)
+        error, latency = evaluate_model(model_params, dataset, batch_size, num_batches)
 
-        accuracy_metrics.append(accuracy)
-        latency_metrics.append(latency)
+        labels.append(model_params['model_name'])
+        for prediction_op in prediction_ops:
+            error_metrics[prediction_op].append(error[prediction_op])
+            latency_metrics[prediction_op].append(latency[prediction_op])
 
-    model0_hypers = HyperParameters(test_params['models'][0]['params_file'])
-    sample_frac = model0_hypers.model_params['sample_frac']
-    labels = [model['model_name'] for model in test_params['models']]
-    plot_results(accuracy_metrics, latency_metrics, labels, sample_frac)
-   # name = join(folder, f'model-{model_name}')
-   # metrics = model.predict(dataset, name)
-
-   # print(metrics)
+    plot_results(error_metrics, latency_metrics,
+                 labels=labels, sample_frac=sample_frac,
+                 prediction_ops=prediction_ops,
+                 output_folder=test_params.get('output_folder'),
+                 test_params=test_params)

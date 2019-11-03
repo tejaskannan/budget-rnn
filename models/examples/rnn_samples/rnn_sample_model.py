@@ -3,19 +3,20 @@ import numpy as np
 import re
 import time
 from enum import Enum, auto
-from collections import OrderedDict
-from typing import List, Optional, Tuple, Dict, Any, Set, Union
+from collections import namedtuple, defaultdict, OrderedDict
+from typing import List, Optional, Tuple, Dict, Any, Set, Union, DefaultDict
 from sklearn.preprocessing import StandardScaler
 from dpu_utils.utils import RichPath
 
 from models.base_model import Model, VariableWithWeight
-from layers.basic import rnn_cell
+from layers.basic import rnn_cell, mlp
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
 
 
 VAR_NAME_REGEX = re.compile(r'.*(layer-[0-9])+.*')
+TestMetrics = namedtuple('TestMetrics', ['raw', 'mean', 'std', 'median', 'first_quartile', 'third_quartile'])
 
 
 class RNNModelType:
@@ -54,6 +55,8 @@ class RNNSampleModel(Model):
         else:
             raise ValueError(f'Unknown model type: {model_type}.')
 
+        self.name = model_type
+
     @property
     def num_sequences(self) -> int:
         if self.model_type == RNNModelType.CASCADE:
@@ -63,6 +66,10 @@ class RNNSampleModel(Model):
     @property
     def num_outputs(self) -> int:
         return int(1.0 / self.hypers.model_params['sample_frac'])
+
+    @property
+    def prediction_ops(self) -> List[str]:
+        return [f'prediction_{i}' for i in range(self.num_outputs)]
 
     @property
     def samples_per_seq(self) -> int:
@@ -130,6 +137,11 @@ class RNNSampleModel(Model):
             loss_weights = loss_weight * num_outputs
 
         assert len(loss_weights) == num_outputs, f'Loss weights ({len(loss_weights)}) must match the number of outputs ({num_outputs}).'
+        
+        # The loss weights are sorted in ascending order to more-heavily weight larger sample sizes.
+        # This operation is included to prevent bugs as we intuitively want to increase
+        # accuracy with larger samples.
+        loss_weights = list(sorted(loss_weights))
         feed_dict[self._placeholders['loss_weights']] = loss_weights / (np.sum(loss_weights) + 1e-7)  # Normalize the loss weights
 
         seq_indexes: List[int] = []
@@ -184,7 +196,7 @@ class RNNSampleModel(Model):
 
     def predict(self, dataset: Dataset, name: str,
                 test_batch_size: Optional[int] = None,
-                max_num_batches: Optional[int] = None) -> Tuple[OrderedDict, OrderedDict]:
+                max_num_batches: Optional[int] = None) -> Tuple[Dict[str, TestMetrics], Dict[str, TestMetrics]]:
         test_batch_size = test_batch_size if test_batch_size is not None else self.hypers.batch_size
         test_batch_generator = dataset.minibatch_generator(series=DataSeries.TEST,
                                                            batch_size=test_batch_size,
@@ -192,10 +204,11 @@ class RNNSampleModel(Model):
                                                            should_shuffle=False,
                                                            drop_incomplete_batches=True)
 
-        prediction_ops = [f'prediction_{i}' for i in range(self.num_outputs)]
-        mse_dict = {prediction_op: 0.0 for prediction_op in prediction_ops}
-        latency_dict = {prediction_op: 0.0 for prediction_op in prediction_ops}
-        
+        prediction_ops = self.prediction_ops
+
+        mse_dict: DefaultDict[str, List[float]] = defaultdict(list)
+        latency_dict: DefaultDict[str, List[float]] = defaultdict(list)
+
         num_batches = 0
         for batch in test_batch_generator:
             feed_dict = self.batch_to_feed_dict(batch, is_train=False)
@@ -215,7 +228,7 @@ class RNNSampleModel(Model):
 
                 # Do not accumulate latency metrics on first batch (to avoid outliers from caching)
                 if num_batches > 0:
-                    latency_dict[op] += elapsed
+                    latency_dict[op].append(elapsed * 1000.0)
 
             for prediction_op in prediction_ops:
                 prediction = op_results[prediction_op]
@@ -226,22 +239,40 @@ class RNNSampleModel(Model):
                 expected = self.metadata['output_scaler'].inverse_transform(raw_expected)
 
                 squared_error = np.sum(np.square(expected - unnormalized_prediction), axis=-1)
-                mse = np.average(squared_error)
-                mse_dict[prediction_op] += mse
+                
+                # Avoid the first batch for consistency with latency measurements
+                if num_batches > 0:
+                    mse_dict[prediction_op].extend(squared_error)
 
             num_batches += 1
 
             if num_batches >= max_num_batches:
                 break
 
-        for op in mse_dict.keys():
-            latency_dict[op] = latency_dict[op] / (float(num_batches - 1) + 1e-7)
-            mse_dict[op] = mse_dict[op] / (float(num_batches) + 1e-7)
+        # Compute aggregate statistics
+        mse_metrics: Dict[str, TestMetrics] = dict()
+        latency_metrics: Dict[str, TestMetrics] = dict()
+        for prediction_op in prediction_ops:
+            raw_errors = mse_dict[prediction_op]
+            error = TestMetrics(raw=raw_errors,
+                                mean=np.average(raw_errors),
+                                std=np.std(raw_errors),
+                                median=np.median(raw_errors),
+                                first_quartile=np.percentile(raw_errors, 25),
+                                third_quartile=np.percentile(raw_errors, 75))
+            
+            raw_latency = latency_dict[prediction_op]
+            latency = TestMetrics(raw=np.repeat(raw_latency, test_batch_size, axis=0),
+                                  mean=np.average(raw_latency),
+                                  std=np.std(raw_latency),
+                                  median=np.median(raw_latency),
+                                  first_quartile=np.percentile(raw_latency, 25),
+                                  third_quartile=np.percentile(raw_latency, 75))
 
-        ordered_mse_dict = OrderedDict(sorted(mse_dict.items(), key=lambda t: t[0]))
-        ordered_latency_dict = OrderedDict(sorted(latency_dict.items(), key=lambda t: t[0]))
+            mse_metrics[prediction_op] = error
+            latency_metrics[prediction_op] = latency
 
-        return ordered_mse_dict, ordered_latency_dict
+        return mse_metrics, latency_metrics
 
     def make_model(self, is_train: bool):
         with tf.variable_scope('rnn-model', reuse=tf.AUTO_REUSE):
@@ -254,14 +285,15 @@ class RNNSampleModel(Model):
                 self.make_rnn_cascade_model(is_train)
             
     def make_rnn_model(self, is_train: bool):
-        rnn_cell_name = 'rnn-cell'
-        output_layer_name = 'output-layer'
-        rnn_model_name = 'rnn-model'
+        rnn_layers = self.hypers.model_params['rnn_layers']
         outputs: List[tf.Tensor] = []
         prev_state: Optional[tf.Tensor] = None
 
         for i in range(self.num_sequences):
 
+            rnn_cell_name = 'rnn-cell'
+            output_layer_name = 'output-layer'
+            rnn_model_name = 'rnn-model'
             if not self.hypers.model_params.get('share_cell_weights', False):
                 rnn_cell_name = f'{rnn_cell_name}-layer-{i}'
                 output_layer_name = f'{output_layer_name}-layer-{i}'
@@ -269,8 +301,9 @@ class RNNSampleModel(Model):
 
             cell = rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
                             num_units=self.hypers.model_params['state_size'],
-                            activation=self.hypers.model_params.get('rnn_activation', 'tanh'),
+                            activation=self.hypers.model_params['rnn_activation'],
                             dropout_keep_rate=self._placeholders['dropout_keep_rate'],
+                            num_layers=rnn_layers,
                             name=rnn_cell_name,
                             dtype=tf.float32)
 
@@ -286,19 +319,24 @@ class RNNSampleModel(Model):
                                                    dtype=tf.float32,
                                                    scope=rnn_model_name)
 
+            # Save previous state for the chunked model
+            if self.model_type == RNNModelType.CHUNKED:
+                prev_state = state
+            
+            # If we have a multi RNN cell, then choose the final state of the last layer
+            if rnn_layers > 1:
+                state = state[-1]
+
             # B x D
             rnn_output = pool_rnn_outputs(rnn_outputs, state, pool_mode=self.hypers.model_params['pool_mode'])
 
-            # Set previous state if using the chunked model
-            if self.model_type == RNNModelType.CHUNKED:
-                prev_state = state
-
             # B x D'
-            output = tf.layers.dense(inputs=rnn_output,
-                                     units=self.metadata['num_output_features'],
-                                     activation=None,
-                                     kernel_initializer=tf.initializers.glorot_uniform(),
-                                     name=output_layer_name)
+            output = mlp(inputs=rnn_output,
+                         output_size=self.metadata['num_output_features'],
+                         hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
+                         activations=self.hypers.model_params['output_hidden_activation'],
+                         dropout_keep_rate=self._placeholders['dropout_keep_rate'],
+                         name=output_layer_name)
             self._ops[f'prediction_{i}'] = output
             self._ops[f'loss_{i}'] = tf.reduce_sum(tf.square(output - self._placeholders['output']), axis=-1)  # B
             outputs.append(output)
@@ -310,6 +348,7 @@ class RNNSampleModel(Model):
         outputs: List[tf.Tensor] = []
         states_list: List[tf.TensorArray] = []
         num_sequences = int(1.0 / self.hypers.model_params['sample_frac'])
+        rnn_layers = self.hypers.model_params['rnn_layers']
 
         for i in range(num_sequences):
             # Create the RNN Cell
@@ -319,8 +358,9 @@ class RNNSampleModel(Model):
 
             cell = rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
                             num_units=self.hypers.model_params['state_size'],
-                            activation=self.hypers.model_params.get('rnn_activation', 'tanh'),
+                            activation=self.hypers.model_params['rnn_activation'],
                             dropout_keep_rate=self._placeholders['dropout_keep_rate'],
+                            num_layers=rnn_layers,
                             name=cell_name,
                             dtype=tf.float32)
 
@@ -334,15 +374,19 @@ class RNNSampleModel(Model):
             final_state = states.read(last_index)
             states_list.append(states)
 
+            # If we have a multi RNN cell, then choose the final state of the last layer
+            if rnn_layers > 1:
+                final_state = final_state[-1]
+
             rnn_output = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
 
             # B x D'
-            output = tf.layers.dense(inputs=rnn_output,
-                                     units=self.metadata['num_output_features'],
-                                     activation=None,
-                                     use_bias=False,
-                                     kernel_initializer=tf.initializers.glorot_uniform(),
-                                     name=f'output-layer-{i}')
+            output = mlp(inputs=rnn_output,
+                         output_size=self.metadata['num_output_features'],
+                         hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
+                         activations=self.hypers.model_params['output_hidden_activation'],
+                         dropout_keep_rate=self._placeholders['dropout_keep_rate'],
+                         name=f'output-layer-{i}')
             self._ops[f'prediction_{i}'] = output
             self._ops[f'loss_{i}'] = tf.reduce_sum(tf.square(output - self._placeholders['output']), axis=-1)  # B
 
@@ -351,13 +395,16 @@ class RNNSampleModel(Model):
         combined_outputs = tf.concat([tf.expand_dims(t, axis=1) for t in outputs], axis=1)
         self._ops['predictions'] = combined_outputs  # B x N x D'
         self._loss_ops = self._make_loss_ops()
-
+    
     def make_rnn_cascade_model(self, is_train: bool):
+        rnn_layers = self.hypers.model_params['rnn_layers']
+
         # Make the RNN cell
         cell = rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
                         num_units=self.hypers.model_params['state_size'],
-                        activation=self.hypers.model_params.get('rnn_activation', 'tanh'),
+                        activation=self.hypers.model_params['rnn_activation'],
                         dropout_keep_rate=self._placeholders['dropout_keep_rate'],
+                        num_layers=rnn_layers,
                         name='rnn-cell',
                         dtype=tf.float32)
  
@@ -372,12 +419,16 @@ class RNNSampleModel(Model):
         for i, seq_index in enumerate(range(step - 1, self.metadata['seq_length'], step)):
             state = states.read(index=seq_index)
 
-            output = tf.layers.dense(inputs=state,
-                                     units=self.metadata['num_output_features'],
-                                     activation=None,
-                                     use_bias=False,
-                                     kernel_initializer=tf.initializers.glorot_uniform(),
-                                     name=f'output-layer-{i}')
+            # If we have a multi RNN cell, then choose the final state of the last layer
+            if rnn_layers > 1:
+                state = state[-1]
+
+            output = mlp(inputs=state,
+                         output_size=self.metadata['num_output_features'],
+                         hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
+                         activations=self.hypers.model_params['output_hidden_activation'],
+                         dropout_keep_rate=self._placeholders['dropout_keep_rate'],
+                         name=f'output-layer-{i}')
             self._ops[f'prediction_{i}'] = output
             self._ops[f'loss_{i}'] = tf.reduce_sum(tf.square(output - self._placeholders['output']), axis=-1)  # B
             outputs.append(output)
@@ -387,6 +438,8 @@ class RNNSampleModel(Model):
 
     def make_loss(self):
         losses: List[tf.Tensor] = []
+
+        # The loss_op keys are ordered by the output level
         for loss_op_name in self._loss_ops:
             losses.append(self._ops[loss_op_name])
 
@@ -396,11 +449,13 @@ class RNNSampleModel(Model):
 
         self._ops['loss'] = tf.reduce_mean(weighted_losses)  # Weighted average over all layers
  
-    def _make_loss_ops(self, use_previous_layers: bool = True) -> Dict[str, List[VariableWithWeight]]:
-        loss_ops: Dict[str, List[VariableWithWeight]] = dict()
+    def _make_loss_ops(self, use_previous_layers: bool = True) -> OrderedDict:
+        # loss_ops: Dict[str, List[VariableWithWeight]] = dict()
+        loss_ops = OrderedDict()
         var_prefixes: Dict[str, float] = dict()  # Maps prefix name to current weight
         trainable_vars = self._sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
         layer_weight = self.hypers.model_params['layer_weight']
+ 
         for i in range(self.num_outputs):
             layer_name = f'layer-{i}'
             var_prefixes[layer_name] = 1.0
@@ -429,6 +484,7 @@ class RNNSampleModel(Model):
                       previous_states: Optional[tf.TensorArray] = None,
                       name: str = None) -> Tuple[tf.TensorArray, tf.TensorArray]:
         state_size = self.hypers.model_params['state_size']
+        rnn_layers = self.hypers.model_params.get('rnn_layers', 1)
 
         states_array = tf.TensorArray(dtype=tf.float32, size=self.samples_per_seq, dynamic_size=False, clear_after_read=False)
         outputs_array = tf.TensorArray(dtype=tf.float32, size=self.samples_per_seq, dynamic_size=False)
@@ -448,12 +504,37 @@ class RNNSampleModel(Model):
             combined_state = state
             if previous_states is not None:
                 prev_state = previous_states.read(index)
-                combine_weight = combine_states(tf.concat([state, prev_state], axis=-1))
-                combined_state = combine_weight * state + (1.0 - combine_weight) * prev_state
+
+                if rnn_layers > 1:
+                    layer_states = tf.stack(state)  # L x B x D
+                    combine_weight = combine_states(tf.concat([layer_states, prev_state], axis=-1))
+                    combined = combine_weight * layer_states + (1.0 - combine_weight) * prev_state
+                    combined_state = tuple(combined[i] for i in range(rnn_layers))  # Make state tuple
+                else:
+                    combine_weight = combine_states(tf.concat([state, prev_state], axis=-1))
+                    combined_state = combine_weight * state + (1.0 - combine_weight) * prev_state
+
+               # if rnn_layers > 1:
+               #     layer_states: List[tf.Tensor] = []
+               #     for hidden_state in state:
+               #         combine_weight = combine_states(tf.concat([hidden_state, prev_state], axis=-1))
+               #         combined = combine_weight * hidden_state + (1.0 - combine_weight) * prev_state
+               #         layer_states.append(combined)
+               #     combined_state = tuple(layer_states)
+               # else:
+               #     combine_weight = combine_states(tf.concat([state, prev_state], axis=-1))
+               #     combined_state = combine_weight * state + (1.0 - combine_weight) * prev_state
 
             output, state = cell(step_inputs, combined_state)
             outputs = outputs.write(index=index, value=output)
             states = states.write(index=index, value=state)
+
+            # If the cell is a Multi RNN Cell, then only keep the state
+            # of the final layer
+            #if rnn_layers > 1:
+            #    states = states.write(index=index, value=state[-1])
+            #else:
+            #    states = states.write(index=index, value=state)
 
             return [index + 1, state, outputs, states]
 

@@ -1,3 +1,4 @@
+import numpy as np
 from dpu_utils.mlutils import Vocabulary
 from typing import List, Any, Optional, Dict
 
@@ -15,3 +16,14 @@ def get_token_for_id_multiple(vocab: Vocabulary, ids: List[Any], extended_vocab:
         else:
             tokens.append(vocab.get_unk())
     return tokens
+
+
+def pad_array(arr: np.array, new_size: int, value: Any, axis: int) -> np.array:
+    pad_width = new_size - arr.shape[axis]
+    if pad_width <= 0 :
+        return arr
+
+    widths = [(0, 0) for _ in range(len(arr.shape))]
+    widths[axis] = (0, pad_width)
+    return np.pad(arr, widths, mode='constant', constant_values=value)
+

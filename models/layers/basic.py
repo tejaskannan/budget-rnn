@@ -135,24 +135,35 @@ def rnn_cell(cell_type: str,
              activation: str,
              dropout_keep_rate: float,
              name: str,
-             dtype: Any) -> tf.nn.rnn_cell.RNNCell:
+             dtype: Any,
+             num_layers: Optional[int] = None) -> tf.nn.rnn_cell.RNNCell:
+    if num_layers is not None and num_layers <= 0:
+        raise ValueError(f'The number of layers must be non-negative. Received ({num_layers}).')
+    
     cell_type = cell_type.lower()
 
-    cell = None
-    if cell_type in {'rnn', 'basic', 'vanilla'}:
-        cell = tf.nn.rnn_cell.BasicRNNCell
-    elif cell_type == 'gru':
-        cell = tf.nn.rnn_cell.GRUCell
-    elif cell_type == 'lstm':
-        cell = tf.nn.rnn_cell.LSTMCell
-    else:
-        raise ValueError(f'Unrecognized cell type {cell_type}!')
+    def make_cell(cell_type: str, name: str):
+        cell = None
+        if cell_type in {'rnn', 'basic', 'vanilla'}:
+            cell = tf.nn.rnn_cell.BasicRNNCell
+        elif cell_type == 'gru':
+            cell = tf.nn.rnn_cell.GRUCell
+        elif cell_type == 'lstm':
+            cell = tf.nn.rnn_cell.LSTMCell
+        else:
+            raise ValueError(f'Unrecognized cell type {cell_type}!')
 
-    rnn_cell = cell(num_units=num_units,
-                    activation=get_activation(activation),
-                    name=name,
-                    dtype=dtype)
-    cell_with_dropout = tf.nn.rnn_cell.DropoutWrapper(cell=rnn_cell,
-                                                      input_keep_prob=dropout_keep_rate,
-                                                      state_keep_prob=dropout_keep_rate)
-    return cell_with_dropout
+        rnn_cell = cell(num_units=num_units,
+                        activation=get_activation(activation),
+                        name=name,
+                        dtype=dtype)
+        cell_with_dropout = tf.nn.rnn_cell.DropoutWrapper(cell=rnn_cell,
+                                                          input_keep_prob=dropout_keep_rate,
+                                                          state_keep_prob=dropout_keep_rate)
+        return cell_with_dropout
+
+    if num_layers is not None and num_layers > 1:
+        cells = [make_cell(cell_type, name=f'{name}-{i}') for i in range(num_layers)]
+        return tf.nn.rnn_cell.MultiRNNCell(cells)
+
+    return make_cell(cell_type, name=name)
