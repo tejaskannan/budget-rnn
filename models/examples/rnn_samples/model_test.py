@@ -30,10 +30,8 @@ def evaluate_model(model_params: Dict[str, str], dataset: RNNSampleDataset,
     path_tokens = split(model_params['model_path'])
     folder, file_name = path_tokens[0], path_tokens[1]
     model = RNNSampleModel(hypers, folder)
-    
-    print(file_name)
+
     model_name = extract_model_name(file_name)
-    print(model_name)
 
     model.restore_parameters(model_name)
     model.make(is_train=False)
@@ -72,7 +70,7 @@ def plot_results(error_metrics: DefaultDict[str, TestMetrics],
     for i, label in enumerate(labels):
         y = [latency_metrics[op][i].mean for op in prediction_ops]
         yerr = [latency_metrics[op][i].std for op in prediction_ops]
-        ax2.errorbar(x, y, yerr=yerr, fmt='-o', capsize=3.0, label=label)
+        ax2.errorbar(x, y, fmt='-o', capsize=3.0, label=label)
 
     ax2.legend()
     ax2.set_xlabel('Sample Fraction')
@@ -110,9 +108,21 @@ def plot_results(error_metrics: DefaultDict[str, TestMetrics],
     output_folder_name = split(output_folder)[1]
     plot_file = output_folder_path.join(output_folder_name + '.pdf')
     params_file = output_folder_path.join(output_folder_name  + '_params.jsonl.gz')
-    
+ 
     plt.savefig(plot_file.path)
     params_file.save_as_compressed_file([test_params])
+
+    # For now, we save the metrics as a pickle file because Numpy Arrays
+    # are not JSON serializable. This should be changed to compressed
+    # JSONL files for readability.
+    metrics = dict()
+    for i, label in enumerate(labels):
+        metrics[label] = {
+            'error': [error_metrics[op][i]._asdict() for op in prediction_ops],
+            'latency': [latency_metrics[op][i]._asdict() for op in prediction_ops]
+        }
+    metrics_file = RichPath.create(output_folder).join('metrics.pkl.gz')
+    metrics_file.save_as_compressed_file([metrics])
 
 
 if __name__ == '__main__':
@@ -138,9 +148,10 @@ if __name__ == '__main__':
 
     dataset = RNNSampleDataset(train_folder, valid_folder, test_folder)
 
-    # Valiate the hyperparameters to ensure like-for-like comparisons
+    # Validate the hyperparameters to ensure like-for-like comparisons
     sample_frac: float = 0.0
     for i, model_config in enumerate(test_params['models']):
+        # Fetching the hyperparameters checks the existence of the params file
         hypers = HyperParameters(model_config['params_file'])
         if i > 0:
             assert sample_frac == hypers.model_params['sample_frac'], f'Sample Fractions are not equal!'
@@ -157,7 +168,10 @@ if __name__ == '__main__':
     error_metrics: DefaultDict[str, TestMetrics] = defaultdict(list)
     latency_metrics: DefaultDict[str, TestMetrics] = defaultdict(list)
     labels: List[str] = []
-    for model_params in test_params['models']:
+    num_models = len(test_params['models'])
+    for i, model_params in enumerate(test_params['models']):
+        print(f'Starting Model {i+1}/{num_models}.')
+
         error, latency = evaluate_model(model_params, dataset, batch_size, num_batches)
 
         labels.append(model_params['model_name'])
@@ -165,8 +179,11 @@ if __name__ == '__main__':
             error_metrics[prediction_op].append(error[prediction_op])
             latency_metrics[prediction_op].append(latency[prediction_op])
 
+        print('============')
+
+    output_folder = test_params.get('output_folder')
     plot_results(error_metrics, latency_metrics,
                  labels=labels, sample_frac=sample_frac,
                  prediction_ops=prediction_ops,
-                 output_folder=test_params.get('output_folder'),
+                 output_folder=output_folder,
                  test_params=test_params)

@@ -59,8 +59,6 @@ class RNNSampleModel(Model):
 
     @property
     def num_sequences(self) -> int:
-        if self.model_type == RNNModelType.CASCADE:
-            return 1
         return int(1.0 / self.hypers.model_params['sample_frac'])
 
     @property
@@ -74,8 +72,6 @@ class RNNSampleModel(Model):
     @property
     def samples_per_seq(self) -> int:
         seq_length = self.metadata['seq_length']
-        if self.model_type == RNNModelType.CASCADE:
-            return seq_length
         return int(seq_length * self.hypers.model_params['sample_frac'])
 
     def load_metadata(self, dataset: Dataset):
@@ -137,7 +133,7 @@ class RNNSampleModel(Model):
             loss_weights = loss_weight * num_outputs
 
         assert len(loss_weights) == num_outputs, f'Loss weights ({len(loss_weights)}) must match the number of outputs ({num_outputs}).'
-        
+
         # The loss weights are sorted in ascending order to more-heavily weight larger sample sizes.
         # This operation is included to prevent bugs as we intuitively want to increase
         # accuracy with larger samples.
@@ -155,12 +151,10 @@ class RNNSampleModel(Model):
                 seq_indexes = list(range(i, seq_length, num_sequences))
                 sample_tensor = input_batch[:, seq_indexes]
                 feed_dict[self._placeholders[f'input_{i}']] = sample_tensor
-            elif self.model_type == RNNModelType.CHUNKED:
+            else:  # Chunked or Cascade
                 start, end = i * samples_per_seq, (i+1) * samples_per_seq
                 sample_tensor = input_batch[:, start:end]
                 feed_dict[self._placeholders[f'input_{i}']] = sample_tensor
-            else:  # Cascade model
-                feed_dict[self._placeholders[f'input_{i}']] = input_batch
 
         return feed_dict
 
@@ -178,14 +172,14 @@ class RNNSampleModel(Model):
         # Make input placeholders
         for i in range(num_sequences):
             input_shape = [None, samples_per_seq, num_input_features]
-            
+
             # B x S x D
             self._placeholders[f'input_{i}'] = tf.placeholder(shape=input_shape,
                                                               dtype=tf.float32,
                                                               name=f'input-{i}')
             if self.model_type == RNNModelType.VANILLA:
                 samples_per_seq += self.samples_per_seq
-       
+
         self._placeholders['output'] = tf.placeholder(shape=[None, num_output_features],
                                                       dtype=tf.float32,
                                                       name='output')  # B x K
@@ -232,21 +226,21 @@ class RNNSampleModel(Model):
 
             for prediction_op in prediction_ops:
                 prediction = op_results[prediction_op]
- 
+
                 unnormalized_prediction = self.metadata['output_scaler'].inverse_transform(prediction)
 
                 raw_expected = np.array(batch['output']).reshape(-1, self.metadata['num_output_features'])
                 expected = self.metadata['output_scaler'].inverse_transform(raw_expected)
 
                 squared_error = np.sum(np.square(expected - unnormalized_prediction), axis=-1)
-                
+
                 # Avoid the first batch for consistency with latency measurements
                 if num_batches > 0:
                     mse_dict[prediction_op].extend(squared_error)
 
             num_batches += 1
 
-            if num_batches >= max_num_batches:
+            if max_num_batches is not None and num_batches >= max_num_batches:
                 break
 
         # Compute aggregate statistics
@@ -260,7 +254,7 @@ class RNNSampleModel(Model):
                                 median=np.median(raw_errors),
                                 first_quartile=np.percentile(raw_errors, 25),
                                 third_quartile=np.percentile(raw_errors, 75))
-            
+
             raw_latency = latency_dict[prediction_op]
             latency = TestMetrics(raw=np.repeat(raw_latency, test_batch_size, axis=0),
                                   mean=np.average(raw_latency),
@@ -276,25 +270,25 @@ class RNNSampleModel(Model):
 
     def make_model(self, is_train: bool):
         with tf.variable_scope('rnn-model', reuse=tf.AUTO_REUSE):
-            
-            if self.model_type in (RNNModelType.VANILLA, RNNModelType.CHUNKED):
-                self.make_rnn_model(is_train)
-            elif self.model_type == RNNModelType.SAMPLE:
+            if self.model_type == RNNModelType.SAMPLE:
                 self.make_rnn_sample_model(is_train)
-            else:  # Cascade model
-                self.make_rnn_cascade_model(is_train)
-            
+            else:
+                self.make_rnn_model(is_train)
+
     def make_rnn_model(self, is_train: bool):
         rnn_layers = self.hypers.model_params['rnn_layers']
         outputs: List[tf.Tensor] = []
         prev_state: Optional[tf.Tensor] = None
 
         for i in range(self.num_sequences):
-
             rnn_cell_name = 'rnn-cell'
             output_layer_name = 'output-layer'
             rnn_model_name = 'rnn-model'
-            if not self.hypers.model_params.get('share_cell_weights', False):
+
+            if self.model_type == RNNModelType.CASCADE:
+                # The Cascade model shares cell weights by design
+                output_layer_name = f'{output_layer_name}-layer-{i}'
+            elif not self.hypers.model_params.get('share_cell_weights', False):
                 rnn_cell_name = f'{rnn_cell_name}-layer-{i}'
                 output_layer_name = f'{output_layer_name}-layer-{i}'
                 rnn_model_name = f'{rnn_model_name}-layer-{i}'
@@ -304,13 +298,14 @@ class RNNSampleModel(Model):
                             activation=self.hypers.model_params['rnn_activation'],
                             dropout_keep_rate=self._placeholders['dropout_keep_rate'],
                             num_layers=rnn_layers,
+                            state_is_tuple=False,
                             name=rnn_cell_name,
                             dtype=tf.float32)
 
             inputs = self._placeholders[f'input_{i}']
             initial_state = cell.zero_state(batch_size=tf.shape(inputs)[0], dtype=tf.float32)
 
-            if self.model_type == RNNModelType.CHUNKED and prev_state is not None:
+            if self.model_type in (RNNModelType.CHUNKED, RNNModelType.CASCADE) and prev_state is not None:
                 initial_state = prev_state
 
             rnn_outputs, state = tf.nn.dynamic_rnn(cell=cell,
@@ -320,12 +315,8 @@ class RNNSampleModel(Model):
                                                    scope=rnn_model_name)
 
             # Save previous state for the chunked model
-            if self.model_type == RNNModelType.CHUNKED:
+            if self.model_type in (RNNModelType.CHUNKED, RNNModelType.CASCADE):
                 prev_state = state
-            
-            # If we have a multi RNN cell, then choose the final state of the last layer
-            if rnn_layers > 1:
-                state = state[-1]
 
             # B x D
             rnn_output = pool_rnn_outputs(rnn_outputs, state, pool_mode=self.hypers.model_params['pool_mode'])
@@ -342,7 +333,7 @@ class RNNSampleModel(Model):
             outputs.append(output)
 
         self._ops['predictions'] = tf.concat([tf.expand_dims(t, axis=1) for t in outputs], axis=1)
-        self._loss_ops = self._make_loss_ops()
+        self._loss_ops = self._make_loss_ops(use_previous_layers=False)
 
     def make_rnn_sample_model(self, is_train: bool):
         outputs: List[tf.Tensor] = []
@@ -361,6 +352,7 @@ class RNNSampleModel(Model):
                             activation=self.hypers.model_params['rnn_activation'],
                             dropout_keep_rate=self._placeholders['dropout_keep_rate'],
                             num_layers=rnn_layers,
+                            state_is_tuple=False,
                             name=cell_name,
                             dtype=tf.float32)
 
@@ -373,10 +365,6 @@ class RNNSampleModel(Model):
             last_index = tf.shape(self._placeholders[f'input_{i}'])[1] - 1
             final_state = states.read(last_index)
             states_list.append(states)
-
-            # If we have a multi RNN cell, then choose the final state of the last layer
-            if rnn_layers > 1:
-                final_state = final_state[-1]
 
             rnn_output = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
 
@@ -395,46 +383,46 @@ class RNNSampleModel(Model):
         combined_outputs = tf.concat([tf.expand_dims(t, axis=1) for t in outputs], axis=1)
         self._ops['predictions'] = combined_outputs  # B x N x D'
         self._loss_ops = self._make_loss_ops()
-    
-    def make_rnn_cascade_model(self, is_train: bool):
-        rnn_layers = self.hypers.model_params['rnn_layers']
 
-        # Make the RNN cell
-        cell = rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
-                        num_units=self.hypers.model_params['state_size'],
-                        activation=self.hypers.model_params['rnn_activation'],
-                        dropout_keep_rate=self._placeholders['dropout_keep_rate'],
-                        num_layers=rnn_layers,
-                        name='rnn-cell',
-                        dtype=tf.float32)
- 
-        # Run the RNN
-        rnn_outputs, states = self.__dynamic_rnn(inputs=self._placeholders[f'input_0'],
-                                                 cell=cell,
-                                                 name='rnn')
+    #def make_rnn_cascade_model(self, is_train: bool):
+    #    rnn_layers = self.hypers.model_params['rnn_layers']
 
-        # Transform outputs
-        step = int(self.metadata['seq_length'] / self.num_outputs)
-        outputs: List[tf.Tensor] = []
-        for i, seq_index in enumerate(range(step - 1, self.metadata['seq_length'], step)):
-            state = states.read(index=seq_index)
+    #    # Make the RNN cell
+    #    cell = rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
+    #                    num_units=self.hypers.model_params['state_size'],
+    #                    activation=self.hypers.model_params['rnn_activation'],
+    #                    dropout_keep_rate=self._placeholders['dropout_keep_rate'],
+    #                    num_layers=rnn_layers,
+    #                    name='rnn-cell',
+    #                    dtype=tf.float32)
 
-            # If we have a multi RNN cell, then choose the final state of the last layer
-            if rnn_layers > 1:
-                state = state[-1]
+    #    # Run the RNN
+    #    rnn_outputs, states = self.__dynamic_rnn(inputs=self._placeholders[f'input_0'],
+    #                                             cell=cell,
+    #                                             name='rnn')
 
-            output = mlp(inputs=state,
-                         output_size=self.metadata['num_output_features'],
-                         hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
-                         activations=self.hypers.model_params['output_hidden_activation'],
-                         dropout_keep_rate=self._placeholders['dropout_keep_rate'],
-                         name=f'output-layer-{i}')
-            self._ops[f'prediction_{i}'] = output
-            self._ops[f'loss_{i}'] = tf.reduce_sum(tf.square(output - self._placeholders['output']), axis=-1)  # B
-            outputs.append(output)
+    #    # Transform outputs
+    #    step = int(self.metadata['seq_length'] / self.num_outputs)
+    #    outputs: List[tf.Tensor] = []
+    #    for i, seq_index in enumerate(range(step - 1, self.metadata['seq_length'], step)):
+    #        state = states.read(index=seq_index)
 
-        self._ops['predictions'] = tf.concat([tf.expand_dims(t, axis=1) for t in outputs], axis=1)
-        self._loss_ops = self._make_loss_ops(use_previous_layers=False)
+    #        # If we have a multi RNN cell, then choose the final state of the last layer
+    #        if rnn_layers > 1:
+    #            state = state[-1]
+
+    #        output = mlp(inputs=state,
+    #                     output_size=self.metadata['num_output_features'],
+    #                     hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
+    #                     activations=self.hypers.model_params['output_hidden_activation'],
+    #                     dropout_keep_rate=self._placeholders['dropout_keep_rate'],
+    #                     name=f'output-layer-{i}')
+    #        self._ops[f'prediction_{i}'] = output
+    #        self._ops[f'loss_{i}'] = tf.reduce_sum(tf.square(output - self._placeholders['output']), axis=-1)  # B
+    #        outputs.append(output)
+
+    #    self._ops['predictions'] = tf.concat([tf.expand_dims(t, axis=1) for t in outputs], axis=1)
+    #    self._loss_ops = self._make_loss_ops(use_previous_layers=False)
 
     def make_loss(self):
         losses: List[tf.Tensor] = []
@@ -448,14 +436,13 @@ class RNNSampleModel(Model):
         weighted_losses = tf.reduce_sum(losses * loss_weights, axis=-1)  # B
 
         self._ops['loss'] = tf.reduce_mean(weighted_losses)  # Weighted average over all layers
- 
+
     def _make_loss_ops(self, use_previous_layers: bool = True) -> OrderedDict:
-        # loss_ops: Dict[str, List[VariableWithWeight]] = dict()
         loss_ops = OrderedDict()
         var_prefixes: Dict[str, float] = dict()  # Maps prefix name to current weight
         trainable_vars = self._sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
         layer_weight = self.hypers.model_params['layer_weight']
- 
+
         for i in range(self.num_outputs):
             layer_name = f'layer-{i}'
             var_prefixes[layer_name] = 1.0
@@ -477,21 +464,22 @@ class RNNSampleModel(Model):
                     var_prefixes[prefix] = var_prefixes[prefix] * layer_weight
 
         return loss_ops
-        
+
     def __dynamic_rnn(self,
                       inputs: tf.Tensor,
                       cell: tf.nn.rnn_cell.BasicRNNCell,
                       previous_states: Optional[tf.TensorArray] = None,
                       name: str = None) -> Tuple[tf.TensorArray, tf.TensorArray]:
         state_size = self.hypers.model_params['state_size']
-        rnn_layers = self.hypers.model_params.get('rnn_layers', 1)
+        rnn_layers = self.hypers.model_params['rnn_layers']
 
         states_array = tf.TensorArray(dtype=tf.float32, size=self.samples_per_seq, dynamic_size=False, clear_after_read=False)
         outputs_array = tf.TensorArray(dtype=tf.float32, size=self.samples_per_seq, dynamic_size=False)
 
         if previous_states is not None:
             combine_layer_name = 'combine-states' if name is None else f'{name}-combine-states'
-            combine_states = tf.layers.Dense(units=1,
+            units = (rnn_layers * state_size) if self.hypers.model_params.get('combine_element_wise', False) else 1
+            combine_states = tf.layers.Dense(units=units,
                                              activation=tf.math.sigmoid,
                                              use_bias=True,
                                              kernel_initializer=tf.initializers.glorot_uniform(),
@@ -505,36 +493,12 @@ class RNNSampleModel(Model):
             if previous_states is not None:
                 prev_state = previous_states.read(index)
 
-                if rnn_layers > 1:
-                    layer_states = tf.stack(state)  # L x B x D
-                    combine_weight = combine_states(tf.concat([layer_states, prev_state], axis=-1))
-                    combined = combine_weight * layer_states + (1.0 - combine_weight) * prev_state
-                    combined_state = tuple(combined[i] for i in range(rnn_layers))  # Make state tuple
-                else:
-                    combine_weight = combine_states(tf.concat([state, prev_state], axis=-1))
-                    combined_state = combine_weight * state + (1.0 - combine_weight) * prev_state
-
-               # if rnn_layers > 1:
-               #     layer_states: List[tf.Tensor] = []
-               #     for hidden_state in state:
-               #         combine_weight = combine_states(tf.concat([hidden_state, prev_state], axis=-1))
-               #         combined = combine_weight * hidden_state + (1.0 - combine_weight) * prev_state
-               #         layer_states.append(combined)
-               #     combined_state = tuple(layer_states)
-               # else:
-               #     combine_weight = combine_states(tf.concat([state, prev_state], axis=-1))
-               #     combined_state = combine_weight * state + (1.0 - combine_weight) * prev_state
+                combine_weight = combine_states(tf.concat([state, prev_state], axis=-1))
+                combined_state = combine_weight * state + (1.0 - combine_weight) * prev_state
 
             output, state = cell(step_inputs, combined_state)
             outputs = outputs.write(index=index, value=output)
             states = states.write(index=index, value=state)
-
-            # If the cell is a Multi RNN Cell, then only keep the state
-            # of the final layer
-            #if rnn_layers > 1:
-            #    states = states.write(index=index, value=state[-1])
-            #else:
-            #    states = states.write(index=index, value=state)
 
             return [index + 1, state, outputs, states]
 

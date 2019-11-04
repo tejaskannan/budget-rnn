@@ -136,7 +136,8 @@ def rnn_cell(cell_type: str,
              dropout_keep_rate: float,
              name: str,
              dtype: Any,
-             num_layers: Optional[int] = None) -> tf.nn.rnn_cell.RNNCell:
+             num_layers: Optional[int] = None,
+             state_is_tuple: bool = True) -> tf.nn.rnn_cell.RNNCell:
     if num_layers is not None and num_layers <= 0:
         raise ValueError(f'The number of layers must be non-negative. Received ({num_layers}).')
     
@@ -164,6 +165,6 @@ def rnn_cell(cell_type: str,
 
     if num_layers is not None and num_layers > 1:
         cells = [make_cell(cell_type, name=f'{name}-{i}') for i in range(num_layers)]
-        return tf.nn.rnn_cell.MultiRNNCell(cells)
+        return tf.nn.rnn_cell.MultiRNNCell(cells, state_is_tuple=state_is_tuple)
 
     return make_cell(cell_type, name=name)
