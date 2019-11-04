@@ -384,46 +384,6 @@ class RNNSampleModel(Model):
         self._ops['predictions'] = combined_outputs  # B x N x D'
         self._loss_ops = self._make_loss_ops()
 
-    #def make_rnn_cascade_model(self, is_train: bool):
-    #    rnn_layers = self.hypers.model_params['rnn_layers']
-
-    #    # Make the RNN cell
-    #    cell = rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
-    #                    num_units=self.hypers.model_params['state_size'],
-    #                    activation=self.hypers.model_params['rnn_activation'],
-    #                    dropout_keep_rate=self._placeholders['dropout_keep_rate'],
-    #                    num_layers=rnn_layers,
-    #                    name='rnn-cell',
-    #                    dtype=tf.float32)
-
-    #    # Run the RNN
-    #    rnn_outputs, states = self.__dynamic_rnn(inputs=self._placeholders[f'input_0'],
-    #                                             cell=cell,
-    #                                             name='rnn')
-
-    #    # Transform outputs
-    #    step = int(self.metadata['seq_length'] / self.num_outputs)
-    #    outputs: List[tf.Tensor] = []
-    #    for i, seq_index in enumerate(range(step - 1, self.metadata['seq_length'], step)):
-    #        state = states.read(index=seq_index)
-
-    #        # If we have a multi RNN cell, then choose the final state of the last layer
-    #        if rnn_layers > 1:
-    #            state = state[-1]
-
-    #        output = mlp(inputs=state,
-    #                     output_size=self.metadata['num_output_features'],
-    #                     hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
-    #                     activations=self.hypers.model_params['output_hidden_activation'],
-    #                     dropout_keep_rate=self._placeholders['dropout_keep_rate'],
-    #                     name=f'output-layer-{i}')
-    #        self._ops[f'prediction_{i}'] = output
-    #        self._ops[f'loss_{i}'] = tf.reduce_sum(tf.square(output - self._placeholders['output']), axis=-1)  # B
-    #        outputs.append(output)
-
-    #    self._ops['predictions'] = tf.concat([tf.expand_dims(t, axis=1) for t in outputs], axis=1)
-    #    self._loss_ops = self._make_loss_ops(use_previous_layers=False)
-
     def make_loss(self):
         losses: List[tf.Tensor] = []
 
