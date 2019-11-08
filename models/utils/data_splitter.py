@@ -1,5 +1,6 @@
 from argparse import ArgumentParser
 from dpu_utils.utils import RichPath, ChunkWriter
+from datetime import datetime
 from hashlib import md5
 from enum import Enum, auto
 from collections import Counter
@@ -28,15 +29,21 @@ PARTITIONS = {
 }
 
 
-def compute_hash(sample: Dict[str, Any]) -> int:
-    input_sum = sum(chain(*sample['inputs']))
-    output_sum = sum(sample['output'])
-    sample_val = str(input_sum + output_sum)
-    return int(md5(sample_val.encode()).hexdigest(), 16)
+def compute_hash(sample: Dict[str, Any], hash_fields: List[str]) -> int:
+    tokens: List[str] = []
+    for field in hash_fields:
+        field_val = sample[field]
+        if isinstance(field_val, list):
+            tokens.extend(field_val)
+        else:
+            tokens.append(field_val)
+
+    hash_token = '-'.join(tokens).encode()
+    return int(md5(hash_token).hexdigest(), 16)
 
 
-def get_partition(sample: Dict[str, Any], fracs: Dict[DataPartition, float]) -> DataPartition:
-    partition_index = compute_hash(sample) % MODULUS
+def get_partition(sample: Dict[str, Any], fracs: Dict[DataPartition, float], hash_fields: List[str]) -> DataPartition:
+    partition_index = compute_hash(sample, hash_fields) % MODULUS
 
     bound = 0
     for partition, frac in fracs.items():
@@ -46,7 +53,52 @@ def get_partition(sample: Dict[str, Any], fracs: Dict[DataPartition, float]) -> 
     return DataPartition.TRAIN
 
 
-def split_dataset(input_dir: RichPath, output_dir: RichPath, fracs: Dict[DataPartition, float]):
+def get_partition_sequential(sample: Dict[str, Any], split_field: str, split_points: Dict[DataPartition, Any]) -> DataPartition:
+    current_partition, current_point = None, None
+    
+    try:
+        split_value = datetime.strptime(sample[split_field], '%Y-%m-%dT%H:%M:%S')
+    except ValueError:
+        split_value = sample[split_field]
+
+    for partition, split_point in split_points.items():
+        if split_value <= split_point and (current_point is None or split_point < current_point):
+            current_point = split_point
+            current_partition = partition
+
+    if current_partition is None:
+        return DataPartition.TRAIN
+
+    return current_partition
+
+
+def get_split_points(input_dir: RichPath, fracs: Dict[DataPartition, float], split_field: str) -> Dict[DataPartition, Any]:
+    data_files = sorted(input_dir.iterate_filtered_files_in_dir('data*.jsonl.gz'))
+    data_samples = chain(*(data_file.read_by_file_suffix() for data_file in data_files))
+
+    split_field_values: List[Any] = []
+    for sample in data_samples:
+        try:
+            date_value = datetime.strptime(sample[split_field], '%Y-%m-%dT%H:%M:%S')
+            split_field_values.append(date_value)
+        except ValueError:
+            split_field_values.append(samples[split_field])
+
+    split_field_values = list(sorted(split_field_values))
+
+    split_points: Dict[DataPartition, Any] = dict()
+    offset = 0
+    for partition, frac in fracs.items():
+        step = int(frac * len(split_field_values))
+        split_index = min(len(split_field_values) - 1, step + offset)
+        split_points[partition] = split_field_values[split_index]
+        offset += step
+
+    return split_points
+
+
+def split_dataset(input_dir: RichPath, output_dir: RichPath, fracs: Dict[DataPartition, float],
+                  hash_fields: List[str], mode: str):
     output_dir.make_as_dir()
 
     train_dir = output_dir.join(TRAIN_DIR)
@@ -58,7 +110,10 @@ def split_dataset(input_dir: RichPath, output_dir: RichPath, fracs: Dict[DataPar
     test_dir = output_dir.join(TEST_DIR)
     test_dir.make_as_dir()
 
-    data_files = input_dir.iterate_filtered_files_in_dir('data*.jsonl.gz')
+    if mode == 'sequential':
+        split_points = get_split_points(input_dir, fracs, hash_fields[0])
+
+    data_files = sorted(input_dir.iterate_filtered_files_in_dir('data*.jsonl.gz'))
     data_samples = chain(*(data_file.read_by_file_suffix() for data_file in data_files))
     
     data_counters = Counter()
@@ -74,7 +129,11 @@ def split_dataset(input_dir: RichPath, output_dir: RichPath, fracs: Dict[DataPar
 
         total = 0
         for sample in data_samples:
-            partition = get_partition(sample, fracs)
+            if mode == 'random':
+                partition = get_partition(sample, fracs, hash_fields)
+            else:
+                partition = get_partition_sequential(sample, hash_fields[0], split_points)
+            
             writers[partition].add(sample)
             data_counters[partition] += 1
             total += 1
@@ -109,8 +168,10 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--input-folder', type=str, required=True)
     parser.add_argument('--output-folder', type=str, required=True)
+    parser.add_argument('--hash-fields', type=str, nargs='+')
     parser.add_argument('--train-frac', type=float, required=True)
     parser.add_argument('--valid-frac', type=float, required=True)
+    parser.add_argument('--mode', type=str, choices=['random', 'sequential'])
     args = parser.parse_args()
 
     if args.train_frac + args.valid_frac >= 1:
@@ -124,4 +185,6 @@ if __name__ == '__main__':
 
     split_dataset(input_dir=RichPath.create(args.input_folder),
                   output_dir=RichPath.create(args.output_folder),
-                  fracs=fractions)
+                  fracs=fractions,
+                  hash_fields=args.hash_fields,
+                  mode=args.mode)
