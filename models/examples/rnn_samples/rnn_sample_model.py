@@ -97,6 +97,23 @@ class RNNSampleModel(Model):
         output_scaler = StandardScaler()
         output_scaler.fit(output_samples)
 
+        if self.hypers.model_params.get('bin_outputs', False):
+            assert num_output_features == 1, 'Can only bin when the number of output features is one'
+
+            normalized_outputs = output_scaler.transform(output_samples)
+            sorted_outputs = np.sort(normalized_outputs, axis=0)
+ 
+            bin_bounds: List[Tuple[float, float]] = []
+            bin_means: List[float] = []
+            stride = int(sorted_outputs.shape[0] / (self.hypers.model_params['num_bins'] - 1))
+            for i in range(0, sorted_outputs.shape[0], stride):
+                split = sorted_outputs[i:i+stride, :]
+                bin_bounds.append((np.min(split), np.max(split)))
+                bin_means.append(np.average(split))
+
+            self.metadata['bin_bounds'] = bin_bounds
+            self.metadata['bin_means'] = bin_means
+
         self.metadata['input_scaler'] = input_scaler
         self.metadata['output_scaler'] = output_scaler
         self.metadata['num_input_features'] = num_input_features
@@ -117,6 +134,9 @@ class RNNSampleModel(Model):
             self._placeholders['output']: output_batch.reshape(-1, num_output_features),
             self._placeholders['dropout_keep_rate']: dropout
         }
+
+        if self.hypers.model_params['bin_outputs']:
+            feed_dict[self._placeholders['bin_means']] = batch['bin_means']
 
         # Extract parameters
         seq_length = self.metadata['seq_length']
@@ -188,9 +208,15 @@ class RNNSampleModel(Model):
                                                             dtype=tf.float32,
                                                             name='loss-weights')
 
+        if self.hypers.model_params['bin_outputs']:
+            self._placeholders['bin_means'] = tf.placeholder(shape=[None, self.hypers.model_params['num_bins']],
+                                                             dtype=tf.float32,
+                                                             name='bin-means')
+
+
     def predict(self, dataset: Dataset, name: str,
                 test_batch_size: Optional[int] = None,
-                max_num_batches: Optional[int] = None) -> Tuple[Dict[str, TestMetrics], Dict[str, TestMetrics]]:
+                max_num_batches: Optional[int] = None) -> Tuple[Dict[str, TestMetrics], Dict[str, TestMetrics], List[np.array]]:
         test_batch_size = test_batch_size if test_batch_size is not None else self.hypers.batch_size
         test_batch_generator = dataset.minibatch_generator(series=DataSeries.TEST,
                                                            batch_size=test_batch_size,
@@ -202,6 +228,8 @@ class RNNSampleModel(Model):
 
         mse_dict: DefaultDict[str, List[float]] = defaultdict(list)
         latency_dict: DefaultDict[str, List[float]] = defaultdict(list)
+
+        true_values: List[np.array] = []
 
         num_batches = 0
         for batch in test_batch_generator:
@@ -231,6 +259,7 @@ class RNNSampleModel(Model):
 
                 raw_expected = np.array(batch['output']).reshape(-1, self.metadata['num_output_features'])
                 expected = self.metadata['output_scaler'].inverse_transform(raw_expected)
+                true_values.append(expected)
 
                 squared_error = np.sum(np.square(expected - unnormalized_prediction), axis=-1)
 
@@ -266,7 +295,7 @@ class RNNSampleModel(Model):
             mse_metrics[prediction_op] = error
             latency_metrics[prediction_op] = latency
 
-        return mse_metrics, latency_metrics
+        return mse_metrics, latency_metrics, true_values
 
     def make_model(self, is_train: bool):
         with tf.variable_scope('rnn-model', reuse=tf.AUTO_REUSE):
@@ -322,14 +351,24 @@ class RNNSampleModel(Model):
             rnn_output = pool_rnn_outputs(rnn_outputs, state, pool_mode=self.hypers.model_params['pool_mode'])
 
             # B x D'
+            if self.hypers.model_params['bin_outputs']:
+                num_output_features = len(self.metadata['bin_means'])
+            else:
+                num_output_features = self.metadata['num_output_features']
+
             output = mlp(inputs=rnn_output,
-                         output_size=self.metadata['num_output_features'],
+                         output_size=num_output_features,
                          hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
                          activations=self.hypers.model_params['output_hidden_activation'],
                          dropout_keep_rate=self._placeholders['dropout_keep_rate'],
                          name=output_layer_name)
+
+            if self.hypers.model_params['bin_outputs']:
+                output_probs = tf.nn.softmax(output, axis=-1)
+                output = tf.reduce_sum(output_probs * self._placeholders['bin_means'], axis=-1, keepdims=True)
+                self._ops[f'prediction_probs_{i}'] = output_probs
+
             self._ops[f'prediction_{i}'] = output
-            self._ops[f'loss_{i}'] = tf.reduce_sum(tf.square(output - self._placeholders['output']), axis=-1)  # B
             outputs.append(output)
 
         self._ops['predictions'] = tf.concat([tf.expand_dims(t, axis=1) for t in outputs], axis=1)
@@ -368,16 +407,27 @@ class RNNSampleModel(Model):
 
             rnn_output = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
 
+            if self.hypers.model_params['bin_outputs']:
+                num_output_features = self.hypers.model_params['num_bins']
+            else:
+                num_output_features = self.metadata['num_output_features']
+ 
             # B x D'
             output = mlp(inputs=rnn_output,
-                         output_size=self.metadata['num_output_features'],
+                         output_size=num_output_features,
                          hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
                          activations=self.hypers.model_params['output_hidden_activation'],
                          dropout_keep_rate=self._placeholders['dropout_keep_rate'],
                          name=f'output-layer-{i}')
-            self._ops[f'prediction_{i}'] = output
-            self._ops[f'loss_{i}'] = tf.reduce_sum(tf.square(output - self._placeholders['output']), axis=-1)  # B
 
+            if self.hypers.model_params['bin_outputs']:
+                output_probs = tf.nn.softmax(output, axis=-1)
+                output = tf.reduce_sum(output_probs * self._placeholders['bin_means'], axis=-1, keepdims=True)
+                self._ops[f'prediction_probs_{i}'] = output_probs
+
+            self._ops[f'prediction_{i}'] = output
+
+            self._ops[f'loss_{i}'] = tf.reduce_sum(tf.square(output - self._placeholders['output']), axis=-1)  # B
             outputs.append(output)
 
         combined_outputs = tf.concat([tf.expand_dims(t, axis=1) for t in outputs], axis=1)
