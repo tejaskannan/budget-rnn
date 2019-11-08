@@ -24,7 +24,7 @@ def extract_model_name(model_file: str) -> str:
 
 
 def evaluate_model(model_params: Dict[str, str], dataset: RNNSampleDataset,
-                   batch_size: Optional[int], num_batches: Optional[int]) -> Tuple[OrderedDict, OrderedDict]:
+                   batch_size: Optional[int], num_batches: Optional[int]) -> Tuple[Dict[str, TestMetrics], Dict[str, TestMetrics], List[np.array]]:
     hypers = HyperParameters(model_params['params_file'])
 
     path_tokens = split(model_params['model_path'])
@@ -42,13 +42,23 @@ def evaluate_model(model_params: Dict[str, str], dataset: RNNSampleDataset,
     return metrics
 
 
+def get_stat(metrics: TestMetrics, stat_name: str) -> float:
+    if stat_name == 'median':
+        return metrics.median
+    return metrics.mean
+
+
 def plot_results(error_metrics: DefaultDict[str, TestMetrics],
                  latency_metrics: DefaultDict[str, TestMetrics],
                  labels: List[str],
                  prediction_ops: List[str],
                  sample_frac: float,
                  output_folder: Optional[str],
+                 stat_name: str,
                  test_params: Dict[str, Any]):
+    if stat_name not in ('mean', 'median'):
+        raise ValueError(f'Unknown aggregate metric {stat_name}.')
+
     plt.style.use('ggplot')
 
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 9))
@@ -56,7 +66,7 @@ def plot_results(error_metrics: DefaultDict[str, TestMetrics],
     # Sample Fraction vs Error
     x = [(i+1) * sample_frac for i in range(len(error_metrics))]
     for i, label in enumerate(labels):
-        y = [error_metrics[op][i].mean for op in prediction_ops]
+        y = [get_stat(error_metrics[op][i], stat_name) for op in prediction_ops]
         ax1.errorbar(x=x, y=y, fmt='-o', label=label)
 
     ax1.legend()
@@ -68,7 +78,7 @@ def plot_results(error_metrics: DefaultDict[str, TestMetrics],
     # Layer Number vs Latency
     x = [(i+1) * sample_frac for i in range(len(latency_metrics))]
     for i, label in enumerate(labels):
-        y = [latency_metrics[op][i].mean for op in prediction_ops]
+        y = [get_stat(latency_metrics[op][i], stat_name) for op in prediction_ops]
         yerr = [latency_metrics[op][i].std for op in prediction_ops]
         ax2.errorbar(x, y, fmt='-o', capsize=3.0, label=label)
 
@@ -81,8 +91,8 @@ def plot_results(error_metrics: DefaultDict[str, TestMetrics],
     # Error vs Latency
     min_latency, max_latency = 1e10, 0.0
     for i, label in enumerate(labels):
-        x = [latency_metrics[op][i].mean for op in prediction_ops]
-        y = [error_metrics[op][i].mean for op in prediction_ops]
+        x = [get_stat(latency_metrics[op][i], stat_name) for op in prediction_ops]
+        y = [get_stat(error_metrics[op][i], stat_name) for op in prediction_ops]
 
         ax3.plot(x, y, marker='o', label=label)
 
@@ -105,7 +115,7 @@ def plot_results(error_metrics: DefaultDict[str, TestMetrics],
     output_folder_path = RichPath.create(output_folder)
     output_folder_path.make_as_dir()
 
-    output_folder_name = split(output_folder)[1]
+    output_folder_name = split(output_folder)[1] + '-' + stat_name
     plot_file = output_folder_path.join(output_folder_name + '.pdf')
     params_file = output_folder_path.join(output_folder_name  + '_params.jsonl.gz')
  
@@ -172,7 +182,7 @@ if __name__ == '__main__':
     for i, model_params in enumerate(test_params['models']):
         print(f'Starting Model {i+1}/{num_models}.')
 
-        error, latency = evaluate_model(model_params, dataset, batch_size, num_batches)
+        error, latency, _ = evaluate_model(model_params, dataset, batch_size, num_batches)
 
         labels.append(model_params['model_name'])
         for prediction_op in prediction_ops:
@@ -182,8 +192,10 @@ if __name__ == '__main__':
         print('============')
 
     output_folder = test_params.get('output_folder')
-    plot_results(error_metrics, latency_metrics,
-                 labels=labels, sample_frac=sample_frac,
-                 prediction_ops=prediction_ops,
-                 output_folder=output_folder,
-                 test_params=test_params)
+    for stat_name in ['mean', 'median']:
+        plot_results(error_metrics, latency_metrics,
+                     labels=labels, sample_frac=sample_frac,
+                     prediction_ops=prediction_ops,
+                     output_folder=output_folder,
+                     stat_name=stat_name,
+                     test_params=test_params)

@@ -11,7 +11,7 @@ def extract_fields(record: Dict[str, Any], fields: List[str]) -> List[Any]:
     return [record[key] for key in fields]
 
 
-def create(input_folder: RichPath, output_folder: RichPath, input_fields: List[str], output_fields: List[str], window_size: int, lookahead: int, stride: int):
+def create(input_folder: RichPath, output_folder: RichPath, id_field: str, input_fields: List[str], output_fields: List[str], window_size: int, lookahead: int, stride: int):
     output_folder.make_as_dir()
 
     input_files = input_folder.iterate_filtered_files_in_dir('*.jsonl.gz')
@@ -31,7 +31,7 @@ def create(input_folder: RichPath, output_folder: RichPath, input_fields: List[s
                 for i in range(0, limit, stride):
                     window = [extract_fields(r, input_fields) for r in chunk[i:i+window_size]]
                     result = extract_fields(chunk[i+window_size+lookahead], output_fields)
-                    writer.add(dict(inputs=window, output=result))
+                    writer.add(dict(inputs=window, output=result, sample_id=chunk[i][id_field]))
                     total += 1
                 chunk = chunk[i:]
 
@@ -40,7 +40,7 @@ def create(input_folder: RichPath, output_folder: RichPath, input_fields: List[s
             for i in range(0, limit, stride):
                 window = [extract_fields(r, input_fields) for r in chunk[i:i+window_size]]
                 result = extract_fields(chunk[i+window_size+lookahead], output_fields)
-                writer.add(dict(inputs=window, output=result))
+                writer.add(dict(inputs=window, output=result, sample_id=chunk[i][id_field]))
                 total += 1
 
     metadata_file = output_folder.join('metadata.jsonl.gz')
@@ -65,12 +65,14 @@ if __name__ == '__main__':
     parser.add_argument('--stride', type=int)
     parser.add_argument('--input-fields', type=str, nargs='+')
     parser.add_argument('--output-fields', type=str, nargs='+')
+    parser.add_argument('--id-field', type=str, required=True)
     args = parser.parse_args()
 
     stride = args.stride if args.stride is not None else int(args.window_size / 2)
 
     create(input_folder=RichPath.create(args.input_folder),
            output_folder=RichPath.create(args.output_folder),
+           id_field=args.id_field,
            input_fields=args.input_fields,
            output_fields=args.output_fields,
            window_size=args.window_size,

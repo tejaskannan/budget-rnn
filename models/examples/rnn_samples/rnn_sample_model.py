@@ -79,7 +79,16 @@ class RNNSampleModel(Model):
         output_samples: List[List[float]] = []
 
         for sample in dataset.dataset[DataSeries.TRAIN]:
-            input_samples.append(sample['inputs'])
+
+            # Shift input by the first sample to focus on trends
+            input_sample = np.array(sample['inputs'])
+            if self.hypers.model_params.get('shift_inputs', False):
+                first_input = np.expand_dims(input_sample[0], axis=0)
+                shifted_input = input_sample - first_input
+                input_samples.append(shifted_input)
+            else:
+                input_samples.append(input_sample)
+ 
             if not isinstance(sample['output'], list) and \
                     not isinstance(sample['output'], np.ndarray):
                 output_samples.append([sample['output']])
@@ -119,6 +128,7 @@ class RNNSampleModel(Model):
         self.metadata['num_input_features'] = num_input_features
         self.metadata['num_output_features'] = num_output_features
         self.metadata['seq_length'] = seq_length
+        self.metadata['shift_inputs'] = self.hypers.model_params.get('shift_inputs', False)
 
     def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
         dropout = self.hypers.model_params.get('dropout_keep_rate', 1.0) if is_train else 1.0

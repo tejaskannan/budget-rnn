@@ -2,6 +2,7 @@ import csv
 from argparse import ArgumentParser
 from dpu_utils.utils import ChunkWriter, RichPath
 from typing import List, Dict, Any
+from datetime import datetime
 
 
 def try_convert_to_float(value: Any, default: float) -> float:
@@ -11,10 +12,12 @@ def try_convert_to_float(value: Any, default: float) -> float:
         return default
 
 def convert_row(record: List[str]):
-    return dict(year=record[1],
-                month=record[2],
-                day=record[3],
-                hour=record[4],
+    year = int(record[1])
+    month = int(record[2])
+    day = int(record[3])
+    hour = int(record[4])
+    date = datetime(year=year, month=month, day=day, hour=hour)
+    return dict(date=date.isoformat(),
                 pm25=try_convert_to_float(record[5], 0.0),
                 pm10=try_convert_to_float(record[6], 0.0),
                 so2=try_convert_to_float(record[7], 0.0),
