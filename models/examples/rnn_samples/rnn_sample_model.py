@@ -13,11 +13,12 @@ from layers.basic import rnn_cell, mlp
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
+from testing_utils import TestMetrics
 
 
 VAR_NAME_REGEX = re.compile(r'.*(layer-[0-9])+.*')
-TestMetrics = namedtuple('TestMetrics', ['raw', 'mean', 'std', 'median', 'first_quartile', 'third_quartile'])
-
+#TestMetrics = namedtuple('TestMetrics', ['raw', 'mean', 'std', 'median', 'first_quartile', 'third_quartile'])
+#
 
 class RNNModelType:
     VANILLA = auto()
@@ -145,7 +146,7 @@ class RNNSampleModel(Model):
             self._placeholders['dropout_keep_rate']: dropout
         }
 
-        if self.hypers.model_params['bin_outputs']:
+        if self.hypers.model_params.get('bin_outputs', False):
             feed_dict[self._placeholders['bin_means']] = batch['bin_means']
 
         # Extract parameters
@@ -218,7 +219,7 @@ class RNNSampleModel(Model):
                                                             dtype=tf.float32,
                                                             name='loss-weights')
 
-        if self.hypers.model_params['bin_outputs']:
+        if self.hypers.model_params.get('bin_outputs', False):
             self._placeholders['bin_means'] = tf.placeholder(shape=[None, self.hypers.model_params['num_bins']],
                                                              dtype=tf.float32,
                                                              name='bin-means')
@@ -236,7 +237,9 @@ class RNNSampleModel(Model):
 
         prediction_ops = self.prediction_ops
 
-        mse_dict: DefaultDict[str, List[float]] = defaultdict(list)
+        sq_error_dict: DefaultDict[str, List[float]] = defaultdict(list)
+        abs_error_dict: DefaultDict[str, List[float]] = defaultdict(list)
+        abs_perc_dict: DefaultDict[str, List[float]] = defaultdict(list)
         latency_dict: DefaultDict[str, List[float]] = defaultdict(list)
 
         true_values: List[np.array] = []
@@ -271,41 +274,28 @@ class RNNSampleModel(Model):
                 expected = self.metadata['output_scaler'].inverse_transform(raw_expected)
                 true_values.append(expected)
 
-                squared_error = np.sum(np.square(expected - unnormalized_prediction), axis=-1)
+                difference = expected - unnormalized_prediction
+                squared_error = np.sum(np.square(difference), axis=-1)
+                abs_error = np.sum(np.abs(difference), axis=-1)
+
+                abs_average = 0.5 * (np.abs(expected) + np.abs(unnormalized_prediction))
+                abs_percentage_error = np.sum(np.abs(difference) / abs_average, axis=-1)
 
                 # Avoid the first batch for consistency with latency measurements
                 if num_batches > 0:
-                    mse_dict[prediction_op].extend(squared_error)
+                    sq_error_dict[prediction_op].extend(squared_error)
+                    abs_error_dict[prediction_op].extend(abs_error)
+                    abs_perc_dict[prediction_op].extend(abs_percentage_error)
 
             num_batches += 1
 
             if max_num_batches is not None and num_batches >= max_num_batches:
                 break
 
-        # Compute aggregate statistics
-        mse_metrics: Dict[str, TestMetrics] = dict()
-        latency_metrics: Dict[str, TestMetrics] = dict()
-        for prediction_op in prediction_ops:
-            raw_errors = mse_dict[prediction_op]
-            error = TestMetrics(raw=raw_errors,
-                                mean=np.average(raw_errors),
-                                std=np.std(raw_errors),
-                                median=np.median(raw_errors),
-                                first_quartile=np.percentile(raw_errors, 25),
-                                third_quartile=np.percentile(raw_errors, 75))
-
-            raw_latency = latency_dict[prediction_op]
-            latency = TestMetrics(raw=np.repeat(raw_latency, test_batch_size, axis=0),
-                                  mean=np.average(raw_latency),
-                                  std=np.std(raw_latency),
-                                  median=np.median(raw_latency),
-                                  first_quartile=np.percentile(raw_latency, 25),
-                                  third_quartile=np.percentile(raw_latency, 75))
-
-            mse_metrics[prediction_op] = error
-            latency_metrics[prediction_op] = latency
-
-        return mse_metrics, latency_metrics, true_values
+        return TestMetrics(squared_error=sq_error_dict,
+                           abs_error=abs_error_dict,
+                           abs_percentage_error=abs_perc_dict,
+                           latency=latency_dict)
 
     def make_model(self, is_train: bool):
         with tf.variable_scope('rnn-model', reuse=tf.AUTO_REUSE):
@@ -417,7 +407,7 @@ class RNNSampleModel(Model):
 
             rnn_output = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
 
-            if self.hypers.model_params['bin_outputs']:
+            if self.hypers.model_params.get('bin_outputs', False):
                 num_output_features = self.hypers.model_params['num_bins']
             else:
                 num_output_features = self.metadata['num_output_features']
@@ -430,7 +420,7 @@ class RNNSampleModel(Model):
                          dropout_keep_rate=self._placeholders['dropout_keep_rate'],
                          name=f'output-layer-{i}')
 
-            if self.hypers.model_params['bin_outputs']:
+            if self.hypers.model_params.get('bin_outputs', False):
                 output_probs = tf.nn.softmax(output, axis=-1)
                 output = tf.reduce_sum(output_probs * self._placeholders['bin_means'], axis=-1, keepdims=True)
                 self._ops[f'prediction_probs_{i}'] = output_probs

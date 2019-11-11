@@ -2,6 +2,7 @@ import re
 import json
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.axes import Axes
 from argparse import ArgumentParser
 from collections import defaultdict, OrderedDict
 from dpu_utils.utils import RichPath
@@ -9,8 +10,9 @@ from os.path import split, join, exists
 from os import mkdir
 from typing import Dict, Tuple, List, Optional, DefaultDict, Any
 
-from rnn_sample_model import RNNSampleModel, TestMetrics
+from rnn_sample_model import RNNSampleModel
 from rnn_sample_dataset import RNNSampleDataset
+from testing_utils import TestMetrics
 from utils.hyperparameters import HyperParameters
 
 
@@ -24,7 +26,7 @@ def extract_model_name(model_file: str) -> str:
 
 
 def evaluate_model(model_params: Dict[str, str], dataset: RNNSampleDataset,
-                   batch_size: Optional[int], num_batches: Optional[int]) -> Tuple[Dict[str, TestMetrics], Dict[str, TestMetrics], List[np.array]]:
+                   batch_size: Optional[int], num_batches: Optional[int]) -> TestMetrics:
     hypers = HyperParameters(model_params['params_file'])
 
     path_tokens = split(model_params['model_path'])
@@ -48,63 +50,82 @@ def get_stat(metrics: TestMetrics, stat_name: str) -> float:
     return metrics.mean
 
 
-def plot_results(error_metrics: DefaultDict[str, TestMetrics],
-                 latency_metrics: DefaultDict[str, TestMetrics],
-                 labels: List[str],
+def plot_axis(test_metrics: Dict[str, TestMetrics],
+              series: str,
+              stat_name: str,
+              x_values: List[float],
+              title: str,
+              xlabel: str,
+              ylabel: str,
+              ax: Axes):
+    
+    # Sample Fraction vs Squared Error
+    for label, metrics in test_metrics.items():
+        y = [get_stat(metrics[series][op], stat_name) for op in prediction_ops]
+        ax.errorbar(x=x_values, y=y, fmt='-o', label=label)
+
+    ax.legend()
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.set_xticks(ticks=x_values)
+
+
+def plot_results(test_metrics: Dict[str, TestMetrics],
                  prediction_ops: List[str],
                  sample_frac: float,
                  output_folder: Optional[str],
                  stat_name: str,
                  test_params: Dict[str, Any]):
+    if len(test_metrics) <= 0:
+        raise ValueError('Must provde some metrics to graph.')
+
     if stat_name not in ('mean', 'median'):
         raise ValueError(f'Unknown aggregate metric {stat_name}.')
 
     plt.style.use('ggplot')
 
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 9))
+    sample_fractions = [(i+1) * sample_frac for i in range(len(prediction_ops))]
 
-    # Sample Fraction vs Error
-    x = [(i+1) * sample_frac for i in range(len(error_metrics))]
-    for i, label in enumerate(labels):
-        y = [get_stat(error_metrics[op][i], stat_name) for op in prediction_ops]
-        ax1.errorbar(x=x, y=y, fmt='-o', label=label)
+    # Create axes
+    fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(16, 9))
 
-    ax1.legend()
-    ax1.set_xlabel('Sample Fraction')
-    ax1.set_ylabel('MSE')
-    ax1.set_title('Mean Squared Error for Each Sample Fraction')
-    ax1.set_xticks(ticks=x)
+    # Plot each metric
+    plot_axis(test_metrics=test_metrics,
+              series='squared_error',
+              stat_name=stat_name,
+              x_values=sample_fractions,
+              title='Mean Squared Error (MSE) for Each Sample Fraction',
+              xlabel='Sample Fraction',
+              ylabel='MSE',
+              ax=ax1)
 
-    # Layer Number vs Latency
-    x = [(i+1) * sample_frac for i in range(len(latency_metrics))]
-    for i, label in enumerate(labels):
-        y = [get_stat(latency_metrics[op][i], stat_name) for op in prediction_ops]
-        yerr = [latency_metrics[op][i].std for op in prediction_ops]
-        ax2.errorbar(x, y, fmt='-o', capsize=3.0, label=label)
+    plot_axis(test_metrics=test_metrics,
+              series='abs_error',
+              stat_name=stat_name,
+              x_values=sample_fractions,
+              title='Mean Absolute Error (MAE) for Each Sample Fraction',
+              xlabel='Sample Fraction',
+              ylabel='MAE',
+              ax=ax2)
 
-    ax2.legend()
-    ax2.set_xlabel('Sample Fraction')
-    ax2.set_ylabel('Latency (ms)')
-    ax2.set_title('Latency for Each Sample Fraction')
-    ax2.set_xticks(ticks=x)
-
-    # Error vs Latency
-    min_latency, max_latency = 1e10, 0.0
-    for i, label in enumerate(labels):
-        x = [get_stat(latency_metrics[op][i], stat_name) for op in prediction_ops]
-        y = [get_stat(error_metrics[op][i], stat_name) for op in prediction_ops]
-
-        ax3.plot(x, y, marker='o', label=label)
-
-        # Update min and max for formating reasons
-        max_latency = max(max_latency, np.max(x))
-        min_latency = min(min_latency, np.min(x))
-
-    ax3.legend()
-    ax3.set_xlabel('Latency (ms)', fontsize=10)
-    ax3.set_ylabel('MSE', fontsize=10)
-    ax3.set_title('Inference Latency vs Mean Squared Error')
-    ax3.set_xlim(left=min_latency - 0.01, right=max_latency + 0.01)
+    plot_axis(test_metrics=test_metrics,
+              series='abs_percentage_error',
+              stat_name=stat_name,
+              x_values=sample_fractions,
+              title='Symmetric Absolute Percentage Error (SMAPE) for Each Sample Fraction',
+              xlabel='Sample Fraction',
+              ylabel='SMAPE',
+              ax=ax3)
+    
+    plot_axis(test_metrics=test_metrics,
+              series='latency',
+              stat_name=stat_name,
+              x_values=sample_fractions,
+              title='Inference Latency for Each Sample Fraction',
+              xlabel='Sample Fraction',
+              ylabel='Latency (ms)',
+              ax=ax4)
 
     plt.tight_layout()
 
@@ -125,14 +146,8 @@ def plot_results(error_metrics: DefaultDict[str, TestMetrics],
     # For now, we save the metrics as a pickle file because Numpy Arrays
     # are not JSON serializable. This should be changed to compressed
     # JSONL files for readability.
-    metrics = dict()
-    for i, label in enumerate(labels):
-        metrics[label] = {
-            'error': [error_metrics[op][i]._asdict() for op in prediction_ops],
-            'latency': [latency_metrics[op][i]._asdict() for op in prediction_ops]
-        }
     metrics_file = RichPath.create(output_folder).join('metrics.pkl.gz')
-    metrics_file.save_as_compressed_file([metrics])
+    metrics_file.save_as_compressed_file(test_metrics)
 
 
 if __name__ == '__main__':
@@ -175,26 +190,24 @@ if __name__ == '__main__':
     # Inference parameters
     batch_size, num_batches = test_params.get('batch_size'), test_params.get('num_batches')
 
-    error_metrics: DefaultDict[str, TestMetrics] = defaultdict(list)
-    latency_metrics: DefaultDict[str, TestMetrics] = defaultdict(list)
-    labels: List[str] = []
+    metrics: Dict[str, TestMetrics] = dict()
     num_models = len(test_params['models'])
     for i, model_params in enumerate(test_params['models']):
         print(f'Starting Model {i+1}/{num_models}.')
 
-        error, latency, _ = evaluate_model(model_params, dataset, batch_size, num_batches)
+        test_metrics = evaluate_model(model_params, dataset, batch_size, num_batches)
+        metrics[model_params['model_name']] = test_metrics
 
-        labels.append(model_params['model_name'])
-        for prediction_op in prediction_ops:
-            error_metrics[prediction_op].append(error[prediction_op])
-            latency_metrics[prediction_op].append(latency[prediction_op])
+        #for prediction_op in prediction_ops:
+        #    error_metrics[prediction_op].append(error[prediction_op])
+        #    latency_metrics[prediction_op].append(latency[prediction_op])
 
         print('============')
 
     output_folder = test_params.get('output_folder')
     for stat_name in ['mean', 'median']:
-        plot_results(error_metrics, latency_metrics,
-                     labels=labels, sample_frac=sample_frac,
+        plot_results(test_metrics=metrics,
+                     sample_frac=sample_frac,
                      prediction_ops=prediction_ops,
                      output_folder=output_folder,
                      stat_name=stat_name,
