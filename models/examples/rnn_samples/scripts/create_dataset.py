@@ -2,9 +2,14 @@ from argparse import ArgumentParser
 from dpu_utils.utils import RichPath, ChunkWriter
 from itertools import chain
 from typing import List, Dict, Any
+from datetime import datetime, timedelta
 
 
 CHUNK_SIZE = 10000
+
+
+def parse_date(date_string: str) -> datetime:
+    return datetime.strptime(date_string, '%Y-%m-%dT%H:%M:%S')
 
 
 def extract_fields(record: Dict[str, Any], fields: List[str]) -> List[Any]:
@@ -17,31 +22,52 @@ def create(input_folder: RichPath, output_folder: RichPath, id_field: str, input
     input_files = input_folder.iterate_filtered_files_in_dir('*.jsonl.gz')
     input_dataset = chain(*(input_file.read_by_file_suffix() for input_file in input_files))
 
-    with ChunkWriter(output_folder, file_prefix='data', max_chunk_size=CHUNK_SIZE, file_suffix='.jsonl.gz', parallel_writers=0) as writer:
-        chunk: List[Dict[str, Any]] = []
+    # Load dataset and keep selected fields
+    dataset: Dict[datetime, Any] = dict()
+    for record in input_dataset:
+        input_values = extract_fields(record, input_fields)
+        output_values = extract_fields(record, output_fields)
+        sample_id = record[id_field]
 
-        total = 0
-        seen = 0
-        for record in input_dataset:
-            chunk.append(record)
+        if any((x is None for x in input_values)):
+            continue
+
+        if any((x is None for x in output_values)):
+            continue
+
+        dataset[parse_date(sample_id)] = dict(inputs=input_values,
+                                              output=output_values,
+                                              sample_id=sample_id)
+
+    with ChunkWriter(output_folder, file_prefix='data', max_chunk_size=CHUNK_SIZE, file_suffix='.jsonl.gz', parallel_writers=0) as writer:
+
+        # Set the increment for the time field
+        increment = timedelta(hours=1)
+
+        total, seen = 0, 0
+        for date in dataset.keys():
+
             seen += 1
 
-            if len(chunk) >= CHUNK_SIZE:
-                limit = len(chunk) - window_size - lookahead - 1
-                for i in range(0, limit, stride):
-                    window = [extract_fields(r, input_fields) for r in chunk[i:i+window_size]]
-                    result = extract_fields(chunk[i+window_size+lookahead], output_fields)
-                    writer.add(dict(inputs=window, output=result, sample_id=chunk[i][id_field]))
-                    total += 1
-                chunk = chunk[i:]
+            inputs: List[Any] = []
+            for i in range(0, window_size):
+                time = date + increment * i
+                if time in dataset:
+                    inputs.append(dataset[time]['inputs'])
 
-        if len(chunk) > 0:
-            limit = len(chunk) - window_size - lookahead - 1
-            for i in range(0, limit, stride):
-                window = [extract_fields(r, input_fields) for r in chunk[i:i+window_size]]
-                result = extract_fields(chunk[i+window_size+lookahead], output_fields)
-                writer.add(dict(inputs=window, output=result, sample_id=chunk[i][id_field]))
-                total += 1
+            if len(inputs) < window_size:
+                continue
+
+            output_time = date + increment * (window_size + lookahead)
+            if output_time not in dataset:
+                continue
+
+            output = dataset[output_time]['output']
+
+            sample_id = dataset[date]['sample_id']
+            record = dict(inputs=inputs, output=output, sample_id=sample_id)
+            writer.add(record)
+            total += 1
 
     metadata_file = output_folder.join('metadata.jsonl.gz')
     metadata = {
