@@ -159,9 +159,9 @@ def split_dataset(input_dir: RichPath, output_dir: RichPath, fracs: Dict[DataPar
 
     print()
     print(f'Total Number of Samples: {total}')
-    print(f'Fraction in Training Dataset: {train_frac: .4f}')
-    print(f'Fraction in Validation Dataset: {valid_frac: .4f}')
-    print(f'Fraction in Testing Dataset: {test_frac: .4f}')
+    print(f'Fraction in Training Dataset ({data_counters[DataPartition.TRAIN]}): {train_frac: .4f}')
+    print(f'Fraction in Validation Dataset ({data_counters[DataPartition.VALID]}): {valid_frac: .4f}')
+    print(f'Fraction in Testing Dataset ({data_counters[DataPartition.TEST]}): {test_frac: .4f}')
 
 
 if __name__ == '__main__':

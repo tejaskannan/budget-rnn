@@ -4,7 +4,7 @@ from dpu_utils.utils import RichPath
 
 class HyperParameters:
 
-    __slots__ = ['epochs', 'patience', 'learning_rate', 'gradient_clip', 'learning_rate_decay', 'optimizer', 'batch_size', 'model', 'model_params']
+    __slots__ = ['epochs', 'patience', 'learning_rate', 'gradient_clip', 'learning_rate_decay', 'optimizer', 'batch_size', 'model', 'dropout_keep_rate', 'model_params']
 
     def __init__(self, params_file: Union[str, RichPath]):
         # Read the parameters file
@@ -17,9 +17,10 @@ class HyperParameters:
         parameters = params_file.read_by_file_suffix()
 
         # Unpack arguments
-        self.learning_rate = parameters.get('learning_rate', 0.01)
+        self.learning_rate = parameters.get('learning_rate', 0.0001)
         self.gradient_clip = parameters.get('gradient_clip', 1)
         self.learning_rate_decay = parameters.get('learning_rate_decay', 0.99)
+        self.dropout_keep_rate = parameters.get('dropout_keep_rate', 1.0)
         self.optimizer = parameters.get('optimizer', 'adam')
         self.batch_size = parameters.get('batch_size', 1000)
         self.epochs = parameters.get('epochs', 10)
@@ -36,6 +37,7 @@ class HyperParameters:
             'learning_rate_decay': self.learning_rate_decay,
             'optimizer': self.optimizer,
             'batch_size': self.batch_size,
+            'dropout_keep_rate': self.dropout_keep_rate,
             'model': self.model,
             'model_params': self.model_params
         }

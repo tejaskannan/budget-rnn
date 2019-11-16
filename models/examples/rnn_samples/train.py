@@ -28,6 +28,7 @@ if __name__ == '__main__':
     parser.add_argument('--data-folders', type=str, nargs='+')
     parser.add_argument('--save-folder', type=str, required=True)
     parser.add_argument('--params-files', type=str, nargs='+')
+    parser.add_argument('--trials', type=int, default=1)
     parser.add_argument('--testrun', action='store_true')
     args = parser.parse_args()
 
@@ -53,13 +54,17 @@ if __name__ == '__main__':
         assert exists(params_file), f'The file {params_file} does not exist!'
         assert params_file.endswith('.json'), f'The params file must be a JSON.'
 
+    trials = max(args.trials, 1)
+    num_models = trials * len(args.params_files)
+
     for data_folder in args.data_folders:
         print(f'Started {data_folder}')
         print('====================')
-        for i, params_file in enumerate(args.params_files):
-            print(f'Started training model {i+1}/{len(args.params_files)}')
-            train(data_folder=data_folder,
-                  save_folder=args.save_folder,
-                  params_file=params_file,
-                  max_epochs=max_epochs)
-            print('====================')
+        for trial in range(trials):
+            for i, params_file in enumerate(args.params_files):
+                print(f'Started training model {i+1}/{num_models}')
+                train(data_folder=data_folder,
+                      save_folder=args.save_folder,
+                      params_file=params_file,
+                      max_epochs=max_epochs)
+                print('====================')

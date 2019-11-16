@@ -132,7 +132,7 @@ class RNNSampleModel(Model):
         self.metadata['shift_inputs'] = self.hypers.model_params.get('shift_inputs', False)
 
     def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
-        dropout = self.hypers.model_params.get('dropout_keep_rate', 1.0) if is_train else 1.0
+        dropout = self.hypers.dropout_keep_rate if is_train else 1.0
         input_batch = np.array(batch['inputs'])
         output_batch = np.array(batch['output'])
 
@@ -351,7 +351,7 @@ class RNNSampleModel(Model):
             rnn_output = pool_rnn_outputs(rnn_outputs, state, pool_mode=self.hypers.model_params['pool_mode'])
 
             # B x D'
-            if self.hypers.model_params['bin_outputs']:
+            if self.hypers.model_params.get('bin_outputs', False):
                 num_output_features = len(self.metadata['bin_means'])
             else:
                 num_output_features = self.metadata['num_output_features']
@@ -363,12 +363,14 @@ class RNNSampleModel(Model):
                          dropout_keep_rate=self._placeholders['dropout_keep_rate'],
                          name=output_layer_name)
 
-            if self.hypers.model_params['bin_outputs']:
+            if self.hypers.model_params.get('bin_outputs', False):
                 output_probs = tf.nn.softmax(output, axis=-1)
                 output = tf.reduce_sum(output_probs * self._placeholders['bin_means'], axis=-1, keepdims=True)
                 self._ops[f'prediction_probs_{i}'] = output_probs
 
             self._ops[f'prediction_{i}'] = output
+            self._ops[f'loss_{i}'] = tf.reduce_sum(tf.square(output - self._placeholders['output']), axis=-1)  # B
+
             outputs.append(output)
 
         self._ops['predictions'] = tf.concat([tf.expand_dims(t, axis=1) for t in outputs], axis=1)

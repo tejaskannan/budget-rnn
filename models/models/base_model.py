@@ -1,5 +1,7 @@
 import tensorflow as tf
 import numpy as np
+import re
+from os import listdir
 from dpu_utils.utils import RichPath
 from datetime import datetime
 from collections import defaultdict
@@ -44,6 +46,17 @@ class Model:
         # Make the output folder
         self.save_folder.make_as_dir()
         self.name = ''
+
+    @property
+    def optimizer_op_name(self) -> str:
+        return 'optimizer_op'
+
+    @property
+    def loss_op_names(self) -> List[str]:
+        return ['loss']
+
+    def get_variable_group(self, loss_op_name: str) -> List[tf.Variable]:
+        return [var for var in self._sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)]
 
     def load_metadata(self, dataset: Dataset):
         """
@@ -154,10 +167,7 @@ class Model:
             optimizer_op = self._optimizer.apply_gradients(pruned_gradients)
             optimizer_ops.append(optimizer_op)
 
-        self._ops['optimizer_op'] = tf.group(optimizer_ops)
-
-        # Apply the gradients to the specified variables
-        # self._ops['optimizer_op'] = self._optimizer.apply_gradients(pruned_gradients)
+        self._ops[self.optimizer_op_name] = tf.group(optimizer_ops)
 
     def execute(self, feed_dict: Dict[tf.Tensor, List[Any]], ops: Optional[List[str]] = None) -> Dict[str, Any]:
         """
@@ -178,12 +188,13 @@ class Model:
             op_results = self._sess.run(ops_to_run, feed_dict=feed_dict)
             return op_results
 
-    def train(self, dataset: Dataset) -> DefaultDict[str, List[float]]:
+    def train(self, dataset: Dataset, drop_incomplete_batches: bool = False) -> DefaultDict[str, List[float]]:
         """
         Trains the model on the given dataset.
 
         Args:
             dataset: Dataset object containing training, validation and testing partitions
+            drop_incomplete_minibatches: Whether to drop incomplete batches
         Returns:
             A dictionary of metrics obtained from training.
         """
@@ -198,66 +209,82 @@ class Model:
         self.make(is_train=True)
         self.init()
 
-        metrics_dict: DefaultDict[str, List[float]] = defaultdict(list)
+        train_loss_dict: DefaultDict[str, List[float]] = defaultdict(list)
+        valid_loss_dict: DefaultDict[str, List[float]] = defaultdict(list)
+        best_valid_loss_dict: DefaultDict[str, BIG_NUMBER] = defaultdict(lambda: BIG_NUMBER)
 
-        best_valid_loss = BIG_NUMBER
+        # best_valid_loss = BIG_NUMBER
         num_not_improved = 0
         for epoch in range(self.hypers.epochs):
             print(f'-------- Epoch {epoch} --------')
 
-            train_losses: List[float] = []
             train_generator = dataset.minibatch_generator(DataSeries.TRAIN,
                                                           batch_size=self.hypers.batch_size,
                                                           metadata=self.metadata,
                                                           should_shuffle=True,
-                                                          drop_incomplete_batches=True)
+                                                          drop_incomplete_batches=drop_incomplete_batches)
 
             for i, batch in enumerate(train_generator):
                 feed_dict = self.batch_to_feed_dict(batch, is_train=True)
-                train_results = self.execute(feed_dict, ['optimizer_op', 'loss'])
-                
-                train_losses.append(train_results['loss'])
+                ops_to_run = [self.optimizer_op_name] + self.loss_op_names
+                train_results = self.execute(feed_dict, ops_to_run)
 
-                avg_loss = np.average(train_losses)
-                print(f'Train Batch {i}. Average loss so far: {avg_loss:.5f}', end='\r')
+                batch_loss = 0.0
+                for loss_op_name in self.loss_op_names:
+                    batch_loss += train_results[loss_op_name]
+                    train_loss_dict[loss_op_name].append(train_results[loss_op_name])
+
+                avg_loss = batch_loss / len(self.loss_op_names)
+                print(f'Train Batch {i}. Average loss so far: {avg_loss:.4f}', end='\r')
+                break
             print()
 
-            valid_losses: List[float] = []
             valid_generator = dataset.minibatch_generator(DataSeries.VALID,
                                                           batch_size=self.hypers.batch_size,
                                                           metadata=self.metadata,
                                                           should_shuffle=False,
-                                                          drop_incomplete_batches=True)
+                                                          drop_incomplete_batches=drop_incomplete_batches)
             for i, batch in enumerate(valid_generator):
                 feed_dict = self.batch_to_feed_dict(batch, is_train=False)
-                valid_results = self.execute(feed_dict, ['loss'])
-                valid_losses.append(valid_results['loss'])
+                valid_results = self.execute(feed_dict, self.loss_op_names)
 
-                avg_loss = np.average(valid_losses)
+                batch_loss = 0.0
+                for loss_op_name in self.loss_op_names:
+                    batch_loss += valid_results[loss_op_name]
+                    valid_loss_dict[loss_op_name].append(valid_results[loss_op_name])
+
+                avg_loss = batch_loss / len(self.loss_op_names)
                 print(f'Valid Batch {i}. Average loss so far: {avg_loss:5f}', end='\r')
+                break
             print()
 
-            train_loss = np.average(train_losses)
-            valid_loss = np.average(valid_losses)
+            has_improved = False
+            for loss_op_name, valid_loss in valid_loss_dict.items():
+                if valid_loss[-1] < best_valid_loss_dict[loss_op_name]:
+                    has_improved = True
 
-            metrics_dict['train'].append(train_loss)
-            metrics_dict['valid'].append(valid_loss)
+                    variable_group = self.get_variable_group(loss_op_name)
+                    group_dict: Dist[str, List[tf.Variable]] = dict()
+                    group_dict[loss_op_name] = variable_group
 
-            if valid_loss >= best_valid_loss:
-                num_not_improved += 1
-            else:
-                print('Saving model...')
-                self.save(name, dataset.data_folders)
-                best_valid_loss = valid_loss
+                    self.save(name=name,
+                              variable_groups=group_dict,
+                              data_folders=dataset.data_folders)
+                    best_valid_loss_dict[loss_op_name] = valid_loss[-1]
+
+            if has_improved:
                 num_not_improved = 0
+            else:
+                num_not_improved += 1
 
             if num_not_improved >= self.hypers.patience:
                 print('Exiting due to Early Stopping')
                 break
 
-        return metrics_dict
+        return dict(train_losses=train_loss_dict, valid_losses=valid_loss_dict)
 
-    def save(self, name: str, data_folders: Optional[Dict[DataSeries, str]] = None):
+    def save(self, name: str, variable_groups: Optional[Dict[str, List[tf.Variable]]] = None,
+             data_folders: Optional[Dict[DataSeries, str]] = None):
         """
         Save model weights and hyper-parameters.
         """
@@ -266,11 +293,22 @@ class Model:
 
         metadata_path = self.save_folder.join(f'model-metadata-{name}.pkl.gz')
         metadata_path.save_as_compressed_file(dict(metadata=self.metadata, data_folders=data_folders))
-    
+
         with self._sess.graph.as_default():
-            model_path = self.save_folder.join(f'model-{name}.ckpt')
-            saver = tf.train.Saver()
-            saver.save(self._sess, model_path.path)
+            if variable_groups is None:
+                model_path = self.save_folder.join(f'model-{name}.ckpt')
+                saver = tf.train.Saver()
+                saver.save(self._sess, model_path.path)
+            else:
+                varname_path = self.save_folder.join(f'model-varnames-{name}.pkl.gz')
+                if not varname_path.exists():
+                    varname_dict = {group_name: [var.name for var in variables] for group_name, variables in variable_groups.items()}
+                    varname_path.save_as_compressed_file(varname_dict)
+
+                for group_name, var_set in variable_groups.items():
+                    model_path = self.save_folder.join(f'model-{name}-{group_name}.ckpt')
+                    saver = tf.train.Saver(var_set)
+                    saver.save(self._sess, model_path.path)
 
     def restore_parameters(self, name: str):
         """
@@ -288,6 +326,15 @@ class Model:
         Restore model weights.
         """
         with self._sess.graph.as_default():
-            model_path = self.save_folder.join(f'model-{name}.ckpt')
-            saver = tf.train.Saver()
-            saver.restore(self._sess, model_path.path)
+            varname_path = self.save_folder.join(f'model-varnames-{name}.pkl.gz')
+            varname_dict = varname_path.read_by_file_suffix() if varname_path.exists() else None
+
+            if varname_dict is not None:
+                for loss_op_name, variable_names in varname_dict.items():
+                    model_path = self.save_folder.join(f'model-{name}-{loss_op_name}.ckpt')
+                    saver = tf.train.Saver()
+                    saver.restore(self._sess, model_path.path)
+            else:
+                model_path = self.save_folder.join('model-{name}.ckpt')
+                saver = tf.train.Saver()
+                saver.restore(self._sess, model_path.path)

@@ -42,10 +42,10 @@ def pool_rnn_outputs(outputs: tf.Tensor, final_state: tf.Tensor, pool_mode: str)
         # B x T x 1
         attention_layer = tf.layers.dense(inputs=outputs,
                                           units=1,
-                                          activation=get_activation('tanh'),
+                                          activation=get_activation('leaky_relu'),
                                           kernel_initializer=tf.initializers.glorot_uniform(),
                                           name='attention-layer')
         normalized_attn_weights = tf.nn.softmax(attention_layer, axis=-2)  # B x T x 1
-        return outputs * normalized_attn_weights  # B x T x D
+        return tf.reduce_sum(outputs * normalized_attn_weights, axis=-2)  # B x T x 1
     else:
         raise ValueError(f'Unknown pool mode {pool_mode}.')
