@@ -213,7 +213,6 @@ class Model:
         valid_loss_dict: DefaultDict[str, List[float]] = defaultdict(list)
         best_valid_loss_dict: DefaultDict[str, BIG_NUMBER] = defaultdict(lambda: BIG_NUMBER)
 
-        # best_valid_loss = BIG_NUMBER
         num_not_improved = 0
         for epoch in range(self.hypers.epochs):
             print(f'-------- Epoch {epoch} --------')
@@ -223,7 +222,7 @@ class Model:
                                                           metadata=self.metadata,
                                                           should_shuffle=True,
                                                           drop_incomplete_batches=drop_incomplete_batches)
-
+            epoch_train_loss: DefaultDict[str, float] = defaultdict(float)
             for i, batch in enumerate(train_generator):
                 feed_dict = self.batch_to_feed_dict(batch, is_train=True)
                 ops_to_run = [self.optimizer_op_name] + self.loss_op_names
@@ -231,12 +230,15 @@ class Model:
 
                 batch_loss = 0.0
                 for loss_op_name in self.loss_op_names:
-                    batch_loss += train_results[loss_op_name]
-                    train_loss_dict[loss_op_name].append(train_results[loss_op_name])
+                    avg_batch_loss = np.average(train_results[loss_op_name])
+                    batch_loss += avg_batch_loss
+                    train_loss_dict[loss_op_name].append(avg_batch_loss)
+                    epoch_train_loss[loss_op_name] += avg_batch_loss
 
-                avg_loss = batch_loss / len(self.loss_op_names)
-                print(f'Train Batch {i}. Average loss so far: {avg_loss:.4f}', end='\r')
-                break
+                train_loss_agg = np.average(list(epoch_train_loss.values()))
+                avg_train_loss_so_far = train_loss_agg / (i+1)
+
+                print(f'Train Batch {i}. Average loss so far: {avg_train_loss_so_far:.4f}', end='\r')
             print()
 
             valid_generator = dataset.minibatch_generator(DataSeries.VALID,
@@ -244,23 +246,27 @@ class Model:
                                                           metadata=self.metadata,
                                                           should_shuffle=False,
                                                           drop_incomplete_batches=drop_incomplete_batches)
+            epoch_valid_loss: DefaultDict[str, float] = defaultdict(float)
             for i, batch in enumerate(valid_generator):
                 feed_dict = self.batch_to_feed_dict(batch, is_train=False)
                 valid_results = self.execute(feed_dict, self.loss_op_names)
 
                 batch_loss = 0.0
                 for loss_op_name in self.loss_op_names:
-                    batch_loss += valid_results[loss_op_name]
-                    valid_loss_dict[loss_op_name].append(valid_results[loss_op_name])
+                    avg_batch_loss = np.average(valid_results[loss_op_name])
+                    batch_loss += avg_batch_loss
+                    valid_loss_dict[loss_op_name].append(avg_batch_loss)
+                    epoch_valid_loss[loss_op_name] += avg_batch_loss
 
-                avg_loss = batch_loss / len(self.loss_op_names)
-                print(f'Valid Batch {i}. Average loss so far: {avg_loss:5f}', end='\r')
-                break
+                valid_loss_agg = np.average(list(epoch_valid_loss.values()))
+                avg_valid_loss_so_far = valid_loss_agg / (i+1)
+
+                print(f'Valid Batch {i}. Average loss so far: {avg_valid_loss_so_far:.4f}', end='\r')
             print()
 
             has_improved = False
-            for loss_op_name, valid_loss in valid_loss_dict.items():
-                if valid_loss[-1] < best_valid_loss_dict[loss_op_name]:
+            for loss_op_name, valid_loss in epoch_valid_loss.items():
+                if valid_loss < best_valid_loss_dict[loss_op_name]:
                     has_improved = True
 
                     variable_group = self.get_variable_group(loss_op_name)
@@ -270,7 +276,10 @@ class Model:
                     self.save(name=name,
                               variable_groups=group_dict,
                               data_folders=dataset.data_folders)
-                    best_valid_loss_dict[loss_op_name] = valid_loss[-1]
+
+                    print(f'Saving Model For Operation: {loss_op_name}')
+
+                    best_valid_loss_dict[loss_op_name] = valid_loss
 
             if has_improved:
                 num_not_improved = 0
@@ -300,11 +309,17 @@ class Model:
                 saver = tf.train.Saver()
                 saver.save(self._sess, model_path.path)
             else:
+                # Save variable groups.
                 varname_path = self.save_folder.join(f'model-varnames-{name}.pkl.gz')
-                if not varname_path.exists():
-                    varname_dict = {group_name: [var.name for var in variables] for group_name, variables in variable_groups.items()}
-                    varname_path.save_as_compressed_file(varname_dict)
+                variables_dict: Dict[str, List[str]] = dict()
+                if varname_path.exists():
+                    variables_dict = varname_path.read_by_file_suffix()
 
+                varname_dict = {group_name: [var.name for var in variables] for group_name, variables in variable_groups.items()}
+                variables_dict.update(varname_dict)
+                varname_path.save_as_compressed_file(variables_dict)
+
+                # Save model weights
                 for group_name, var_set in variable_groups.items():
                     model_path = self.save_folder.join(f'model-{name}-{group_name}.ckpt')
                     saver = tf.train.Saver(var_set)
@@ -329,10 +344,15 @@ class Model:
             varname_path = self.save_folder.join(f'model-varnames-{name}.pkl.gz')
             varname_dict = varname_path.read_by_file_suffix() if varname_path.exists() else None
 
+            trainable_vars = list(self._sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES))
+
             if varname_dict is not None:
                 for loss_op_name, variable_names in varname_dict.items():
                     model_path = self.save_folder.join(f'model-{name}-{loss_op_name}.ckpt')
-                    saver = tf.train.Saver()
+                    
+                    variables = list(filter(lambda v: v.name in variable_names, trainable_vars))
+                    
+                    saver = tf.train.Saver(variables)
                     saver.restore(self._sess, model_path.path)
             else:
                 model_path = self.save_folder.join('model-{name}.ckpt')

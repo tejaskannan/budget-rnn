@@ -75,6 +75,26 @@ class RNNSampleModel(Model):
         seq_length = self.metadata['seq_length']
         return int(seq_length * self.hypers.model_params['sample_frac'])
 
+    @property
+    def loss_op_names(self) -> List[str]:
+        if self.model_type == RNNModelType.VANILLA:
+            return [f'loss_{i}' for i in range(self.num_outputs)]
+        return ['loss']
+
+    def get_variable_group(self, loss_op_name: str) -> List[tf.Variable]:
+        variables: List[tf.Variable] = []
+        trainable_vars = list(self._sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES))
+
+        if self.model_type != RNNModelType.VANILLA:
+            return trainable_vars
+
+        if self.hypers.model_params.get('share_cell_weights', False):
+            variables.extend(filter(lambda v: 'rnn-cell' in v.name or 'rnn-model' in v.name, trainable_vars))
+
+        loss_index = int(loss_op_name[-1])
+        variables.extend(filter(lambda v: f'layer-{loss_index}' in v.name, trainable_vars))
+        return variables
+
     def load_metadata(self, dataset: Dataset):
         input_samples: List[List[float]] = []
         output_samples: List[List[float]] = []
@@ -298,7 +318,7 @@ class RNNSampleModel(Model):
                            latency=latency_dict)
 
     def make_model(self, is_train: bool):
-        with tf.variable_scope('rnn-model', reuse=tf.AUTO_REUSE):
+        with tf.variable_scope('model', reuse=tf.AUTO_REUSE):
             if self.model_type == RNNModelType.SAMPLE:
                 self.make_rnn_sample_model(is_train)
             else:
@@ -430,6 +450,7 @@ class RNNSampleModel(Model):
             self._ops[f'prediction_{i}'] = output
 
             self._ops[f'loss_{i}'] = tf.reduce_sum(tf.square(output - self._placeholders['output']), axis=-1)  # B
+            self._ops[f'states_{i}'] = states.concat()
             outputs.append(output)
 
         combined_outputs = tf.concat([tf.expand_dims(t, axis=1) for t in outputs], axis=1)
@@ -441,11 +462,11 @@ class RNNSampleModel(Model):
 
         # The loss_op keys are ordered by the output level
         for loss_op_name in self._loss_ops:
-            losses.append(self._ops[loss_op_name])
+            losses.append(tf.reduce_mean(self._ops[loss_op_name]))
 
-        losses = tf.stack(losses)  # B x N, N is the number of sequences
-        loss_weights = tf.expand_dims(self._placeholders['loss_weights'], axis=1)
-        weighted_losses = tf.reduce_sum(losses * loss_weights, axis=-1)  # B
+        losses = tf.stack(losses)  # N, N is the number of sequences
+        # loss_weights = tf.expand_dims(self._placeholders['loss_weights'], axis=1)
+        weighted_losses = tf.reduce_sum(losses * self._placeholders['loss_weights'], axis=-1)  # N
 
         self._ops['loss'] = tf.reduce_mean(weighted_losses)  # Weighted average over all layers
 
@@ -491,11 +512,20 @@ class RNNSampleModel(Model):
         if previous_states is not None:
             combine_layer_name = 'combine-states' if name is None else f'{name}-combine-states'
             units = (rnn_layers * state_size) if self.hypers.model_params.get('combine_element_wise', False) else 1
-            combine_states = tf.layers.Dense(units=units,
-                                             activation=tf.math.sigmoid,
-                                             use_bias=True,
-                                             kernel_initializer=tf.initializers.glorot_uniform(),
-                                             name=combine_layer_name)
+
+            prev_state_transform = tf.layers.Dense(units=units,
+                                                   activation=None,
+                                                   use_bias=False,
+                                                   kernel_initializer=tf.initializers.glorot_uniform(),
+                                                   name=combine_layer_name + '-prev')
+            curr_state_transform = tf.layers.Dense(units=units,
+                                                   activation=None,
+                                                   use_bias=False,
+                                                   kernel_initializer=tf.initializers.glorot_uniform(),
+                                                   name=combine_layer_name + '-curr')
+            state_transform_bias = tf.Variable(initial_value=tf.random.normal(shape=(1, units)),
+                                               trainable=True,
+                                               name=combine_layer_name + '-bias')
 
         # While loop step
         def step(index, state, outputs, states):
@@ -505,8 +535,12 @@ class RNNSampleModel(Model):
             if previous_states is not None:
                 prev_state = previous_states.read(index)
 
-                combine_weight = combine_states(tf.concat([state, prev_state], axis=-1))
-                combined_state = combine_weight * state + (1.0 - combine_weight) * prev_state
+                # This sequence of operations mirrors a GRU update gate.
+                prev_transform = prev_state_transform(prev_state)
+                curr_transform = curr_state_transform(state)
+                update_weight = tf.math.sigmoid(prev_transform + curr_transform + state_transform_bias)
+
+                combined_state = update_weight * state + (1.0 - update_weight) * prev_state
 
             output, state = cell(step_inputs, combined_state)
             outputs = outputs.write(index=index, value=output)
