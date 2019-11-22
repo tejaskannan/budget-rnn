@@ -35,6 +35,8 @@ def make_single_rnn_cell(cell_type: str,
 
     if cell_type == 'gru':
         return GRU(input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections)
+    if cell_type == 'vanilla':
+        return VanillaCell(input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections)
     raise ValueError(f'Unknown cell name {cell_type}!')
 
 
@@ -218,3 +220,36 @@ class GRU(RNNCell):
         next_state = update_with_dropout * state + (1.0 - update_with_dropout) * candidate_state
 
         return next_state, next_state, [update_gate, reset_gate]
+
+
+class VanillaCell(RNNCell):
+
+    def init_weights(self):
+        self.W = tf.Variable(initial_value=self.initializer(shape=[self.state_size, self.output_units]),
+                             trainable=True,
+                             name=f'{self.name}-W')
+        self.U = tf.Variable(initial_value=self.initializer(shape=[self.input_units, self.output_units]),
+                             trainable=True,
+                             name=f'{self.name}-U')
+        self.b = tf.Variable(initial_value=self.initializer(shape=[1, self.output_units]),
+                             trainable=True,
+                             name=f'{self.name}-b')
+
+        if self.use_skip_connections:
+            self.R = tf.Variable(initial_value=self.initializer(shape=[self.input_units, self.output_units]),
+                                 trainable=True,
+                                 name=f'{self.name}-R')
+
+    def __call__(self, inputs: tf.Tensor,
+                 state: tf.Tensor,
+                 skip_input: Optional[tf.Tensor] = None) -> Tuple[tf.Tensor, tf.Tensor, List[tf.Tensor]]:
+        assert not self.use_skip_connections or skip_input is None, 'Must provide a skip input when using skip connections'
+
+        candidate_vector = tf.matmul(state, self.W) + tf.matmul(inputs, self.U) + self.b
+
+        if self.use_skip_connections:
+            candidate_vector += tf.matmul(skip_input, self.R)
+
+        next_state = self.activation(candidate_vector)
+        next_state = tf.nn.dropout(next_state, keep_prob=self.dropout_keep_prob)
+        return next_state, next_state, [candidate_vector]
