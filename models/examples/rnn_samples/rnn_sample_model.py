@@ -10,6 +10,7 @@ from dpu_utils.utils import RichPath
 
 from models.base_model import Model, VariableWithWeight
 from layers.basic import rnn_cell, mlp
+from layers.cells.cells import make_rnn_cell, MultiRNNCell
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
@@ -17,14 +18,14 @@ from testing_utils import TestMetrics
 
 
 VAR_NAME_REGEX = re.compile(r'.*(layer-[0-9])+.*')
-#TestMetrics = namedtuple('TestMetrics', ['raw', 'mean', 'std', 'median', 'first_quartile', 'third_quartile'])
-#
+
 
 class RNNModelType:
     VANILLA = auto()
     SAMPLE = auto()
     CASCADE = auto()
     CHUNKED = auto()
+    SKIP = auto()
 
 
 def var_filter(trainable_vars: List[tf.Variable], var_prefixes: Optional[Dict[str, float]] = None) -> List[VariableWithWeight]:
@@ -53,6 +54,8 @@ class RNNSampleModel(Model):
         elif model_type == 'chunked_rnn_model':
             assert not self.hypers.model_params['share_cell_weights'], 'The chunked model cannot share cell weights.'
             self.model_type = RNNModelType.CHUNKED
+        elif model_type == 'skip_rnn_model':
+            self.model_type = RNNModelType.SKIP
         else:
             raise ValueError(f'Unknown model type: {model_type}.')
 
@@ -247,7 +250,7 @@ class RNNSampleModel(Model):
 
     def predict(self, dataset: Dataset, name: str,
                 test_batch_size: Optional[int] = None,
-                max_num_batches: Optional[int] = None) -> Tuple[Dict[str, TestMetrics], Dict[str, TestMetrics], List[np.array]]:
+                max_num_batches: Optional[int] = None) -> TestMetrics:
         test_batch_size = test_batch_size if test_batch_size is not None else self.hypers.batch_size
         test_batch_generator = dataset.minibatch_generator(series=DataSeries.TEST,
                                                            batch_size=test_batch_size,
@@ -261,6 +264,7 @@ class RNNSampleModel(Model):
         abs_error_dict: DefaultDict[str, List[float]] = defaultdict(list)
         abs_perc_dict: DefaultDict[str, List[float]] = defaultdict(list)
         latency_dict: DefaultDict[str, List[float]] = defaultdict(list)
+        gate_dict: DefaultDict[str, Dict[str, List[float]]] = defaultdict(dict)
 
         true_values: List[np.array] = []
 
@@ -272,6 +276,7 @@ class RNNSampleModel(Model):
             # Execute operations individually for better profiling
             for i in range(len(prediction_ops)):
                 ops_to_run = prediction_ops[0:i+1]
+                ops_to_run.append(f'gates_{i}')
 
                 start = time.time()
                 result = self.execute(feed_dict, ops_to_run)
@@ -284,6 +289,16 @@ class RNNSampleModel(Model):
                 # Do not accumulate latency metrics on first batch (to avoid outliers from caching)
                 if num_batches > 0:
                     latency_dict[op].append(elapsed * 1000.0)
+
+                    # The gates depend on the RNN type
+                    if self.hypers.model_params['rnn_cell_type'] == 'gru':
+                        gates: DefaultDict[str, List[float]] = defaultdict(list)
+                        gate_values = result[f'gates_{i}']
+                        
+                        gates['update'].extend(gate_values[:, :, 0, :].reshape(-1))
+                        gates['reset'].extend(gate_values[:, :, 1, :].reshape(-1))
+
+                        gate_dict[op] = gates
 
             for prediction_op in prediction_ops:
                 prediction = op_results[prediction_op]
@@ -315,7 +330,8 @@ class RNNSampleModel(Model):
         return TestMetrics(squared_error=sq_error_dict,
                            abs_error=abs_error_dict,
                            abs_percentage_error=abs_perc_dict,
-                           latency=latency_dict)
+                           latency=latency_dict,
+                           gate_values=gate_dict)
 
     def make_model(self, is_train: bool):
         with tf.variable_scope('model', reuse=tf.AUTO_REUSE):
@@ -342,14 +358,22 @@ class RNNSampleModel(Model):
                 output_layer_name = f'{output_layer_name}-layer-{i}'
                 rnn_model_name = f'{rnn_model_name}-layer-{i}'
 
-            cell = rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
-                            num_units=self.hypers.model_params['state_size'],
-                            activation=self.hypers.model_params['rnn_activation'],
-                            dropout_keep_rate=self._placeholders['dropout_keep_rate'],
-                            num_layers=rnn_layers,
-                            state_is_tuple=False,
-                            name=rnn_cell_name,
-                            dtype=tf.float32)
+            cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
+                                 input_units=self.metadata['num_input_features'],
+                                 output_units=self.hypers.model_params['state_size'],
+                                 activation=self.hypers.model_params['rnn_activation'],
+                                 dropout_keep_rate=self._placeholders['dropout_keep_rate'],
+                                 num_layers=rnn_layers,
+                                 name=rnn_cell_name)
+ 
+           # cell = rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
+           #                 num_units=self.hypers.model_params['state_size'],
+           #                 activation=self.hypers.model_params['rnn_activation'],
+           #                 dropout_keep_rate=self._placeholders['dropout_keep_rate'],
+           #                 num_layers=rnn_layers,
+           #                 state_is_tuple=False,
+           #                 name=rnn_cell_name,
+           #                 dtype=tf.float32)
 
             inputs = self._placeholders[f'input_{i}']
             initial_state = cell.zero_state(batch_size=tf.shape(inputs)[0], dtype=tf.float32)
@@ -357,11 +381,22 @@ class RNNSampleModel(Model):
             if self.model_type in (RNNModelType.CHUNKED, RNNModelType.CASCADE) and prev_state is not None:
                 initial_state = prev_state
 
-            rnn_outputs, state = tf.nn.dynamic_rnn(cell=cell,
-                                                   inputs=inputs,
-                                                   initial_state=initial_state,
-                                                   dtype=tf.float32,
-                                                   scope=rnn_model_name)
+            skip_width = self.num_sequences if self.model_type == RNNModelType.SKIP else None
+            rnn_outputs, rnn_states, rnn_gates = self.__dynamic_rnn(cell=cell,
+                                                                    inputs=inputs,
+                                                                    initial_state=initial_state,
+                                                                    skip_width=skip_width,
+                                                                    name=rnn_model_name)
+
+            #rnn_outputs, state = tf.nn.dynamic_rnn(cell=cell,
+            #                                       inputs=inputs,
+            #                                       initial_state=initial_state,
+            #                                       dtype=tf.float32,
+            #                                       scope=rnn_model_name)
+
+            # Get the final state
+            last_index = tf.shape(inputs)[1] - 1
+            state = rnn_states.read(index=last_index)
 
             # Save previous state for the chunked model
             if self.model_type in (RNNModelType.CHUNKED, RNNModelType.CASCADE):
@@ -390,6 +425,7 @@ class RNNSampleModel(Model):
 
             self._ops[f'prediction_{i}'] = output
             self._ops[f'loss_{i}'] = tf.reduce_sum(tf.square(output - self._placeholders['output']), axis=-1)  # B
+            self._ops[f'gates_{i}'] = rnn_gates.stack()  # B x T x M x D
 
             outputs.append(output)
 
@@ -407,21 +443,29 @@ class RNNSampleModel(Model):
             cell_name = 'rnn-cell'
             if not self.hypers.model_params['share_cell_weights']:
                 cell_name = f'{cell_name}-layer-{i}'  # If not weight sharing, then each cell has its own scope
+ 
+            cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
+                                 input_units=self.metadata['num_input_features'],
+                                 output_units=self.hypers.model_params['state_size'],
+                                 activation=self.hypers.model_params['rnn_activation'],
+                                 dropout_keep_rate=self._placeholders['dropout_keep_rate'],
+                                 num_layers=rnn_layers,
+                                 name=cell_name)
 
-            cell = rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
-                            num_units=self.hypers.model_params['state_size'],
-                            activation=self.hypers.model_params['rnn_activation'],
-                            dropout_keep_rate=self._placeholders['dropout_keep_rate'],
-                            num_layers=rnn_layers,
-                            state_is_tuple=False,
-                            name=cell_name,
-                            dtype=tf.float32)
+           # cell = rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
+           #                 num_units=self.hypers.model_params['state_size'],
+           #                 activation=self.hypers.model_params['rnn_activation'],
+           #                 dropout_keep_rate=self._placeholders['dropout_keep_rate'],
+           #                 num_layers=rnn_layers,
+           #                 state_is_tuple=False,
+           #                 name=cell_name,
+           #                 dtype=tf.float32)
 
             prev_states = states_list[i-1] if i > 0 else None
-            rnn_outputs, states = self.__dynamic_rnn(inputs=self._placeholders[f'input_{i}'],
-                                                     cell=cell,
-                                                     previous_states=prev_states,
-                                                     name=f'rnn-layer-{i}')
+            rnn_outputs, states, gates = self.__dynamic_rnn(inputs=self._placeholders[f'input_{i}'],
+                                                            cell=cell,
+                                                            previous_states=prev_states,
+                                                            name=f'rnn-layer-{i}')
 
             last_index = tf.shape(self._placeholders[f'input_{i}'])[1] - 1
             final_state = states.read(last_index)
@@ -450,10 +494,10 @@ class RNNSampleModel(Model):
             self._ops[f'prediction_{i}'] = output
 
             self._ops[f'loss_{i}'] = tf.reduce_sum(tf.square(output - self._placeholders['output']), axis=-1)  # B
-            self._ops[f'states_{i}'] = states.concat()
+            self._ops[f'gates_{i}'] = gates.stack()  # B x T x M x D
             outputs.append(output)
 
-        combined_outputs = tf.concat([tf.expand_dims(t, axis=1) for t in outputs], axis=1)
+        combined_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), outputs), axis=1)
         self._ops['predictions'] = combined_outputs  # B x N x D'
         self._loss_ops = self._make_loss_ops()
 
@@ -466,9 +510,9 @@ class RNNSampleModel(Model):
 
         losses = tf.stack(losses)  # N, N is the number of sequences
         # loss_weights = tf.expand_dims(self._placeholders['loss_weights'], axis=1)
-        weighted_losses = tf.reduce_sum(losses * self._placeholders['loss_weights'], axis=-1)  # N
+        weighted_losses = tf.reduce_sum(losses * self._placeholders['loss_weights'], axis=-1)  # Scalar
 
-        self._ops['loss'] = tf.reduce_mean(weighted_losses)  # Weighted average over all layers
+        self._ops['loss'] = weighted_losses
 
     def _make_loss_ops(self, use_previous_layers: bool = True) -> OrderedDict:
         loss_ops = OrderedDict()
@@ -501,35 +545,70 @@ class RNNSampleModel(Model):
     def __dynamic_rnn(self,
                       inputs: tf.Tensor,
                       cell: tf.nn.rnn_cell.BasicRNNCell,
+                      initial_state: Optional[tf.Tensor] = None,
                       previous_states: Optional[tf.TensorArray] = None,
-                      name: str = None) -> Tuple[tf.TensorArray, tf.TensorArray]:
+                      skip_width: Optional[int] = None,
+                      name: str = None) -> Tuple[tf.TensorArray, tf.TensorArray, tf.TensorArray]:
         state_size = self.hypers.model_params['state_size']
         rnn_layers = self.hypers.model_params['rnn_layers']
 
-        states_array = tf.TensorArray(dtype=tf.float32, size=self.samples_per_seq, dynamic_size=False, clear_after_read=False)
-        outputs_array = tf.TensorArray(dtype=tf.float32, size=self.samples_per_seq, dynamic_size=False)
+        sequence_length = tf.shape(inputs)[1]
+
+        states_array = tf.TensorArray(dtype=tf.float32, size=sequence_length, dynamic_size=False, clear_after_read=False)
+        outputs_array = tf.TensorArray(dtype=tf.float32, size=sequence_length, dynamic_size=False)
+        gates_array = tf.TensorArray(dtype=tf.float32, size=sequence_length, dynamic_size=False)
 
         if previous_states is not None:
             combine_layer_name = 'combine-states' if name is None else f'{name}-combine-states'
             units = (rnn_layers * state_size) if self.hypers.model_params.get('combine_element_wise', False) else 1
 
-            prev_state_transform = tf.layers.Dense(units=units,
-                                                   activation=None,
-                                                   use_bias=False,
-                                                   kernel_initializer=tf.initializers.glorot_uniform(),
-                                                   name=combine_layer_name + '-prev')
-            curr_state_transform = tf.layers.Dense(units=units,
-                                                   activation=None,
-                                                   use_bias=False,
-                                                   kernel_initializer=tf.initializers.glorot_uniform(),
-                                                   name=combine_layer_name + '-curr')
-            state_transform_bias = tf.Variable(initial_value=tf.random.normal(shape=(1, units)),
-                                               trainable=True,
-                                               name=combine_layer_name + '-bias')
+            if isinstance(cell, MultiRNNCell):
+                prev_state_transform_layers: List[tf.layers.Dense] = []
+                curr_state_transform_layers: List[tf.layers.Dense] = []
+                state_transform_bias_layers: List[tf.Variable] = []
+
+                for i in range(self.hypers.model_params['rnn_layers']):
+                    prev_state_transform = tf.layers.Dense(units=state_size,
+                                                           activation=None,
+                                                           use_bias=False,
+                                                           kernel_initializer=tf.initializers.glorot_uniform(),
+                                                           name=combine_layer_name + f'-prev-{i}')
+                    curr_state_transform = tf.layers.Dense(units=state_size,
+                                                           activation=None,
+                                                           use_bias=False,
+                                                           kernel_initializer=tf.initializers.glorot_uniform(),
+                                                           name=combine_layer_name + f'-curr-{i}')
+                    state_transform_bias = tf.Variable(initial_value=tf.random.normal(shape=(1, state_size)),
+                                                       trainable=True,
+                                                       name=combine_layer_name + f'-bias-{i}')
+
+                    prev_state_transform_layers.append(prev_state_transform)
+                    curr_state_transform_layers.append(curr_state_transform)
+                    state_transform_bias_layers.append(state_transform_bias)
+            else:
+                prev_state_transform = tf.layers.Dense(units=state_size,
+                                                       activation=None,
+                                                       use_bias=False,
+                                                       kernel_initializer=tf.initializers.glorot_uniform(),
+                                                       name=combine_layer_name + f'-prev-{i}')
+                curr_state_transform = tf.layers.Dense(units=state_size,
+                                                       activation=None,
+                                                       use_bias=False,
+                                                       kernel_initializer=tf.initializers.glorot_uniform(),
+                                                       name=combine_layer_name + f'-curr-{i}')
+                state_transform_bias = tf.Variable(initial_value=tf.random.normal(shape=(1, state_size)),
+                                                   trainable=True,
+                                                   name=combine_layer_name + f'-bias-{i}')
 
         # While loop step
-        def step(index, state, outputs, states):
+        def step(index, state, outputs, states, gates):
             step_inputs = tf.gather(inputs, indices=index, axis=1)  # B x D
+
+            skip_inputs: Optional[tf.Tensor] = None
+            if skip_width is not None:
+                skip_inputs = tf.where(tf.math.less_equal(index - skip_width, -1),
+                                       x=tf.zeros_like(step_inputs),
+                                       y=tf.gather(inputs, indices=index - skip_width, axis=1))  # B x D
 
             combined_state = state
             if previous_states is not None:
@@ -537,26 +616,56 @@ class RNNSampleModel(Model):
 
                 # This sequence of operations mirrors a GRU update gate.
                 prev_transform = prev_state_transform(prev_state)
-                curr_transform = curr_state_transform(state)
-                update_weight = tf.math.sigmoid(prev_transform + curr_transform + state_transform_bias)
 
-                combined_state = update_weight * state + (1.0 - update_weight) * prev_state
+                # Separately handle the multi-RNN case, as this uses a list of states (one for each cell)
+                if isinstance(cell, MultiRNNCell):
+                    combined_state: List[tf.Tensor] = []
+                    for i in range(self.hypers.model_params['rnn_layers']):
+                        curr = state[i, :, :]
+                        curr_transform = curr_state_transform_layers[i](curr)
 
-            output, state = cell(step_inputs, combined_state)
+                        prev = prev_state[i, :, :]
+                        prev_transform = prev_state_transform_layers[i](prev)
+
+                        update_weight = tf.math.sigmoid(prev_transform + curr_transform + state_transform_bias_layers[i])
+ 
+                        combined = update_weight * curr + (1.0 - update_weight) * prev
+                        combined_state.append(combined)
+                else:
+                    curr_transform = curr_state_transform(st)
+                    update_weight = tf.math.sigmoid(prev_transform + curr_transform + state_transform_bias)
+                    combined_state = update_weight * state + (1.0 - update_weight) * prev_state
+
+            if isinstance(cell, MultiRNNCell) and not isinstance(combined_state, list):
+                combined_state = [combined_state[i, :, :] for i in range(self.hypers.model_params['rnn_layers'])]
+            
+            output, state, gates_tuple = cell(step_inputs, combined_state, skip_input=skip_inputs)
+
+            # Save outputs
             outputs = outputs.write(index=index, value=output)
             states = states.write(index=index, value=state)
 
-            return [index + 1, state, outputs, states]
+            concat_gates = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), gates_tuple),
+                                     axis=1)
+            gates = gates.write(index=index, value=concat_gates)
 
-        def cond(index, _1, _2, _3):
-            return index < self.samples_per_seq
+            return [index + 1, tf.stack(state), outputs, states, gates]
+
+        def cond(index, _1, _2, _3, _4):
+            return index < sequence_length
 
         i = tf.constant(0, dtype=tf.int32)
-        state = cell.zero_state(batch_size=tf.shape(inputs)[0], dtype=tf.float32)
-        _, _, final_outputs, final_states = tf.while_loop(cond=cond,
-                                                          body=step,
-                                                          loop_vars=[i, state, outputs_array, states_array],
-                                                          parallel_iterations=1,
-                                                          maximum_iterations=self.samples_per_seq,
-                                                          name='rnn-while-loop')
-        return final_outputs, final_states
+
+        if initial_state is None:
+            initial_state = cell.zero_state(batch_size=tf.shape(inputs)[0], dtype=tf.float32)
+
+        if isinstance(initial_state, list):
+            initial_state = tf.stack(initial_state)
+
+        _, _, final_outputs, final_states, final_gates = tf.while_loop(cond=cond,
+                                                                       body=step,
+                                                                       loop_vars=[i, initial_state, outputs_array, states_array, gates_array],
+                                                                       parallel_iterations=1,
+                                                                       maximum_iterations=sequence_length,
+                                                                       name='rnn-while-loop')
+        return final_outputs, final_states, final_gates

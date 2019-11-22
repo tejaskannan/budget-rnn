@@ -198,10 +198,6 @@ if __name__ == '__main__':
         test_metrics = evaluate_model(model_params, dataset, batch_size, num_batches)
         metrics[model_params['model_name']] = test_metrics
 
-        #for prediction_op in prediction_ops:
-        #    error_metrics[prediction_op].append(error[prediction_op])
-        #    latency_metrics[prediction_op].append(latency[prediction_op])
-
         print('============')
 
     output_folder = test_params.get('output_folder')
