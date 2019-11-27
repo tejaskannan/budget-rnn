@@ -39,7 +39,7 @@ if __name__ == '__main__':
     # Validate data folders before training (to fail fast)
     for data_folder in args.data_folders:
         assert exists(data_folder), f'The data folder {data_folder} does not exist!'
-        
+
         train_folder = join(data_folder, 'train')
         assert exists(train_folder), f'The folder {train_folder} does not exist!'
 
@@ -68,8 +68,8 @@ if __name__ == '__main__':
                 for j, hyperparameters in enumerate(hypers):
                     print(f'Started hyperparameter setting {j+1}/{len(hypers)}')
                     train(data_folder=data_folder,
-                      save_folder=args.save_folder,
-                      hypers=hyperparameters,
-                      max_epochs=max_epochs)
+                          save_folder=args.save_folder,
+                          hypers=hyperparameters,
+                          max_epochs=max_epochs)
                     print('==========')
                 print('====================')

@@ -113,7 +113,7 @@ class RNNSampleModel(Model):
                 input_samples.append(shifted_input)
             else:
                 input_samples.append(input_sample)
- 
+
             if not isinstance(sample['output'], list) and \
                     not isinstance(sample['output'], np.ndarray):
                 output_samples.append([sample['output']])
@@ -136,7 +136,7 @@ class RNNSampleModel(Model):
 
             normalized_outputs = output_scaler.transform(output_samples)
             sorted_outputs = np.sort(normalized_outputs, axis=0)
- 
+
             bin_bounds: List[Tuple[float, float]] = []
             bin_means: List[float] = []
             stride = int(sorted_outputs.shape[0] / (self.hypers.model_params['num_bins'] - 1))
@@ -248,7 +248,6 @@ class RNNSampleModel(Model):
                                                              dtype=tf.float32,
                                                              name='bin-means')
 
-
     def predict(self, dataset: Dataset, name: str,
                 test_batch_size: Optional[int] = None,
                 max_num_batches: Optional[int] = None) -> TestMetrics:
@@ -289,7 +288,7 @@ class RNNSampleModel(Model):
 
                 # Do not accumulate latency metrics on first batch (to avoid outliers from caching)
                 if num_batches == 0:
-                    continue                
+                    continue
 
                 latency_dict[op].append(elapsed * 1000.0)  # Latency in seconds
 
@@ -376,7 +375,7 @@ class RNNSampleModel(Model):
                                  dropout_keep_rate=self._placeholders['dropout_keep_rate'],
                                  num_layers=rnn_layers,
                                  name=rnn_cell_name)
- 
+
             inputs = self._placeholders[f'input_{i}']
             initial_state = cell.zero_state(batch_size=tf.shape(inputs)[0], dtype=tf.float32)
 
@@ -442,7 +441,7 @@ class RNNSampleModel(Model):
             cell_name = 'rnn-cell'
             if not self.hypers.model_params['share_cell_weights']:
                 cell_name = f'{cell_name}-layer-{i}'  # If not weight sharing, then each cell has its own scope
- 
+
             cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
                                  input_units=self.metadata['num_input_features'],
                                  output_units=self.hypers.model_params['state_size'],
@@ -470,7 +469,7 @@ class RNNSampleModel(Model):
                 num_output_features = self.hypers.model_params['num_bins']
             else:
                 num_output_features = self.metadata['num_output_features']
- 
+
             # B x D'
             output = mlp(inputs=rnn_output,
                          output_size=num_output_features,

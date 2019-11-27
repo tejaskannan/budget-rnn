@@ -9,7 +9,7 @@ from dpu_utils.utils import RichPath
 from os.path import split, join, exists
 from os import mkdir
 from typing import Dict, Tuple, List, Optional, DefaultDict, Any
-from pandas.plotting import register_matplotlib_converters 
+from pandas.plotting import register_matplotlib_converters
 
 from rnn_sample_model import RNNSampleModel
 from rnn_sample_dataset import RNNSampleDataset
@@ -62,7 +62,6 @@ def plot_axis(test_metrics: Dict[str, TestMetrics],
               xlabel: str,
               ylabel: str,
               ax: Axes):
-    
     # Sample Fraction vs Squared Error
     for label, metrics in test_metrics.items():
         y = [get_stat(metrics[series][op], stat_name) for op in prediction_ops]
@@ -154,7 +153,7 @@ def plot_results(test_metrics: Dict[str, TestMetrics],
               xlabel='Sample Fraction',
               ylabel='SMAPE',
               ax=ax3)
-    
+
     plot_axis(test_metrics=test_metrics,
               series='latency',
               stat_name=stat_name,
@@ -175,8 +174,8 @@ def plot_results(test_metrics: Dict[str, TestMetrics],
 
     output_folder_name = split(output_folder)[1] + '-' + stat_name
     plot_file = output_folder_path.join(output_folder_name + '.pdf')
-    params_file = output_folder_path.join(output_folder_name  + '_params.jsonl.gz')
- 
+    params_file = output_folder_path.join(output_folder_name + '_params.jsonl.gz')
+
     plt.savefig(plot_file.path)
     params_file.save_as_compressed_file([test_params])
 
@@ -245,5 +244,5 @@ if __name__ == '__main__':
                      output_folder=output_folder,
                      stat_name=stat_name,
                      test_params=test_params)
-    
+
     plot_predictions(test_metrics=metrics, output_name=test_params['output_name'], output_folder=output_folder)
