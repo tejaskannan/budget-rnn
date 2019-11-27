@@ -1,13 +1,12 @@
 from argparse import ArgumentParser
 from os.path import join, exists
-from utils.hyperparameters import HyperParameters
+from utils.hyperparameters import HyperParameters, extract_hyperparameters
 from rnn_sample_model import RNNSampleModel
 from rnn_sample_dataset import RNNSampleDataset
-from typing import Optional
+from typing import Optional, Dict
 
 
-def train(data_folder: str, save_folder: str, params_file: str, max_epochs: Optional[int] = None):
-    hypers = HyperParameters(params_file)
+def train(data_folder: str, save_folder: str, hypers: HyperParameters, max_epochs: Optional[int] = None) -> Dict[str, float]:
     model = RNNSampleModel(hyper_parameters=hypers, save_folder=save_folder)
 
     # Create dataset
@@ -20,7 +19,7 @@ def train(data_folder: str, save_folder: str, params_file: str, max_epochs: Opti
         hypers.epochs = max_epochs
 
     # Train the model
-    model.train(dataset=dataset)
+    return model.train(dataset=dataset)
 
 
 if __name__ == '__main__':
@@ -30,6 +29,7 @@ if __name__ == '__main__':
     parser.add_argument('--params-files', type=str, nargs='+')
     parser.add_argument('--trials', type=int, default=1)
     parser.add_argument('--testrun', action='store_true')
+    parser.add_argument('--grid-fields', type=str, nargs='*')
     args = parser.parse_args()
 
     assert args.params_files is not None and len(args.params_files) > 0, f'Must provide at least one set of parameters'
@@ -56,6 +56,7 @@ if __name__ == '__main__':
 
     trials = max(args.trials, 1)
     num_models = trials * len(args.params_files)
+    grid_fields = args.grid_fields if args.grid_fields is not None and len(args.grid_fields) > 0 else None
 
     for data_folder in args.data_folders:
         print(f'Started {data_folder}')
@@ -63,8 +64,12 @@ if __name__ == '__main__':
         for trial in range(trials):
             for i, params_file in enumerate(args.params_files):
                 print(f'Started training model {i+1}/{num_models}')
-                train(data_folder=data_folder,
+                hypers = extract_hyperparameters(params_file, search_fields=grid_fields)
+                for j, hyperparameters in enumerate(hypers):
+                    print(f'Started hyperparameter setting {j+1}/{len(hypers)}')
+                    train(data_folder=data_folder,
                       save_folder=args.save_folder,
-                      params_file=params_file,
+                      hypers=hyperparameters,
                       max_epochs=max_epochs)
+                    print('==========')
                 print('====================')

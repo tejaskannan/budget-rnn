@@ -1,9 +1,15 @@
 import numpy as np
-from collections import namedtuple
+from collections import namedtuple, defaultdict
 from typing import DefaultDict, Dict, Union, List, Optional, Tuple
 
 
 SummaryMetrics = namedtuple('SummaryMetrics', ['mean', 'std', 'median', 'first_quartile', 'third_quartile', 'minimum', 'maximum'])
+SaturationMetrics = namedtuple('SaturationMetrics', ['low', 'high'])
+Prediction = namedtuple('Prediction', ['sample_id', 'prediction', 'expected'])
+
+
+HIGH_SATURATION = 0.9
+LOW_SATURATION = 0.1
 
 
 def get_summaries(errors_dict: Union[Dict[str, List[float]], DefaultDict[str, List[float]]]) -> Dict[str, SummaryMetrics]:
@@ -19,16 +25,38 @@ def get_summaries(errors_dict: Union[Dict[str, List[float]], DefaultDict[str, Li
     return metrics_dict
 
 
+def gate_saturation_levels(gate_values: Union[Dict[str, List[float]], DefaultDict[str, List[float]]]) -> Dict[str, Dict[str, SaturationMetrics]]:
+    
+    saturation_dict: Dict[str, Dict[str, SaturationMetrics]] = defaultdict(dict)
+    for series, gate_dict in gate_values.items():
+
+        for gate_name, gate_values in gate_dict.items():
+            low, high = 0, 0
+            for val in gate_values:
+                if val <= LOW_SATURATION:
+                    low += 1
+                elif val >= HIGH_SATURATION:
+                    high += 1
+            saturation_dict[series][gate_name] = SaturationMetrics(low=float(low) / len(gate_values),
+                                                                   high=float(high) / len(gate_values))
+
+    return saturation_dict
+
+
 class TestMetrics:
 
     def __init__(self, squared_error: Union[Dict[str, List[float]], DefaultDict[str, List[float]]],
                  abs_error: Union[Dict[str, List[float]], DefaultDict[str, List[float]]],
                  abs_percentage_error: Union[Dict[str, List[float]], DefaultDict[str, List[float]]],
-                 latency: Union[Dict[str, List[float]], DefaultDict[str, List[float]]]):
+                 latency: Union[Dict[str, List[float]], DefaultDict[str, List[float]]],
+                 gate_values: Union[Dict[str, List[float]], DefaultDict[str, List[float]]],
+                 predictions: Union[Dict[str, List[Prediction]], DefaultDict[str, List[Prediction]]]):
         self.squared_error = get_summaries(squared_error)
         self.abs_error = get_summaries(abs_error)
         self.abs_percentage_error = get_summaries(abs_percentage_error)
         self.latency = get_summaries(latency)
+        self.gate_saturation = gate_saturation_levels(gate_values)
+        self.predictions = predictions
 
     def __getitem__(self, key: str) -> Optional[SummaryMetrics]:
         key = key.lower()

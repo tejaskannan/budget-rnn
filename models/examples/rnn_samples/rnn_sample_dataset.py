@@ -1,6 +1,9 @@
 import numpy as np
 from dataset.dataset import Dataset
 from typing import Dict, Any
+from datetime import datetime
+
+from utils.constants import DATE_FORMAT
 
 
 class RNNSampleDataset(Dataset):
@@ -34,6 +37,7 @@ class RNNSampleDataset(Dataset):
         batch_dict = {
             'inputs': normalized_input,
             'output': normalized_output,
+            'sample_id': datetime.strptime(sample['sample_id'], DATE_FORMAT)
         }
 
         if 'bin_means' in metadata:

@@ -9,11 +9,15 @@ from dpu_utils.utils import RichPath
 from os.path import split, join, exists
 from os import mkdir
 from typing import Dict, Tuple, List, Optional, DefaultDict, Any
+from pandas.plotting import register_matplotlib_converters 
 
 from rnn_sample_model import RNNSampleModel
 from rnn_sample_dataset import RNNSampleDataset
 from testing_utils import TestMetrics
-from utils.hyperparameters import HyperParameters
+from utils.hyperparameters import HyperParameters, extract_hyperparameters
+
+
+register_matplotlib_converters()
 
 
 def extract_model_name(model_file: str) -> str:
@@ -27,7 +31,7 @@ def extract_model_name(model_file: str) -> str:
 
 def evaluate_model(model_params: Dict[str, str], dataset: RNNSampleDataset,
                    batch_size: Optional[int], num_batches: Optional[int]) -> TestMetrics:
-    hypers = HyperParameters(model_params['params_file'])
+    hypers = extract_hyperparameters(model_params['params_file'])[0]
 
     path_tokens = split(model_params['model_path'])
     folder, file_name = path_tokens[0], path_tokens[1]
@@ -69,6 +73,39 @@ def plot_axis(test_metrics: Dict[str, TestMetrics],
     ax.set_ylabel(ylabel)
     ax.set_title(title)
     ax.set_xticks(ticks=x_values)
+
+
+def plot_predictions(test_metrics: Dict[str, TestMetrics],
+                     output_name: str,
+                     output_folder: Optional[str]):
+    with plt.style.context('ggplot'):
+
+        fig, ax = plt.subplots(1, 1, figsize=(12, 9))
+
+        series_predictions = next(iter(test_metrics.values())).predictions
+        predictions = next(iter(series_predictions.values()))
+        dates = [pred.sample_id for pred in predictions]
+        expected: List[float] = [pred.expected for pred in predictions]
+
+        ax.plot(dates, expected, label='Actual')
+
+        for series, metrics in test_metrics.items():
+            for prediction_op, preds in metrics.predictions.items():
+                dates = [pred.sample_id for pred in preds]
+                predictions = [pred.prediction for pred in preds]
+                ax.plot(dates, predictions, label=f'{series}-{prediction_op}')
+
+        ax.set_title('Model Predictions on Test Set')
+        ax.set_xlabel('Date')
+        ax.set_ylabel(output_name)
+        ax.legend()
+
+        plt.gcf().autofmt_xdate()
+
+        if output_folder is None:
+            plt.show()
+        else:
+            plt.savefig(join(output_folder, 'predicted_values.pdf'))
 
 
 def plot_results(test_metrics: Dict[str, TestMetrics],
@@ -177,7 +214,7 @@ if __name__ == '__main__':
     sample_frac: float = 0.0
     for i, model_config in enumerate(test_params['models']):
         # Fetching the hyperparameters checks the existence of the params file
-        hypers = HyperParameters(model_config['params_file'])
+        hypers = extract_hyperparameters(model_config['params_file'])[0]
         if i > 0:
             assert sample_frac == hypers.model_params['sample_frac'], f'Sample Fractions are not equal!'
         else:
@@ -208,3 +245,5 @@ if __name__ == '__main__':
                      output_folder=output_folder,
                      stat_name=stat_name,
                      test_params=test_params)
+    
+    plot_predictions(test_metrics=metrics, output_name=test_params['output_name'], output_folder=output_folder)

@@ -14,7 +14,7 @@ from layers.cells.cells import make_rnn_cell, MultiRNNCell
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
-from testing_utils import TestMetrics
+from testing_utils import TestMetrics, Prediction
 
 
 VAR_NAME_REGEX = re.compile(r'.*(layer-[0-9])+.*')
@@ -257,7 +257,6 @@ class RNNSampleModel(Model):
                                                            metadata=self.metadata,
                                                            should_shuffle=False,
                                                            drop_incomplete_batches=True)
-
         prediction_ops = self.prediction_ops
 
         sq_error_dict: DefaultDict[str, List[float]] = defaultdict(list)
@@ -265,6 +264,7 @@ class RNNSampleModel(Model):
         abs_perc_dict: DefaultDict[str, List[float]] = defaultdict(list)
         latency_dict: DefaultDict[str, List[float]] = defaultdict(list)
         gate_dict: DefaultDict[str, Dict[str, List[float]]] = defaultdict(dict)
+        predictions_dict: DefaultDict[str, List[Prediction]] = defaultdict(list)
 
         true_values: List[np.array] = []
 
@@ -287,18 +287,26 @@ class RNNSampleModel(Model):
                 op_results[op] = result[op]
 
                 # Do not accumulate latency metrics on first batch (to avoid outliers from caching)
-                if num_batches > 0:
-                    latency_dict[op].append(elapsed * 1000.0)
+                if num_batches == 0:
+                    continue                
 
-                    # The gates depend on the RNN type
-                    if self.hypers.model_params['rnn_cell_type'] == 'gru':
-                        gates: DefaultDict[str, List[float]] = defaultdict(list)
-                        gate_values = result[f'gates_{i}']
-                        
-                        gates['update'].extend(gate_values[:, :, 0, :].reshape(-1))
-                        gates['reset'].extend(gate_values[:, :, 1, :].reshape(-1))
+                latency_dict[op].append(elapsed * 1000.0)  # Latency in seconds
 
-                        gate_dict[op] = gates
+                # The gates depend on the RNN type
+                if self.hypers.model_params['rnn_cell_type'] == 'gru':
+                    gates: DefaultDict[str, List[float]] = defaultdict(list)
+                    gate_values = result[f'gates_{i}']
+
+                    gates['update'].extend(gate_values[:, :, 0, :].reshape(-1))
+                    gates['reset'].extend(gate_values[:, :, 1, :].reshape(-1))
+
+                    gate_dict[op] = gates
+
+            # Avoid analyzing the predictions for the first batch for consistency with the latency
+            # measurements
+            if num_batches == 0:
+                num_batches += 1
+                continue
 
             for prediction_op in prediction_ops:
                 prediction = op_results[prediction_op]
@@ -316,11 +324,12 @@ class RNNSampleModel(Model):
                 abs_average = 0.5 * (np.abs(expected) + np.abs(unnormalized_prediction))
                 abs_percentage_error = np.sum(np.abs(difference) / abs_average, axis=-1)
 
-                # Avoid the first batch for consistency with latency measurements
-                if num_batches > 0:
-                    sq_error_dict[prediction_op].extend(squared_error)
-                    abs_error_dict[prediction_op].extend(abs_error)
-                    abs_perc_dict[prediction_op].extend(abs_percentage_error)
+                predictions = [Prediction(sample_id=s, prediction=p[0], expected=e[0]) for s, p, e in zip(batch['sample_id'], unnormalized_prediction, expected)]
+
+                sq_error_dict[prediction_op].extend(squared_error)
+                abs_error_dict[prediction_op].extend(abs_error)
+                abs_perc_dict[prediction_op].extend(abs_percentage_error)
+                predictions_dict[prediction_op].extend(predictions)
 
             num_batches += 1
 
@@ -331,7 +340,8 @@ class RNNSampleModel(Model):
                            abs_error=abs_error_dict,
                            abs_percentage_error=abs_perc_dict,
                            latency=latency_dict,
-                           gate_values=gate_dict)
+                           gate_values=gate_dict,
+                           predictions=predictions_dict)
 
     def make_model(self, is_train: bool):
         with tf.variable_scope('model', reuse=tf.AUTO_REUSE):
@@ -366,15 +376,6 @@ class RNNSampleModel(Model):
                                  num_layers=rnn_layers,
                                  name=rnn_cell_name)
  
-           # cell = rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
-           #                 num_units=self.hypers.model_params['state_size'],
-           #                 activation=self.hypers.model_params['rnn_activation'],
-           #                 dropout_keep_rate=self._placeholders['dropout_keep_rate'],
-           #                 num_layers=rnn_layers,
-           #                 state_is_tuple=False,
-           #                 name=rnn_cell_name,
-           #                 dtype=tf.float32)
-
             inputs = self._placeholders[f'input_{i}']
             initial_state = cell.zero_state(batch_size=tf.shape(inputs)[0], dtype=tf.float32)
 
@@ -388,12 +389,6 @@ class RNNSampleModel(Model):
                                                                     skip_width=skip_width,
                                                                     name=rnn_model_name)
 
-            #rnn_outputs, state = tf.nn.dynamic_rnn(cell=cell,
-            #                                       inputs=inputs,
-            #                                       initial_state=initial_state,
-            #                                       dtype=tf.float32,
-            #                                       scope=rnn_model_name)
-
             # Get the final state
             last_index = tf.shape(inputs)[1] - 1
             state = rnn_states.read(index=last_index)
@@ -401,6 +396,8 @@ class RNNSampleModel(Model):
             # Save previous state for the chunked model
             if self.model_type in (RNNModelType.CHUNKED, RNNModelType.CASCADE):
                 prev_state = state
+
+            state = state[rnn_layers - 1, :, :]
 
             # B x D
             rnn_output = pool_rnn_outputs(rnn_outputs, state, pool_mode=self.hypers.model_params['pool_mode'])
@@ -452,15 +449,6 @@ class RNNSampleModel(Model):
                                  num_layers=rnn_layers,
                                  name=cell_name)
 
-           # cell = rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
-           #                 num_units=self.hypers.model_params['state_size'],
-           #                 activation=self.hypers.model_params['rnn_activation'],
-           #                 dropout_keep_rate=self._placeholders['dropout_keep_rate'],
-           #                 num_layers=rnn_layers,
-           #                 state_is_tuple=False,
-           #                 name=cell_name,
-           #                 dtype=tf.float32)
-
             prev_states = states_list[i-1] if i > 0 else None
             rnn_outputs, states, gates = self.__dynamic_rnn(inputs=self._placeholders[f'input_{i}'],
                                                             cell=cell,
@@ -470,6 +458,8 @@ class RNNSampleModel(Model):
             last_index = tf.shape(self._placeholders[f'input_{i}'])[1] - 1
             final_state = states.read(last_index)
             states_list.append(states)
+
+            final_state = final_state[rnn_layers - 1, :, :]
 
             rnn_output = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
 
@@ -509,7 +499,6 @@ class RNNSampleModel(Model):
             losses.append(tf.reduce_mean(self._ops[loss_op_name]))
 
         losses = tf.stack(losses)  # N, N is the number of sequences
-        # loss_weights = tf.expand_dims(self._placeholders['loss_weights'], axis=1)
         weighted_losses = tf.reduce_sum(losses * self._placeholders['loss_weights'], axis=-1)  # Scalar
 
         self._ops['loss'] = weighted_losses

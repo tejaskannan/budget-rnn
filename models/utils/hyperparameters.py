@@ -1,21 +1,15 @@
-from typing import Union, Dict, Any
+from typing import Union, Dict, Any, List, Optional
 from dpu_utils.utils import RichPath
+from itertools import product
+
+from utils.file_utils import to_rich_path
 
 
 class HyperParameters:
 
     __slots__ = ['epochs', 'patience', 'learning_rate', 'gradient_clip', 'learning_rate_decay', 'optimizer', 'batch_size', 'model', 'dropout_keep_rate', 'model_params']
 
-    def __init__(self, params_file: Union[str, RichPath]):
-        # Read the parameters file
-        if isinstance(params_file, str):
-            params_file = RichPath.create(params_file)
-
-        if not params_file.exists():
-            raise ValueError(f'The parameters file {params_file} does not exist!')
-
-        parameters = params_file.read_by_file_suffix()
-
+    def __init__(self, parameters: Dict[str, Any]):
         # Unpack arguments
         self.learning_rate = parameters.get('learning_rate', 0.0001)
         self.gradient_clip = parameters.get('gradient_clip', 1)
@@ -44,3 +38,36 @@ class HyperParameters:
 
     def __str__(self) -> str:
         return str(self.__dict__())
+
+
+def extract_hyperparameters(params_file: Union[str, RichPath],
+                            search_fields: Optional[List[str]] = None) -> List[HyperParameters]:
+    params_file = to_rich_path(params_file)
+    assert params_file.exists(), f'The parameters file {params_file} does not exist!'
+
+    parameters = params_file.read_by_file_suffix()
+
+    if search_fields is None:
+        return [HyperParameters(parameters)]
+
+    grid_params: List[List[Any]] = []
+    for field in search_fields:
+        if field in parameters:
+            grid_params.append(parameters[field])
+        else:
+            grid_params.append(parameters['model_params'][field])
+
+    grid_permutations = product(*grid_params)
+
+    hyperparameters: List[HyperParameters] = []
+    for grid_setting in grid_permutations:
+        for field, setting in zip(search_fields, grid_setting):
+            if field in parameters:
+                parameters[field] = setting
+            else:
+                parameters['model_params'][field] = setting
+
+        hypers = HyperParameters(parameters)
+        hyperparameters.append(hypers)
+
+    return hyperparameters

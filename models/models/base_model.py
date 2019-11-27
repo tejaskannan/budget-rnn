@@ -8,7 +8,7 @@ from collections import defaultdict
 from typing import Optional, Iterable, Dict, Any, Union, List, DefaultDict
 
 from dataset.dataset import Dataset, DataSeries
-from utils.hyperparameters import HyperParameters
+from utils.hyperparameters import HyperParameters, extract_hyperparameters
 from utils.tfutils import get_optimizer
 from utils.file_utils import to_rich_path
 from utils.constants import BIG_NUMBER
@@ -290,7 +290,12 @@ class Model:
                 print('Exiting due to Early Stopping')
                 break
 
-        return dict(train_losses=train_loss_dict, valid_losses=valid_loss_dict)
+        metrics_dict = dict(train_losses=train_loss_dict, valid_losses=valid_loss_dict)
+
+        log_file = self.save_folder.join(f'model-train-log-{name}.pkl.gz')
+        log_file.save_as_compressed_file([metrics_dict])
+
+        return metrics_dict
 
     def save(self, name: str, variable_groups: Optional[Dict[str, List[tf.Variable]]] = None,
              data_folders: Optional[Dict[DataSeries, str]] = None):
@@ -330,7 +335,7 @@ class Model:
         Restore model metadata and hyperparameters.
         """
         params_path = self.save_folder.join(f'model-hyper-params-{name}.pkl.gz')
-        self.hypers = HyperParameters(params_path)
+        self.hypers = extract_hyperparameters(params_path)[0]
 
         metadata_path = self.save_folder.join(f'model-metadata-{name}.pkl.gz')
         train_metadata = metadata_path.read_by_file_suffix()
@@ -351,7 +356,6 @@ class Model:
                     model_path = self.save_folder.join(f'model-{name}-{loss_op_name}.ckpt')
                     
                     variables = list(filter(lambda v: v.name in variable_names, trainable_vars))
-                    
                     saver = tf.train.Saver(variables)
                     saver.restore(self._sess, model_path.path)
             else:
