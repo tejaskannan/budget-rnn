@@ -188,7 +188,7 @@ class Model:
             op_results = self._sess.run(ops_to_run, feed_dict=feed_dict)
             return op_results
 
-    def train(self, dataset: Dataset, drop_incomplete_batches: bool = False) -> DefaultDict[str, List[float]]:
+    def train(self, dataset: Dataset, drop_incomplete_batches: bool = False) -> str:
         """
         Trains the model on the given dataset.
 
@@ -196,7 +196,8 @@ class Model:
             dataset: Dataset object containing training, validation and testing partitions
             drop_incomplete_minibatches: Whether to drop incomplete batches
         Returns:
-            A dictionary of metrics obtained from training.
+            The name of the training run. Training results are logged to a pickle file with the name
+            model-train-log_{name}.pkl.gz.
         """
         self.load_metadata(dataset)
 
@@ -295,7 +296,7 @@ class Model:
         log_file = self.save_folder.join(f'model-train-log-{name}.pkl.gz')
         log_file.save_as_compressed_file([metrics_dict])
 
-        return metrics_dict
+        return name
 
     def save(self, name: str, variable_groups: Optional[Dict[str, List[tf.Variable]]] = None,
              data_folders: Optional[Dict[DataSeries, str]] = None):

@@ -3,7 +3,7 @@ from collections import namedtuple, defaultdict
 from typing import DefaultDict, Dict, Union, List, Optional, Tuple
 
 
-SummaryMetrics = namedtuple('SummaryMetrics', ['mean', 'std', 'median', 'first_quartile', 'third_quartile', 'minimum', 'maximum'])
+SummaryMetrics = namedtuple('SummaryMetrics', ['mean', 'geom_mean', 'std', 'median', 'first_quartile', 'third_quartile', 'minimum', 'maximum'])
 SaturationMetrics = namedtuple('SaturationMetrics', ['low', 'high'])
 Prediction = namedtuple('Prediction', ['sample_id', 'prediction', 'expected'])
 
@@ -12,10 +12,16 @@ HIGH_SATURATION = 0.9
 LOW_SATURATION = 0.1
 
 
+def geometric_mean(array: np.array) -> float:
+    log_arr = np.log(array)
+    return np.exp(np.sum(log_arr) / len(log_arr))
+
+
 def get_summaries(errors_dict: Union[Dict[str, List[float]], DefaultDict[str, List[float]]]) -> Dict[str, SummaryMetrics]:
     metrics_dict: Dict[str, SummaryMetrics] = dict()
     for series, values in errors_dict.items():
         metrics_dict[series] = SummaryMetrics(mean=np.average(values),
+                                              geom_mean=geometric_mean(values),
                                               std=np.std(values),
                                               median=np.std(values),
                                               first_quartile=np.percentile(values, 25),

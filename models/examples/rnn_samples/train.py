@@ -9,7 +9,7 @@ from rnn_sample_dataset import RNNSampleDataset
 from typing import Optional, Dict
 
 
-def train(data_folder: str, save_folder: RichPath, hypers: HyperParameters, max_epochs: Optional[int] = None) -> Dict[str, float]:
+def train(data_folder: str, save_folder: RichPath, hypers: HyperParameters, max_epochs: Optional[int] = None):
     model = RNNSampleModel(hyper_parameters=hypers, save_folder=save_folder)
 
     # Create dataset
@@ -22,7 +22,17 @@ def train(data_folder: str, save_folder: RichPath, hypers: HyperParameters, max_
         hypers.epochs = max_epochs
 
     # Train the model
-    return model.train(dataset=dataset)
+    train_label = model.train(dataset=dataset)
+
+    print('Completed training. Beginning testing...')
+
+    # Test the model
+    test_results = model.predict(dataset=dataset,
+                                 name=model.name,
+                                 test_batch_size=1)
+
+    test_result_file = save_folder.join(f'model-test-log-{train_label}.pkl.gz')
+    test_result_file.save_as_compressed_file(test_results)
 
 
 if __name__ == '__main__':
