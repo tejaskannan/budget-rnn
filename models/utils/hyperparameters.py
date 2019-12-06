@@ -53,9 +53,15 @@ def extract_hyperparameters(params_file: Union[str, RichPath],
     grid_params: List[List[Any]] = []
     for field in search_fields:
         if field in parameters:
-            grid_params.append(parameters[field])
+            field_values = parameters[field]
         else:
-            grid_params.append(parameters['model_params'][field])
+            field_values = parameters['model_params'][field]
+
+        # Tread non-list grid fields as single-element lists
+        if not isinstance(field_values, list):
+            grid_params.append([field_values])
+        else:
+            grid_params.append(field_values)
 
     grid_permutations = product(*grid_params)
 

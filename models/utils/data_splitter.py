@@ -4,7 +4,7 @@ from datetime import datetime
 from hashlib import md5
 from enum import Enum, auto
 from collections import Counter
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from itertools import chain
 
 
@@ -13,7 +13,7 @@ VALID_DIR = 'valid'
 TEST_DIR = 'test'
 MODULUS = 2**16
 DATA_FILE_NAME = 'data'
-MAX_CHUNK_SIZE = 10000
+MAX_CHUNK_SIZE = 50000
 
 
 class DataPartition(Enum):
@@ -98,7 +98,7 @@ def get_split_points(input_dir: RichPath, fracs: Dict[DataPartition, float], spl
 
 
 def split_dataset(input_dir: RichPath, output_dir: RichPath, fracs: Dict[DataPartition, float],
-                  hash_fields: List[str], mode: str):
+                  hash_fields: List[str], mode: str, max_num_samples: Optional[int] = None):
     output_dir.make_as_dir()
 
     train_dir = output_dir.join(TRAIN_DIR)
@@ -111,7 +111,9 @@ def split_dataset(input_dir: RichPath, output_dir: RichPath, fracs: Dict[DataPar
     test_dir.make_as_dir()
 
     if mode == 'sequential':
+        print('Finding split points....')
         split_points = get_split_points(input_dir, fracs, hash_fields[0])
+        print('Found split points.')
 
     data_files = sorted(input_dir.iterate_filtered_files_in_dir('data*.jsonl.gz'))
     data_samples = chain(*(data_file.read_by_file_suffix() for data_file in data_files))
@@ -141,6 +143,8 @@ def split_dataset(input_dir: RichPath, output_dir: RichPath, fracs: Dict[DataPar
             if total % MAX_CHUNK_SIZE:
                 print(f'Completed {total} samples.', end='\r')
 
+            if max_num_samples is not None and total + 1 >= max_num_samples:
+                break
 
     train_frac = data_counters[DataPartition.TRAIN] / float(total)
     valid_frac = data_counters[DataPartition.VALID] / float(total)
@@ -172,6 +176,7 @@ if __name__ == '__main__':
     parser.add_argument('--train-frac', type=float, required=True)
     parser.add_argument('--valid-frac', type=float, required=True)
     parser.add_argument('--mode', type=str, choices=['random', 'sequential'])
+    parser.add_argument('--max-num-samples', type=int)
     args = parser.parse_args()
 
     if args.train_frac + args.valid_frac >= 1:
@@ -187,4 +192,5 @@ if __name__ == '__main__':
                   output_dir=RichPath.create(args.output_folder),
                   fracs=fractions,
                   hash_fields=args.hash_fields,
-                  mode=args.mode)
+                  mode=args.mode,
+                  max_num_samples=args.max_num_samples)

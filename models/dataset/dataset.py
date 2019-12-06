@@ -26,7 +26,7 @@ class Dataset:
                 DataSeries.TEST: to_rich_path(test_folder)
         }
 
-        match = re.match('^.+/(.+)/.+$', self.data_folders[DataSeries.TRAIN].path)
+        match = re.match('^.+/(.+)/.+/.+$', self.data_folders[DataSeries.TRAIN].path)
         self.dataset_name = match.group(1).replace('_', '-')
 
         # Load the dataset partitions
