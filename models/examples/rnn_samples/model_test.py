@@ -20,6 +20,13 @@ from utils.hyperparameters import HyperParameters, extract_hyperparameters
 register_matplotlib_converters()
 
 
+STAT_LABEL_DICT = {
+    'mean': ('Mean', 'M'),
+    'median': ('Median', 'Med'),
+    'geom_mean': ('Geometric Mean', 'GeoM'),
+}
+
+
 def extract_model_name(model_file: str) -> str:
     match = re.match(r'^model-([^\.]+)\.ckpt.*$', model_file)
     if not match:
@@ -74,27 +81,30 @@ def plot_axis(test_metrics: Dict[str, TestMetrics],
     ax.set_xticks(ticks=x_values)
 
 
-def plot_predictions(test_metrics: Dict[str, TestMetrics],
+def plot_predictions(metrics: TestMetrics,
+                     series: str,
                      output_name: str,
-                     output_folder: Optional[str]):
+                     output_folder: Optional[str],
+                     sample_frac: float):
     with plt.style.context('ggplot'):
 
         fig, ax = plt.subplots(1, 1, figsize=(12, 9))
 
-        series_predictions = next(iter(test_metrics.values())).predictions
-        predictions = next(iter(series_predictions.values()))
+        predictions = next(iter(metrics.predictions.values()))
         dates = [pred.sample_id for pred in predictions]
         expected: List[float] = [pred.expected for pred in predictions]
 
         ax.plot(dates, expected, label='Actual')
 
-        for series, metrics in test_metrics.items():
-            for prediction_op, preds in metrics.predictions.items():
-                dates = [pred.sample_id for pred in preds]
-                predictions = [pred.prediction for pred in preds]
-                ax.plot(dates, predictions, label=f'{series}-{prediction_op}')
+        for prediction_op, preds in metrics.predictions.items():
+            dates = [pred.sample_id for pred in preds]
+            predictions = [pred.prediction for pred in preds]
 
-        ax.set_title('Model Predictions on Test Set')
+            fraction = (int(prediction_op[-1]) + 1) * sample_frac
+            label = f'Fraction {fraction:.2f}'
+            ax.plot(dates, predictions, label=label)
+
+        ax.set_title(f'{series} Model Predictions on Test Set')
         ax.set_xlabel('Date')
         ax.set_ylabel(output_name)
         ax.legend()
@@ -104,7 +114,7 @@ def plot_predictions(test_metrics: Dict[str, TestMetrics],
         if output_folder is None:
             plt.show()
         else:
-            plt.savefig(join(output_folder, 'predicted_values.pdf'))
+            plt.savefig(join(output_folder, f'{series}_predicted_values.pdf'))
 
 
 def plot_results(test_metrics: Dict[str, TestMetrics],
@@ -116,7 +126,7 @@ def plot_results(test_metrics: Dict[str, TestMetrics],
     if len(test_metrics) <= 0:
         raise ValueError('Must provde some metrics to graph.')
 
-    if stat_name not in ('mean', 'median'):
+    if stat_name not in ('mean', 'median', 'geom_mean'):
         raise ValueError(f'Unknown aggregate metric {stat_name}.')
 
     plt.style.use('ggplot')
@@ -126,31 +136,33 @@ def plot_results(test_metrics: Dict[str, TestMetrics],
     # Create axes
     fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(16, 9))
 
+    stat_label, acronym = STAT_LABEL_DICT[stat_name]
+
     # Plot each metric
     plot_axis(test_metrics=test_metrics,
               series='squared_error',
               stat_name=stat_name,
               x_values=sample_fractions,
-              title='Mean Squared Error (MSE) for Each Sample Fraction',
-              xlabel='Sample Fraction',
-              ylabel='MSE',
+              title=f'{stat_label} Squared Error ({acronym}SE) on Testing Set',
+              xlabel='Input Fraction',
+              ylabel=f'{acronym}SE',
               ax=ax1)
 
     plot_axis(test_metrics=test_metrics,
               series='abs_error',
               stat_name=stat_name,
               x_values=sample_fractions,
-              title='Mean Absolute Error (MAE) for Each Sample Fraction',
-              xlabel='Sample Fraction',
-              ylabel='MAE',
+              title=f'{stat_label} Absolute Error ({acronym}AE) on Testing Set',
+              xlabel='Input Fraction',
+              ylabel=f'{acronym}AE',
               ax=ax2)
 
     plot_axis(test_metrics=test_metrics,
               series='abs_percentage_error',
               stat_name=stat_name,
               x_values=sample_fractions,
-              title='Symmetric Absolute Percentage Error (SMAPE) for Each Sample Fraction',
-              xlabel='Sample Fraction',
+              title=f'{stat_label} Symmetric Absolute Percentage Error (SMAPE) on Testing Set',
+              xlabel='Input Fraction',
               ylabel='SMAPE',
               ax=ax3)
 
@@ -158,9 +170,9 @@ def plot_results(test_metrics: Dict[str, TestMetrics],
               series='latency',
               stat_name=stat_name,
               x_values=sample_fractions,
-              title='Inference Latency for Each Sample Fraction',
-              xlabel='Sample Fraction',
-              ylabel='Latency (ms)',
+              title=f'{stat_label} Inference Latency on Testing Set',
+              xlabel='Input Fraction',
+              ylabel=f'{stat_label}\nLatency (ms)',
               ax=ax4)
 
     plt.tight_layout()
@@ -195,49 +207,25 @@ if __name__ == '__main__':
     with open(args.test_params_file, 'r') as test_params_file:
         test_params = json.load(test_params_file)
 
-    data_folder = test_params.get('data_folder')
-    assert data_folder is not None, 'Must prove a data folder.'
-    assert exists(data_folder), f'The folder {data_folder} does not exist!'
-
-    # Get and validate data folders
-    train_folder = join(data_folder, 'train')
-    valid_folder = join(data_folder, 'valid')
-    test_folder = join(data_folder, 'test')
-    assert exists(train_folder), f'The folder {train_folder} does not exist!'
-    assert exists(valid_folder), f'The folder {valid_folder} does not exist!'
-    assert exists(test_folder), f'The folder {test_folder} does not exist!'
-
-    dataset = RNNSampleDataset(train_folder, valid_folder, test_folder)
-
-    # Validate the hyperparameters to ensure like-for-like comparisons
-    sample_frac: float = 0.0
-    for i, model_config in enumerate(test_params['models']):
-        # Fetching the hyperparameters checks the existence of the params file
-        hypers = extract_hyperparameters(model_config['params_file'])[0]
-        if i > 0:
-            assert sample_frac == hypers.model_params['sample_frac'], f'Sample Fractions are not equal!'
-        else:
-            sample_frac = hypers.model_params['sample_frac']
-
-    # Number of model outputs and prediction operations
-    num_outputs = int(1.0 / sample_frac)
-    prediction_ops = [f'prediction_{i}' for i in range(num_outputs)]
-
-    # Inference parameters
-    batch_size, num_batches = test_params.get('batch_size'), test_params.get('num_batches')
-
     metrics: Dict[str, TestMetrics] = dict()
     num_models = len(test_params['models'])
+
+    model_folder = RichPath.create(test_params['model_folder'])
+
     for i, model_params in enumerate(test_params['models']):
         print(f'Starting Model {i+1}/{num_models}.')
 
-        test_metrics = evaluate_model(model_params, dataset, batch_size, num_batches)
-        metrics[model_params['model_name']] = test_metrics
+        model_test_log = model_folder.join(model_params['test_log_path'])
+        metrics[model_params['model_name']] = model_test_log.read_by_file_suffix()
 
         print('============')
 
+    sample_frac = test_params['sample_frac']
+    num_outputs = int(1.0 / sample_frac)
+    prediction_ops = [f'prediction_{i}' for i in range(num_outputs)]
+
     output_folder = test_params.get('output_folder')
-    for stat_name in ['mean', 'median']:
+    for stat_name in ['mean', 'median', 'geom_mean']:
         plot_results(test_metrics=metrics,
                      sample_frac=sample_frac,
                      prediction_ops=prediction_ops,
@@ -245,4 +233,9 @@ if __name__ == '__main__':
                      stat_name=stat_name,
                      test_params=test_params)
 
-    plot_predictions(test_metrics=metrics, output_name=test_params['output_name'], output_folder=output_folder)
+    for series, series_metrics in metrics.items():
+        plot_predictions(metrics=series_metrics,
+                         series=series,
+                         output_name=test_params['output_name'],
+                         output_folder=output_folder,
+                         sample_frac=sample_frac)
