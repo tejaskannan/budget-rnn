@@ -1,12 +1,15 @@
 from argparse import ArgumentParser
 from os.path import join, exists
+from dpu_utils.utils import RichPath
+from datetime import datetime
+
 from utils.hyperparameters import HyperParameters, extract_hyperparameters
 from rnn_sample_model import RNNSampleModel
 from rnn_sample_dataset import RNNSampleDataset
 from typing import Optional, Dict
 
 
-def train(data_folder: str, save_folder: str, hypers: HyperParameters, max_epochs: Optional[int] = None) -> Dict[str, float]:
+def train(data_folder: str, save_folder: RichPath, hypers: HyperParameters, max_epochs: Optional[int] = None) -> Dict[str, float]:
     model = RNNSampleModel(hyper_parameters=hypers, save_folder=save_folder)
 
     # Create dataset
@@ -58,17 +61,26 @@ if __name__ == '__main__':
     num_models = trials * len(args.params_files)
     grid_fields = args.grid_fields if args.grid_fields is not None and len(args.grid_fields) > 0 else None
 
+    # Create save folder (if necessary)
+    base_save_folder = RichPath.create(args.save_folder)
+    base_save_folder.make_as_dir()
+    current_day = datetime.now().strftime('%d_%m_%Y')
+    save_folder = base_save_folder.join(current_day)
+    save_folder.make_as_dir()
+
     for data_folder in args.data_folders:
         print(f'Started {data_folder}')
         print('====================')
+
         for trial in range(trials):
             for i, params_file in enumerate(args.params_files):
                 print(f'Started training model {i+1}/{num_models}')
                 hypers = extract_hyperparameters(params_file, search_fields=grid_fields)
+
                 for j, hyperparameters in enumerate(hypers):
                     print(f'Started hyperparameter setting {j+1}/{len(hypers)}')
                     train(data_folder=data_folder,
-                          save_folder=args.save_folder,
+                          save_folder=save_folder,
                           hypers=hyperparameters,
                           max_epochs=max_epochs)
                     print('==========')
