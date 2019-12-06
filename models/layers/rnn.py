@@ -26,7 +26,7 @@ def dynamic_rnn(inputs: tf.Tensor,
             (2) The states from each cell
             (3) The gate values of each cell. This is useful for debugging / architecture comparison.
     """
-    state_size = cell.state_size
+    state_size = cell.state_size * cell.num_state_elements
     rnn_layers = cell.num_layers
     sequence_length = tf.shape(inputs)[1]
 

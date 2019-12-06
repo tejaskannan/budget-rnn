@@ -37,6 +37,8 @@ def make_single_rnn_cell(cell_type: str,
         return GRU(input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections)
     if cell_type == 'vanilla':
         return VanillaCell(input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections)
+    if cell_type == 'lstm':
+        return LSTM(input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections)
     raise ValueError(f'Unknown cell name {cell_type}!')
 
 
@@ -62,7 +64,6 @@ class RNNCell:
             use_skip_connections: Whether to allow skip connections through this cell
             state_size: Size of the state. Defaults to output_units
         """
-        
         self.input_units = input_units
         self.output_units = output_units
         self.activation = get_activation(activation)
@@ -72,6 +73,13 @@ class RNNCell:
         self.use_skip_connections = use_skip_connections
         self.name = name
         self.init_weights()
+
+    @property
+    def num_state_elements(self) -> int:
+        """
+        Logical number of vectors which comprise the state.
+        """
+        return 1
 
     def init_weights(self):
         """
@@ -114,8 +122,8 @@ class MultiRNNCell(RNNCell):
         assert num_layers >= 1, 'Must provide at least one layer'
         super().__init__(input_units, output_units, activation, dropout_keep_prob, name, use_skip_connections, state_size)
         self.num_layers = num_layers
-        
-        self.cells : List[RNNCell] = []
+
+        self.cells: List[RNNCell] = []
         for i in range(num_layers):
             cell = make_single_rnn_cell(cell_type=cell_type,
                                         input_units=input_units if i == 0 else output_units,
@@ -126,12 +134,16 @@ class MultiRNNCell(RNNCell):
                                         use_skip_connections=use_skip_connections)
             self.cells.append(cell)
 
+    @property
+    def num_state_elements(self) -> int:
+        return self.cells[0].num_state_elements
+
     def zero_state(self, batch_size: tf.Tensor, dtype: Any) -> List[tf.Tensor]:
         return [cell.zero_state(batch_size, dtype) for cell in self.cells]
 
     def __call__(self, inputs: tf.Tensor,
                  state: List[tf.Tensor],
-                 skip_input: Optional[List[tf.Tensor]] = None) -> Tuple[tf.Tensor, List[tf.Tensor], List[List[tf.Tensor]]]: 
+                 skip_input: Optional[List[tf.Tensor]] = None) -> Tuple[tf.Tensor, List[tf.Tensor], List[List[tf.Tensor]]]:
         assert len(self.cells) == len(state), 'The number of states must be equal to the number of cells'
 
         cell_gates: List[List[tf.Tensor]] = []
@@ -166,11 +178,11 @@ class GRU(RNNCell):
                                     name=f'{self.name}-b-update')
 
         self.W_reset = tf.Variable(initial_value=self.initializer(shape=[self.state_size, self.output_units]),
-                                    trainable=True,
-                                    name=f'{self.name}-W-reset')
+                                   trainable=True,
+                                   name=f'{self.name}-W-reset')
         self.U_reset = tf.Variable(initial_value=self.initializer(shape=[self.input_units, self.output_units]),
-                                    trainable=True,
-                                    name=f'{self.name}-U-reset')
+                                   trainable=True,
+                                   name=f'{self.name}-U-reset')
         self.b_reset = tf.Variable(initial_value=self.initializer(shape=[1, self.output_units]),
                                    trainable=True,
                                    name=f'{self.name}-b-reset')
@@ -186,29 +198,25 @@ class GRU(RNNCell):
                              name=f'{self.name}-b')
 
         if self.use_skip_connections:
-            self.R_update = tf.Variable(initial_value=self.initializer(shape=[self.state_size, self.output_units]),
-                                        trainable=True,
-                                        name=f'{self.name}-R-update')
-            self.R_reset = tf.Variable(initial_value=self.initializer(shape=[self.state_size, self.output_units]),
-                                    trainable=True,
-                                    name=f'{self.name}-R-update')
-            self.R = tf.Variable(initial_value=self.initializer(shape=[self.state_size, self.output_units]),
+            self.R = tf.Variable(initial_value=self.initializer(shape=[2 * self.state_size, self.state_size]),
                                  trainable=True,
                                  name=f'{self.name}-R')
+            self.b_skip = tf.Variable(initial_value=self.initializer(shape=[1, self.state_size]),
+                                      trainable=True,
+                                      name=f'{self.name}-b-skip')
 
     def __call__(self, inputs: tf.Tensor,
                  state: tf.Tensor,
                  skip_input: Optional[tf.Tensor] = None) -> Tuple[tf.Tensor, tf.Tensor, List[tf.Tensor]]:
         assert not self.use_skip_connections or skip_input is not None, 'Must provide a skip input when using skip connections'
 
+        if self.use_skip_connections:
+            concat_state = tf.concat([state, skip_input], axis=-1)  # B x 2D
+            skip_gate = tf.math.sigmoid(tf.matmul(concat_state, self.R) + self.b_skip)
+            state = skip_gate * state + (1.0 - skip_gate) * skip_input
+
         update_vector = tf.matmul(state, self.W_update) + tf.matmul(inputs, self.U_update) + self.b_update
         reset_vector = tf.matmul(state, self.W_reset) + tf.matmul(inputs, self.U_reset) + self.b_reset
-        candidate_vector = tf.matmul(state, self.W) + tf.matmul(inputs, self.U) + self.b
-
-        if self.use_skip_connections:
-            update_vector += tf.matmul(skip_input, self.R_update)
-            reset_gate += tf.matmul(skip_input, self.R_reset)
-            candidate_vector += tf.matmul(skip_input, self.R)
 
         update_gate = tf.math.sigmoid(update_vector)
         reset_gate = tf.math.sigmoid(reset_vector)
@@ -216,6 +224,7 @@ class GRU(RNNCell):
         update_with_dropout = tf.nn.dropout(update_gate, keep_prob=self.dropout_keep_prob)
         reset_with_dropout = tf.nn.dropout(reset_gate, keep_prob=self.dropout_keep_prob)
 
+        candidate_vector = tf.matmul(state * reset_with_dropout, self.W) + tf.matmul(inputs, self.U) + self.b
         candidate_state = self.activation(candidate_vector)
         next_state = update_with_dropout * state + (1.0 - update_with_dropout) * candidate_state
 
@@ -236,20 +245,133 @@ class VanillaCell(RNNCell):
                              name=f'{self.name}-b')
 
         if self.use_skip_connections:
-            self.R = tf.Variable(initial_value=self.initializer(shape=[self.input_units, self.output_units]),
+            self.R = tf.Variable(initial_value=self.initializer(shape=[2 * self.input_units, self.state_size]),
                                  trainable=True,
                                  name=f'{self.name}-R')
+            self.b_skip = tf.Variable(initial_value=self.initializer(shape=[1, self.state_size]),
+                                      trainable=True,
+                                      name=f'{self.name}-b')
 
     def __call__(self, inputs: tf.Tensor,
                  state: tf.Tensor,
                  skip_input: Optional[tf.Tensor] = None) -> Tuple[tf.Tensor, tf.Tensor, List[tf.Tensor]]:
         assert not self.use_skip_connections or skip_input is None, 'Must provide a skip input when using skip connections'
 
+        if self.use_skip_connections:
+            concat_state = tf.concat([state, skip_input], axis=-1)
+            skip_gate = tf.math.sigmoid(tf.matmul(concat_state, self.R) + self.b_skip)
+            state = skip_gate * state + (1.0 - skip_gate) * skip_input
+
         candidate_vector = tf.matmul(state, self.W) + tf.matmul(inputs, self.U) + self.b
+        candidate_vector_with_dropout = tf.nn.dropout(candidate_vector, keep_prob=self.dropout_keep_prob)
+
+        next_state = self.activation(candidate_vector_with_dropout)
+        return next_state, next_state, [candidate_vector]
+
+
+class LSTM(RNNCell):
+
+    @property
+    def num_state_elements(self):
+        # Each state is a tuple of (c, h)
+        return 2
+
+    def init_weights(self):
+        self.W_i = tf.Variable(initial_value=self.initializer(shape=[self.state_size, self.output_units]),
+                               trainable=True,
+                               name=f'{self.name}-W-i')
+        self.U_i = tf.Variable(initial_value=self.initializer(shape=[self.input_units, self.output_units]),
+                               trainable=True,
+                               name=f'{self.name}-U-i')
+        self.b_i = tf.Variable(initial_value=self.initializer(shape=[1, self.output_units]),
+                               trainable=True,
+                               name=f'{self.name}-b-i')
+
+        self.W_o = tf.Variable(initial_value=self.initializer(shape=[self.state_size, self.output_units]),
+                               trainable=True,
+                               name=f'{self.name}-W-o')
+        self.U_o = tf.Variable(initial_value=self.initializer(shape=[self.input_units, self.output_units]),
+                               trainable=True,
+                               name=f'{self.name}-U-o')
+        self.b_o = tf.Variable(initial_value=self.initializer(shape=[1, self.output_units]),
+                               trainable=True,
+                               name=f'{self.name}-b-o')
+
+        self.W_f = tf.Variable(initial_value=self.initializer(shape=[self.state_size, self.output_units]),
+                               trainable=True,
+                               name=f'{self.name}-W-f')
+        self.U_f = tf.Variable(initial_value=self.initializer(shape=[self.input_units, self.output_units]),
+                               trainable=True,
+                               name=f'{self.name}-U-f')
+        self.b_f = tf.Variable(initial_value=self.initializer(shape=[1, self.output_units]),
+                               trainable=True,
+                               name=f'{self.name}-b-f')
+
+        self.W = tf.Variable(initial_value=self.initializer(shape=[self.state_size, self.output_units]),
+                             trainable=True,
+                             name=f'{self.name}-W')
+        self.U = tf.Variable(initial_value=self.initializer(shape=[self.input_units, self.output_units]),
+                             trainable=True,
+                             name=f'{self.name}-U')
+        self.b = tf.Variable(initial_value=self.initializer(shape=[1, self.output_units]),
+                             trainable=True,
+                             name=f'{self.name}-b')
 
         if self.use_skip_connections:
-            candidate_vector += tf.matmul(skip_input, self.R)
+            self.R_c = tf.Variable(initial_value=self.initializer(shape=[2 * self.state_size, self.state_size]),
+                                   trainable=True,
+                                   name=f'{self.name}-R-c')
+            self.R_h = tf.Variable(initial_value=self.initializer(shape=[2 * self.state_size, self.state_size]),
+                                   trainable=True,
+                                   name=f'{self.name}-R-h')
+            self.b_skip_c = tf.Variable(initial_value=self.initializer(shape=[1, self.state_size]),
+                                        trainable=True,
+                                        name=f'{self.name}-b-skip-c')
+            self.b_skip_h = tf.Variable(initial_value=self.initializer(shape=[1, self.state_size]),
+                                        trainable=True,
+                                        name=f'{self.name}-b-skip-h')
 
-        next_state = self.activation(candidate_vector)
-        next_state = tf.nn.dropout(next_state, keep_prob=self.dropout_keep_prob)
-        return next_state, next_state, [candidate_vector]
+    def zero_state(self, batch_size: tf.Tensor, dtype: Any) -> tf.Tensor:
+        # The state is double the size to store values for the tuple (c, h)
+        state = tf.fill(dims=[batch_size, 2 * self.state_size], value=0, name=f'{self.name}-initial-state')
+        return tf.cast(state, dtype=dtype)
+
+    def __call__(self, inputs: tf.Tensor,
+                 state: tf.Tensor,
+                 skip_input: Optional[tf.Tensor] = None) -> Tuple[tf.Tensor, tf.Tensor, List[tf.Tensor]]:
+        assert not self.use_skip_connections or skip_input is not None, 'Must provide a skip input when using skip connections'
+
+        state_c, state_h = state[:, 0:self.state_size], state[:, self.state_size:]
+
+        if self.use_skip_connections:
+            skip_input_c, skip_input_h = state[: 0:self.state_size], state[:, self.state_size:]
+
+            concat_state_c = tf.concat([state_c, skip_input_c], axis=-1)
+            state_c_gate = tf.math.sigmoid(tf.matmul(concat_state_c, self.R_c) + self.b_skip_c)
+            state_c = state_c_gate * state_c + (1.0 - state_c_gate) * skip_input_c
+
+            concat_state_h = tf.concat([state_h, skip_input_h], axis=-1)
+            state_h_gate = tf.math.sigmoid(tf.matmul(concat_state_h, self.R_h) + self.b_skip_h)
+            state_h = state_h_gate * state_h + (1.0 - state_h_gate) * skip_input_h
+
+        write_vector = tf.matmul(state_h, self.W_i) + tf.matmul(inputs, self.U_i) + self.b_i
+        read_vector = tf.matmul(state_h, self.W_o) + tf.matmul(inputs, self.U_o) + self.b_o
+        forget_vector = tf.matmul(state_h, self.W_f) + tf.matmul(inputs, self.U_f) + self.b_f
+
+        write_gate = tf.math.sigmoid(write_vector)
+        read_gate = tf.math.sigmoid(read_vector)
+        forget_gate = tf.math.sigmoid(forget_vector)
+
+        write_with_dropout = tf.nn.dropout(write_gate, keep_prob=self.dropout_keep_prob)
+        read_with_dropout = tf.nn.dropout(read_gate, keep_prob=self.dropout_keep_prob)
+        forget_with_dropout = tf.nn.dropout(forget_gate, keep_prob=self.dropout_keep_prob)
+
+        candidate_vector = tf.matmul(state_h, self.W) + tf.matmul(inputs, self.U) + self.b
+        candidate_state = self.activation(candidate_vector)
+
+        next_c = forget_with_dropout * state_c + write_with_dropout * candidate_state
+        next_h = read_with_dropout * tf.nn.tanh(next_c)
+
+        next_state = tf.concat([next_c, next_h], axis=-1)
+
+        return next_h, next_state, [write_gate, read_gate, forget_gate]
