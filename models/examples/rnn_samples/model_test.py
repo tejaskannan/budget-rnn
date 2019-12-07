@@ -2,6 +2,7 @@ import re
 import json
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from matplotlib.axes import Axes
 from argparse import ArgumentParser
 from collections import defaultdict, OrderedDict
@@ -13,7 +14,7 @@ from pandas.plotting import register_matplotlib_converters
 
 from rnn_sample_model import RNNSampleModel
 from rnn_sample_dataset import RNNSampleDataset
-from testing_utils import TestMetrics
+from testing_utils import TestMetrics, geometric_standard_deviation
 from utils.hyperparameters import HyperParameters, extract_hyperparameters
 
 
@@ -213,12 +214,8 @@ if __name__ == '__main__':
     model_folder = RichPath.create(test_params['model_folder'])
 
     for i, model_params in enumerate(test_params['models']):
-        print(f'Starting Model {i+1}/{num_models}.')
-
         model_test_log = model_folder.join(model_params['test_log_path'])
         metrics[model_params['model_name']] = model_test_log.read_by_file_suffix()
-
-        print('============')
 
     sample_frac = test_params['sample_frac']
     num_outputs = int(1.0 / sample_frac)

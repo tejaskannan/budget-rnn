@@ -167,43 +167,54 @@ class MultiRNNCell(RNNCell):
 class GRU(RNNCell):
 
     def init_weights(self):
-        self.W_update = tf.Variable(initial_value=self.initializer(shape=[self.state_size, self.output_units]),
-                                    trainable=True,
-                                    name=f'{self.name}-W-update')
-        self.U_update = tf.Variable(initial_value=self.initializer(shape=[self.input_units, self.output_units]),
-                                    trainable=True,
-                                    name=f'{self.name}-U-update')
-        self.b_update = tf.Variable(initial_value=self.initializer(shape=[1, self.output_units]),
-                                    trainable=True,
-                                    name=f'{self.name}-b-update')
+        self.W_update = tf.get_variable(name=f'{self.name}-W-update',
+                                        initializer=self.initializer,
+                                        shape=[self.state_size, self.output_units],
+                                        trainable=True)
+        self.U_update = tf.get_variable(name=f'{self.name}-U-update',
+                                        initializer=self.initializer,
+                                        shape=[self.input_units, self.output_units],
+                                        trainable=True)
+        self.b_update = tf.get_variable(name=f'{self.name}-b-update',
+                                        initializer=self.initializer,
+                                        shape=[1, self.output_units],
+                                        trainable=True)
 
-        self.W_reset = tf.Variable(initial_value=self.initializer(shape=[self.state_size, self.output_units]),
-                                   trainable=True,
-                                   name=f'{self.name}-W-reset')
-        self.U_reset = tf.Variable(initial_value=self.initializer(shape=[self.input_units, self.output_units]),
-                                   trainable=True,
-                                   name=f'{self.name}-U-reset')
-        self.b_reset = tf.Variable(initial_value=self.initializer(shape=[1, self.output_units]),
-                                   trainable=True,
-                                   name=f'{self.name}-b-reset')
+        self.W_reset = tf.get_variable(name=f'{self.name}-W-reset',
+                                       initializer=self.initializer,
+                                       shape=[self.state_size, self.output_units],
+                                       trainable=True)
+        self.U_reset = tf.get_variable(name=f'{self.name}-U-reset',
+                                       initializer=self.initializer,
+                                       shape=[self.input_units, self.output_units],
+                                       trainable=True)
+        self.b_reset = tf.get_variable(name=f'{self.name}-b-reset',
+                                       initializer=self.initializer,
+                                       shape=[1, self.output_units],
+                                       trainable=True)
 
-        self.W = tf.Variable(initial_value=self.initializer(shape=[self.state_size, self.output_units]),
-                             trainable=True,
-                             name=f'{self.name}-W')
-        self.U = tf.Variable(initial_value=self.initializer(shape=[self.input_units, self.output_units]),
-                             trainable=True,
-                             name=f'{self.name}-U')
-        self.b = tf.Variable(initial_value=self.initializer(shape=[1, self.output_units]),
-                             trainable=True,
-                             name=f'{self.name}-b')
+        self.W = tf.get_variable(name=f'{self.name}-W',
+                                 initializer=self.initializer,
+                                 shape=[self.state_size, self.output_units],
+                                 trainable=True)
+        self.U = tf.get_variable(name=f'{self.name}-U',
+                                 initializer=self.initializer,
+                                 shape=[self.input_units, self.output_units],
+                                 trainable=True)
+        self.b = tf.get_variable(name=f'{self.name}-b',
+                                 initializer=self.initializer,
+                                 shape=[1, self.output_units],
+                                 trainable=True)
 
         if self.use_skip_connections:
-            self.R = tf.Variable(initial_value=self.initializer(shape=[2 * self.state_size, self.state_size]),
-                                 trainable=True,
-                                 name=f'{self.name}-R')
-            self.b_skip = tf.Variable(initial_value=self.initializer(shape=[1, self.state_size]),
-                                      trainable=True,
-                                      name=f'{self.name}-b-skip')
+            self.R = tf.get_variable(name=f'{self.name}-R',
+                                     initializer=self.initializer,
+                                     shape=[2 * self.state_size, self.state_size],
+                                     trainable=True)
+            self.b_skip = tf.get_variable(name=f'{self.name}-b-skip',
+                                          initializer=self.initializer,
+                                          shape=[1, self.state_size],
+                                          trainable=True)
 
     def __call__(self, inputs: tf.Tensor,
                  state: tf.Tensor,
@@ -234,23 +245,28 @@ class GRU(RNNCell):
 class VanillaCell(RNNCell):
 
     def init_weights(self):
-        self.W = tf.Variable(initial_value=self.initializer(shape=[self.state_size, self.output_units]),
-                             trainable=True,
-                             name=f'{self.name}-W')
-        self.U = tf.Variable(initial_value=self.initializer(shape=[self.input_units, self.output_units]),
-                             trainable=True,
-                             name=f'{self.name}-U')
-        self.b = tf.Variable(initial_value=self.initializer(shape=[1, self.output_units]),
-                             trainable=True,
-                             name=f'{self.name}-b')
+        self.W = tf.get_variable(name=f'{self.name}-W',
+                                 initializer=self.initializer,
+                                 shape=[self.state_size, self.output_units],
+                                 trainable=True)
+        self.U = tf.get_variable(name=f'{self.name}-U',
+                                 initializer=self.initializer,
+                                 shape=[self.input_units, self.output_units],
+                                 trainable=True)
+        self.b = tf.get_variable(name=f'{self.name}-b',
+                                 initializer=self.initializer,
+                                 shape=[1, self.output_units],
+                                 trainable=True)
 
         if self.use_skip_connections:
-            self.R = tf.Variable(initial_value=self.initializer(shape=[2 * self.input_units, self.state_size]),
-                                 trainable=True,
-                                 name=f'{self.name}-R')
-            self.b_skip = tf.Variable(initial_value=self.initializer(shape=[1, self.state_size]),
-                                      trainable=True,
-                                      name=f'{self.name}-b')
+            self.R = tf.get_variable(name=f'{self.name}-R',
+                                     initializer=self.initializer,
+                                     shape=[2 * self.state_size, self.state_size],
+                                     trainable=True)
+            self.b_skip = tf.get_variable(name=f'{self.name}-b-skip',
+                                          initializer=self.initializer,
+                                          shape=[1, self.state_size],
+                                          trainable=True)
 
     def __call__(self, inputs: tf.Tensor,
                  state: tf.Tensor,
@@ -277,59 +293,75 @@ class LSTM(RNNCell):
         return 2
 
     def init_weights(self):
-        self.W_i = tf.Variable(initial_value=self.initializer(shape=[self.state_size, self.output_units]),
-                               trainable=True,
-                               name=f'{self.name}-W-i')
-        self.U_i = tf.Variable(initial_value=self.initializer(shape=[self.input_units, self.output_units]),
-                               trainable=True,
-                               name=f'{self.name}-U-i')
-        self.b_i = tf.Variable(initial_value=self.initializer(shape=[1, self.output_units]),
-                               trainable=True,
-                               name=f'{self.name}-b-i')
+        self.W_i = tf.get_variable(name=f'{self.name}-W-i',
+                                   initializer=self.initializer,
+                                   shape=[self.state_size, self.output_units],
+                                   trainable=True)
+        self.U_i = tf.get_variable(name=f'{self.name}-U-i',
+                                 initializer=self.initializer,
+                                 shape=[self.input_units, self.output_units],
+                                 trainable=True)
+        self.b_i = tf.get_variable(name=f'{self.name}-b-i',
+                                 initializer=self.initializer,
+                                 shape=[1, self.output_units],
+                                 trainable=True)
 
-        self.W_o = tf.Variable(initial_value=self.initializer(shape=[self.state_size, self.output_units]),
-                               trainable=True,
-                               name=f'{self.name}-W-o')
-        self.U_o = tf.Variable(initial_value=self.initializer(shape=[self.input_units, self.output_units]),
-                               trainable=True,
-                               name=f'{self.name}-U-o')
-        self.b_o = tf.Variable(initial_value=self.initializer(shape=[1, self.output_units]),
-                               trainable=True,
-                               name=f'{self.name}-b-o')
+        self.W_o = tf.get_variable(name=f'{self.name}-W-o',
+                                   initializer=self.initializer,
+                                   shape=[self.state_size, self.output_units],
+                                   trainable=True)
+        self.U_o = tf.get_variable(name=f'{self.name}-U-o',
+                                   initializer=self.initializer,
+                                   shape=[self.input_units, self.output_units],
+                                   trainable=True)
+        self.b_o = tf.get_variable(name=f'{self.name}-b-o',
+                                   initializer=self.initializer,
+                                   shape=[1, self.output_units],
+                                   trainable=True)
 
-        self.W_f = tf.Variable(initial_value=self.initializer(shape=[self.state_size, self.output_units]),
-                               trainable=True,
-                               name=f'{self.name}-W-f')
-        self.U_f = tf.Variable(initial_value=self.initializer(shape=[self.input_units, self.output_units]),
-                               trainable=True,
-                               name=f'{self.name}-U-f')
-        self.b_f = tf.Variable(initial_value=self.initializer(shape=[1, self.output_units]),
-                               trainable=True,
-                               name=f'{self.name}-b-f')
+        self.W_f = tf.get_variable(name=f'{self.name}-W-f',
+                                   initializer=self.initializer,
+                                   shape=[self.state_size, self.output_units],
+                                   trainable=True)
+        self.U_f = tf.get_variable(name=f'{self.name}-U-f',
+                                   initializer=self.initializer,
+                                   shape=[self.input_units, self.output_units],
+                                   trainable=True)
+        self.b_f = tf.get_variable(name=f'{self.name}-b-f',
+                                   initializer=self.initializer,
+                                   shape=[1, self.output_units],
+                                   trainable=True)
 
-        self.W = tf.Variable(initial_value=self.initializer(shape=[self.state_size, self.output_units]),
-                             trainable=True,
-                             name=f'{self.name}-W')
-        self.U = tf.Variable(initial_value=self.initializer(shape=[self.input_units, self.output_units]),
-                             trainable=True,
-                             name=f'{self.name}-U')
-        self.b = tf.Variable(initial_value=self.initializer(shape=[1, self.output_units]),
-                             trainable=True,
-                             name=f'{self.name}-b')
+        self.W = tf.get_variable(name=f'{self.name}-W',
+                                 initializer=self.initializer,
+                                 shape=[self.state_size, self.output_units],
+                                 trainable=True)
+        self.U = tf.get_variable(name=f'{self.name}-U',
+                                 initializer=self.initializer,
+                                 shape=[self.input_units, self.output_units],
+                                 trainable=True)
+        self.b = tf.get_variable(name=f'{self.name}-b',
+                                 initializer=self.initializer,
+                                 shape=[1, self.output_units],
+                                 trainable=True)
 
         if self.use_skip_connections:
-            self.R_c = tf.Variable(initial_value=self.initializer(shape=[2 * self.state_size, self.state_size]),
-                                   trainable=True,
-                                   name=f'{self.name}-R-c')
-            self.R_h = tf.Variable(initial_value=self.initializer(shape=[2 * self.state_size, self.state_size]),
-                                   trainable=True,
-                                   name=f'{self.name}-R-h')
-            self.b_skip_c = tf.Variable(initial_value=self.initializer(shape=[1, self.state_size]),
-                                        trainable=True,
-                                        name=f'{self.name}-b-skip-c')
-            self.b_skip_h = tf.Variable(initial_value=self.initializer(shape=[1, self.state_size]),
-                                        trainable=True,
-                                        name=f'{self.name}-b-skip-h')
+            self.R_c = tf.get_variable(name=f'{self.name}-R-c',
+                                       initializer=self.initializer,
+                                       shape=[2 * self.state_size, self.state_size],
+                                       trainable=True)
+            self.R_h = tf.get_variable(name=f'{self.name}-R-h',
+                                       initializer=self.initializer,
+                                       shape=[2 * self.state_size, self.state_size],
+                                       trainable=True)
+            self.b_skip_c = tf.get_variable(name=f'{self.name}-b-skip-c',
+                                            initializer=self.initializer,
+                                            shape=[1, self.state_size],
+                                            trainable=True)
+            self.b_skip_h = tf.get_variable(name=f'{self.name}-b-skip-h',
+                                            initializer=self.initializer,
+                                            shape=[1, self.state_size],
+                                            trainable=True)
 
     def zero_state(self, batch_size: tf.Tensor, dtype: Any) -> tf.Tensor:
         # The state is double the size to store values for the tuple (c, h)
@@ -344,7 +376,7 @@ class LSTM(RNNCell):
         state_c, state_h = state[:, 0:self.state_size], state[:, self.state_size:]
 
         if self.use_skip_connections:
-            skip_input_c, skip_input_h = state[: 0:self.state_size], state[:, self.state_size:]
+            skip_input_c, skip_input_h = state[:, 0:self.state_size], state[:, self.state_size:]
 
             concat_state_c = tf.concat([state_c, skip_input_c], axis=-1)
             state_c_gate = tf.math.sigmoid(tf.matmul(concat_state_c, self.R_c) + self.b_skip_c)

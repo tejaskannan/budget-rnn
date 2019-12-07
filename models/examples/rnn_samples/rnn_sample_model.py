@@ -11,7 +11,7 @@ from dpu_utils.utils import RichPath
 from models.base_model import Model, VariableWithWeight
 from layers.basic import rnn_cell, mlp
 from layers.cells.cells import make_rnn_cell, MultiRNNCell
-from layers.rnn import dynamic_rnn
+from layers.rnn import dynamic_rnn, dropped_rnn
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
@@ -27,6 +27,8 @@ class RNNModelType:
     CASCADE = auto()
     CHUNKED = auto()
     SKIP = auto()
+    DROPPED = auto()
+    SINGLE = auto()
 
 
 def var_filter(trainable_vars: List[tf.Variable], var_prefixes: Optional[Dict[str, float]] = None) -> List[VariableWithWeight]:
@@ -57,6 +59,10 @@ class RNNSampleModel(Model):
             self.model_type = RNNModelType.CHUNKED
         elif model_type == 'skip_rnn_model':
             self.model_type = RNNModelType.SKIP
+        elif model_type == 'dropped_rnn_model':
+            self.model_type = RNNModelType.DROPPED
+        elif model_type == 'single_rnn_model':
+            self.model_type = RNNModelType.SINGLE
         else:
             raise ValueError(f'Unknown model type: {model_type}.')
 
@@ -197,7 +203,7 @@ class RNNSampleModel(Model):
 
         seq_indexes: List[int] = []
         for i in range(num_sequences):
-            if self.model_type == RNNModelType.VANILLA:
+            if self.model_type in (RNNModelType.VANILLA, RNNModelType.DROPPED, RNNModelType.SINGLE):
                 seq_indexes.extend(range(i, seq_length, num_sequences))
                 seq_indexes = list(sorted(seq_indexes))
                 sample_tensor = input_batch[:, seq_indexes]
@@ -232,7 +238,7 @@ class RNNSampleModel(Model):
             self._placeholders[f'input_{i}'] = tf.placeholder(shape=input_shape,
                                                               dtype=tf.float32,
                                                               name=f'input-{i}')
-            if self.model_type == RNNModelType.VANILLA:
+            if self.model_type in (RNNModelType.VANILLA, RNNModelType.DROPPED, RNNModelType.SINGLE):
                 samples_per_seq += self.samples_per_seq
 
         self._placeholders['output'] = tf.placeholder(shape=[None, num_output_features],
@@ -360,7 +366,7 @@ class RNNSampleModel(Model):
             output_layer_name = 'output-layer'
             rnn_model_name = 'rnn-model'
 
-            if self.model_type == RNNModelType.CASCADE:
+            if self.model_type in (RNNModelType.CASCADE, RNNModelType.SINGLE):
                 # The Cascade model shares cell weights by design
                 output_layer_name = f'{output_layer_name}-layer-{i}'
             elif not self.hypers.model_params.get('share_cell_weights', False):
@@ -374,7 +380,8 @@ class RNNSampleModel(Model):
                                  activation=self.hypers.model_params['rnn_activation'],
                                  dropout_keep_rate=self._placeholders['dropout_keep_rate'],
                                  num_layers=rnn_layers,
-                                 name=rnn_cell_name)
+                                 name=rnn_cell_name,
+                                 use_skip_connections=self.model_type == RNNModelType.SKIP)
 
             inputs = self._placeholders[f'input_{i}']
             initial_state = cell.zero_state(batch_size=tf.shape(inputs)[0], dtype=tf.float32)
@@ -382,26 +389,31 @@ class RNNSampleModel(Model):
             if self.model_type in (RNNModelType.CHUNKED, RNNModelType.CASCADE) and prev_state is not None:
                 initial_state = prev_state
 
-            skip_width = self.num_sequences if self.model_type == RNNModelType.SKIP else None
-            rnn_outputs, rnn_states, rnn_gates = dynamic_rnn(cell=cell,
-                                                             inputs=inputs,
-                                                             initial_state=initial_state,
-                                                             skip_width=skip_width,
-                                                             name=rnn_model_name)
+            if self.model_type == RNNModelType.DROPPED:
+                rnn_outputs, rnn_states, rnn_gates = dropped_rnn(cell=cell,
+                                                                 inputs=inputs,
+                                                                 initial_state=initial_state,
+                                                                 horizon=5,
+                                                                 drop_rate=0.9,
+                                                                 name=rnn_model_name)
+            else:
+                skip_width = self.num_sequences if self.model_type == RNNModelType.SKIP else None
+                rnn_outputs, rnn_states, rnn_gates = dynamic_rnn(cell=cell,
+                                                                 inputs=inputs,
+                                                                 initial_state=initial_state,
+                                                                 skip_width=skip_width,
+                                                                 name=rnn_model_name)
 
             # Get the final state
             last_index = tf.shape(inputs)[1] - 1
-            state = rnn_states.read(index=last_index)
+            output = rnn_outputs.read(index=last_index)
 
             # Save previous state for the chunked model
             if self.model_type in (RNNModelType.CHUNKED, RNNModelType.CASCADE):
-                prev_state = state
+                prev_state = rnn_states.read(index=last_index)
 
             # B x D
-            state = state[rnn_layers - 1, :, :]
-
-            # B x D
-            rnn_output = pool_rnn_outputs(rnn_outputs, state, pool_mode=self.hypers.model_params['pool_mode'])
+            rnn_output = pool_rnn_outputs(rnn_outputs, output, pool_mode=self.hypers.model_params['pool_mode'])
 
             if self.hypers.model_params.get('bin_outputs', False):
                 num_output_features = len(self.metadata['bin_means'])
@@ -461,9 +473,10 @@ class RNNSampleModel(Model):
             states_list.append(states)
 
             # B x D
-            final_state = final_state[rnn_layers - 1, :, :]
+            # final_state = final_state[rnn_layers - 1, :, :]
+            final_output = rnn_outputs.read(last_index)
 
-            rnn_output = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
+            rnn_output = pool_rnn_outputs(rnn_outputs, final_output, pool_mode=self.hypers.model_params['pool_mode'])
 
             if self.hypers.model_params.get('bin_outputs', False):
                 num_output_features = self.hypers.model_params['num_bins']

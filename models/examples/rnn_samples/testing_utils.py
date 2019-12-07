@@ -17,6 +17,11 @@ def geometric_mean(array: np.array) -> float:
     return np.exp(np.sum(log_arr) / len(log_arr))
 
 
+def geometric_standard_deviation(array: np.array, mean: float) -> float:
+    squared_log_ratio = np.square(np.log(array / mean))
+    return np.sqrt(np.average(squared_log_ratio))
+
+
 def get_summaries(errors_dict: Union[Dict[str, List[float]], DefaultDict[str, List[float]]]) -> Dict[str, SummaryMetrics]:
     metrics_dict: Dict[str, SummaryMetrics] = dict()
     for series, values in errors_dict.items():
