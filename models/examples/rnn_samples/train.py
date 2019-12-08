@@ -9,7 +9,7 @@ from rnn_sample_dataset import RNNSampleDataset
 from typing import Optional, Dict
 
 
-def train(data_folder: str, save_folder: RichPath, hypers: HyperParameters, max_epochs: Optional[int] = None):
+def train(data_folder: str, save_folder: RichPath, hypers: HyperParameters, max_epochs: Optional[int] = None) -> str:
     model = RNNSampleModel(hyper_parameters=hypers, save_folder=save_folder)
 
     # Create dataset
@@ -23,17 +23,27 @@ def train(data_folder: str, save_folder: RichPath, hypers: HyperParameters, max_
 
     # Train the model
     train_label = model.train(dataset=dataset)
+    return train_label
 
-    print('Completed training. Beginning testing...')
+def test(name: str, data_folder: str, save_folder: RichPath, hypers: HyperParameters):
+    model = RNNSampleModel(hyper_parameters=hypers, save_folder=save_folder)
 
-    # Test the model
+    # Create dataset
+    train_folder = join(data_folder, 'train')
+    valid_folder = join(data_folder, 'valid')
+    test_folder = join(data_folder, 'test')
+    dataset = RNNSampleDataset(train_folder, valid_folder, test_folder)
+
+    model.restore_parameters(name=name)
+    model.make(is_train=False)
+    model.restore_weights(name=name)
+
     test_results = model.predict(dataset=dataset,
                                  name=model.name,
                                  test_batch_size=1)
 
-    test_result_file = save_folder.join(f'model-test-log-{train_label}.pkl.gz')
+    test_result_file = save_folder.join(f'model-test-log-{name}.pkl.gz')
     test_result_file.save_as_compressed_file(test_results)
-
 
 if __name__ == '__main__':
     parser = ArgumentParser()
@@ -47,7 +57,7 @@ if __name__ == '__main__':
 
     assert args.params_files is not None and len(args.params_files) > 0, f'Must provide at least one set of parameters'
 
-    max_epochs = 2 if args.testrun else None
+    max_epochs = 1 if args.testrun else None
 
     # Validate data folders before training (to fail fast)
     for data_folder in args.data_folders:
@@ -89,9 +99,16 @@ if __name__ == '__main__':
 
                 for j, hyperparameters in enumerate(hypers):
                     print(f'Started hyperparameter setting {j+1}/{len(hypers)}')
-                    train(data_folder=data_folder,
-                          save_folder=save_folder,
-                          hypers=hyperparameters,
-                          max_epochs=max_epochs)
+                    name = train(data_folder=data_folder,
+                                 save_folder=save_folder,
+                                 hypers=hyperparameters,
+                                 max_epochs=max_epochs)
+                    
+                    print('Completed training. Started testing...')
+                    test(name=name,
+                         data_folder=data_folder,
+                         save_folder=save_folder,
+                         hypers=hyperparameters)
+
                     print('==========')
                 print('====================')

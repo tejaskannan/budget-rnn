@@ -2,7 +2,6 @@ import re
 import json
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 from matplotlib.axes import Axes
 from argparse import ArgumentParser
 from collections import defaultdict, OrderedDict
@@ -59,7 +58,11 @@ def evaluate_model(model_params: Dict[str, str], dataset: RNNSampleDataset,
 def get_stat(metrics: TestMetrics, stat_name: str) -> float:
     if stat_name == 'median':
         return metrics.median
-    return metrics.mean
+    elif stat_name == 'geom_mean':
+        return metrics.geom_mean
+    elif stat_name == 'mean':
+        return metrics.mean
+    raise ValueError('Unknown stat name: {stat_name}')
 
 
 def plot_axis(test_metrics: Dict[str, TestMetrics],
@@ -73,7 +76,7 @@ def plot_axis(test_metrics: Dict[str, TestMetrics],
     # Sample Fraction vs Squared Error
     for label, metrics in test_metrics.items():
         y = [get_stat(metrics[series][op], stat_name) for op in prediction_ops]
-        ax.errorbar(x=x_values, y=y, fmt='-o', label=label)
+        ax.errorbar(x=x_values, y=y, fmt='-o', label=label, linewidth=1, markersize=3)
 
     ax.legend()
     ax.set_xlabel(xlabel)
@@ -162,9 +165,9 @@ def plot_results(test_metrics: Dict[str, TestMetrics],
               series='abs_percentage_error',
               stat_name=stat_name,
               x_values=sample_fractions,
-              title=f'{stat_label} Symmetric Absolute Percentage Error (SMAPE) on Testing Set',
+              title=f'{stat_label} Absolute Percentage Error ({acronym}APE) on Testing Set',
               xlabel='Input Fraction',
-              ylabel='SMAPE',
+              ylabel=f'{acronym}APE',
               ax=ax3)
 
     plot_axis(test_metrics=test_metrics,
@@ -198,6 +201,36 @@ def plot_results(test_metrics: Dict[str, TestMetrics],
     metrics_file = RichPath.create(output_folder).join('metrics.pkl.gz')
     metrics_file.save_as_compressed_file(test_metrics)
 
+
+#def error_results_as_json(test_metrics: Dict[str, TestMetrics],
+#                          metric_names: List[str],
+#                          output_file: RichPath,
+#                          prediction_ops: List[str]):
+#    results: Dict[str, Any] = dict()
+#    for series, metrics in test_metrics.items():
+# 
+#        metric_summary: Dict[str, Any] = dict()
+#        for metric_name in metric_names:
+#
+#            op_metrics: Dict[str, Dict[str, float]] = dict()
+#            for op in prediction_op:
+#                test_metrics = metrics[metric_name][op]
+#            
+#                #if metric_name == 'squared_error':
+#                #    errors = squared_error(test_metrics.predictions)
+#                #elif metric_name == 'abs_error':
+#                #    errors = abs_error(test_metrics.predictions)
+#                #elif metric_name == 'abs_percentage_error':
+#                #    errors = abs_perc_error(test_metrics.predictions)
+#
+#                op_metrics[op] = dict(mean=test_metrics.mean,
+#                                      std=test_metrics.std)
+#
+#            metric_summary[metric_name] = op_metrics
+#
+#        results[series] = metric_summary
+#
+#    output_file.save_as
 
 if __name__ == '__main__':
     parser = ArgumentParser()

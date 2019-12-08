@@ -116,6 +116,14 @@ class Model:
             init_op = tf.global_variables_initializer()
             self._sess.run(init_op)
 
+    def count_parameters(self) -> int:
+        trainable_vars = self._sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+
+        num_parameters = 0
+        for var in trainable_vars:
+            num_parameters += np.prod(var.shape)
+        return int(num_parameters)
+
     def make(self, is_train: bool):
         """
         Creates model and optimizer op.
@@ -149,8 +157,8 @@ class Model:
 
         # Validate operations
         for loss_op_name in loss_ops:
-                if loss_op_name not in self._ops:
-                    raise ValueError(f'The operation `{loss_op_name}` does not exist.')
+            if loss_op_name not in self._ops:
+                raise ValueError(f'The operation `{loss_op_name}` does not exist.')
 
         optimizer_ops: List[Tuple[tf.Tensor, tf.Tensor]] = []
         for loss_op_name, vars_with_weights in loss_ops.items():
@@ -161,7 +169,7 @@ class Model:
             # Clip Gradients
             clipped_gradients, _ = tf.clip_by_global_norm(gradients, self.hypers.gradient_clip)
 
-            # Prune NoneType values from the set of gradients
+            # Prune NoneType values from the set of gradients and apply gradient weights
             pruned_gradients = [(grad * var.weight, var.variable) for grad, var in zip(clipped_gradients, vars_with_weights) if grad is not None]
 
             optimizer_op = self._optimizer.apply_gradients(pruned_gradients)
@@ -209,6 +217,8 @@ class Model:
         # Make Model and Initialize variables
         self.make(is_train=True)
         self.init()
+
+        print(f'Created model with {self.count_parameters()} trainable parameters.')
 
         train_loss_dict: DefaultDict[str, List[float]] = defaultdict(list)
         valid_loss_dict: DefaultDict[str, List[float]] = defaultdict(list)

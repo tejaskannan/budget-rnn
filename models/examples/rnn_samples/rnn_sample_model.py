@@ -147,12 +147,12 @@ class RNNSampleModel(Model):
             bin_means: List[float] = []
             stride = int(sorted_outputs.shape[0] / (self.hypers.model_params['num_bins'] - 1))
             for i in range(0, sorted_outputs.shape[0], stride):
-                split = sorted_outputs[i:i+stride, :]
-                bin_bounds.append((np.min(split), np.max(split)))
-                bin_means.append(np.average(split))
+                split =sorted_outputs[i:i+stride, :]
+                bin_bouds.append((np.min(split), np.max(split)))
+                bin_meas.append(np.average(split))
 
-            self.metadata['bin_bounds'] = bin_bounds
-            self.metadata['bin_means'] = bin_means
+            self.metadaa['bin_bounds'] = bin_bounds
+            self.metadaa['bin_means'] = bin_means
 
         self.metadata['input_scaler'] = input_scaler
         self.metadata['output_scaler'] = output_scaler
@@ -326,9 +326,7 @@ class RNNSampleModel(Model):
                 difference = expected - unnormalized_prediction
                 squared_error = np.sum(np.square(difference), axis=-1)
                 abs_error = np.sum(np.abs(difference), axis=-1)
-
-                abs_average = 0.5 * (np.abs(expected) + np.abs(unnormalized_prediction))
-                abs_percentage_error = np.sum(np.abs(difference) / abs_average, axis=-1)
+                abs_percentage_error = np.sum(np.abs(difference) / (expected + 1e-7), axis=-1)
 
                 predictions = [Prediction(sample_id=s, prediction=p[0], expected=e[0]) for s, p, e in zip(batch['sample_id'], unnormalized_prediction, expected)]
 
@@ -440,7 +438,9 @@ class RNNSampleModel(Model):
             outputs.append(output)
 
         self._ops['predictions'] = tf.concat([tf.expand_dims(t, axis=1) for t in outputs], axis=1)
-        self._loss_ops = self._make_loss_ops(use_previous_layers=False)
+
+        use_previous_layers = self.model_type == RNNModelType.CHUNKED
+        self._loss_ops = self._make_loss_ops(use_previous_layers=use_previous_layers)
 
     def make_rnn_sample_model(self, is_train: bool):
         outputs: List[tf.Tensor] = []
@@ -473,9 +473,7 @@ class RNNSampleModel(Model):
             states_list.append(states)
 
             # B x D
-            # final_state = final_state[rnn_layers - 1, :, :]
             final_output = rnn_outputs.read(last_index)
-
             rnn_output = pool_rnn_outputs(rnn_outputs, final_output, pool_mode=self.hypers.model_params['pool_mode'])
 
             if self.hypers.model_params.get('bin_outputs', False):
@@ -504,7 +502,7 @@ class RNNSampleModel(Model):
 
         combined_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), outputs), axis=1)
         self._ops['predictions'] = combined_outputs  # B x N x D'
-        self._loss_ops = self._make_loss_ops()
+        self._loss_ops = self._make_loss_ops(use_previous_layers=True)
 
     def make_loss(self):
         losses: List[tf.Tensor] = []
@@ -529,7 +527,7 @@ class RNNSampleModel(Model):
             var_prefixes[layer_name] = 1.0
 
             layer_vars = var_filter(trainable_vars, var_prefixes)
-            if self.hypers.model_params['share_cell_weights'] or self.model_type == RNNModelType.CASCADE:
+            if self.hypers.model_params['share_cell_weights'] or self.model_type in (RNNModelType.CASCADE, RNNModelType.SINGLE):
                 # Always include the RNN cell weights
                 cell_vars = [VariableWithWeight(var, 1.0) for var in trainable_vars if 'rnn-cell' in var.name]
                 layer_vars.extend(cell_vars)

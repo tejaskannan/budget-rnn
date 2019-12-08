@@ -20,6 +20,8 @@ def find_best_model(model_type: str, dataset: str, model_folder: RichPath) -> st
             if avg_valid_loss < best_model_loss:
                 best_model_loss = avg_valid_loss
 
+        print(model_train_log)
+        print(best_model_loss)
         if best_model_loss < best_loss:
             best_loss = best_model_loss
 
