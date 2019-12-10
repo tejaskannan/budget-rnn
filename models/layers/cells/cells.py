@@ -298,13 +298,13 @@ class LSTM(RNNCell):
                                    shape=[self.state_size, self.output_units],
                                    trainable=True)
         self.U_i = tf.get_variable(name=f'{self.name}-U-i',
-                                 initializer=self.initializer,
-                                 shape=[self.input_units, self.output_units],
-                                 trainable=True)
+                                   initializer=self.initializer,
+                                   shape=[self.input_units, self.output_units],
+                                   trainable=True)
         self.b_i = tf.get_variable(name=f'{self.name}-b-i',
-                                 initializer=self.initializer,
-                                 shape=[1, self.output_units],
-                                 trainable=True)
+                                   initializer=self.initializer,
+                                   shape=[1, self.output_units],
+                                   trainable=True)
 
         self.W_o = tf.get_variable(name=f'{self.name}-W-o',
                                    initializer=self.initializer,

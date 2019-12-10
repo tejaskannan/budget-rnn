@@ -20,7 +20,7 @@ def rnn_decoder(embedding: tf.Tensor,
                 initial_state: tf.Tensor,
                 is_train: bool,
                 maximum_iterations: int = 100) -> Tuple[tf.Tensor, tf.Tensor]:
-    
+
     # Create RNN cell and output layer (which produces log probabilities)
     cell = rnn_cell(cell_type=cell_type,
                     num_units=state_size,
@@ -33,7 +33,7 @@ def rnn_decoder(embedding: tf.Tensor,
                                        use_bias=False,
                                        kernel_initializer=tf.initializers.glorot_uniform(),
                                        name='decoder-projection-layer')
-    
+
     # Tensorflow will complain about NoneType dimensions in the initial state,
     # so set the shape explicitly here
     initial_state.set_shape([batch_size, initial_state.get_shape()[1]])
@@ -63,7 +63,7 @@ def rnn_decoder(embedding: tf.Tensor,
                                                        output_layer=projection_layer)
         outputs, beam_state, length = tf.contrib.seq2seq.dynamic_decode(decoder, maximum_iterations=maximum_iterations)
         ids, log_probs = outputs.predicted_ids[:, :, 0], beam_state.log_probs[:, 0]
- 
+
         return ids, log_probs
 
 
@@ -96,7 +96,7 @@ def rnn_decoder_with_attention(memory: tf.Tensor,
                                        use_bias=False,
                                        kernel_initializer=tf.initializers.glorot_uniform(),
                                        name='decoder-projection-layer')
-    
+
     # Tensorflow will complain about NoneType dimensions in the initial state,
     # so set the shape explicitly here
     initial_state.set_shape([batch_size, initial_state.get_shape()[1]])
@@ -104,7 +104,7 @@ def rnn_decoder_with_attention(memory: tf.Tensor,
     if is_train:
         if input_sequence is None:
             raise ValueError('The input sequence cannot be None in training mode.')
-        
+
         # Wrap the RNN cell with the attention layer
         attention_layer = tf.contrib.seq2seq.BahdanauAttention(num_units=state_size,
                                                                memory=memory,
@@ -150,7 +150,7 @@ def rnn_decoder_with_attention(memory: tf.Tensor,
                                                        output_layer=projection_layer)
         outputs, beam_state, length = tf.contrib.seq2seq.dynamic_decode(decoder, maximum_iterations=maximum_iterations)
         ids, log_probs = outputs.predicted_ids[:, :, 0], beam_state.log_probs[:, 0]
- 
+
         return ids, log_probs
 
 
@@ -199,12 +199,12 @@ def rnn_decoder_with_copying(memory: tf.Tensor,
     if is_train:
         if input_sequence is None:
             raise ValueError('The input sequence cannot be None in training mode.')
-        
+
         # Wrap the RNN cell with the attention layer
         attention_layer = tf.contrib.seq2seq.BahdanauAttention(num_units=state_size,
                                                                memory=memory,
                                                                memory_sequence_length=memory_seq_lengths,
-                                                               dtype=tf.float32) 
+                                                               dtype=tf.float32)
         copying_cell = CopyingWrapper(cell=cell,
                                       copying_mechanism=attention_layer,
                                       memory_out_ids=memory_out_ids,
@@ -254,5 +254,5 @@ def rnn_decoder_with_copying(memory: tf.Tensor,
                                                        beam_width=beam_width)
         outputs, beam_state, length = tf.contrib.seq2seq.dynamic_decode(decoder, maximum_iterations=maximum_iterations)
         ids, log_probs = outputs.predicted_ids[:, :, 0], beam_state.log_probs[:, 0]
- 
+
         return ids, log_probs

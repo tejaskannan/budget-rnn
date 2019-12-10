@@ -25,6 +25,7 @@ def train(data_folder: str, save_folder: RichPath, hypers: HyperParameters, max_
     train_label = model.train(dataset=dataset)
     return train_label
 
+
 def test(name: str, data_folder: str, save_folder: RichPath, hypers: HyperParameters):
     model = RNNSampleModel(hyper_parameters=hypers, save_folder=save_folder)
 
@@ -44,6 +45,7 @@ def test(name: str, data_folder: str, save_folder: RichPath, hypers: HyperParame
 
     test_result_file = save_folder.join(f'model-test-log-{name}.pkl.gz')
     test_result_file.save_as_compressed_file(test_results)
+
 
 if __name__ == '__main__':
     parser = ArgumentParser()
@@ -103,7 +105,7 @@ if __name__ == '__main__':
                                  save_folder=save_folder,
                                  hypers=hyperparameters,
                                  max_epochs=max_epochs)
-                    
+
                     print('Completed training. Started testing...')
                     test(name=name,
                          data_folder=data_folder,

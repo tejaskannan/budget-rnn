@@ -6,6 +6,7 @@ from datetime import datetime
 
 from processing_utils import try_convert_to_float
 
+
 def convert_row(record: List[str]):
     year = int(record[1])
     month = int(record[2])
@@ -24,6 +25,7 @@ def convert_row(record: List[str]):
                 dew_point=try_convert_to_float(record[13], None),
                 rain=try_convert_to_float(record[14], None),
                 wind_speed=try_convert_to_float(record[16], None))
+
 
 def process(input_folder: RichPath, output_folder: RichPath, chunk_size: int = 50000):
     output_folder.make_as_dir()

@@ -11,7 +11,6 @@ def pool_sequence(embeddings: tf.Tensor, mask: tf.Tensor, pool_mode: str) -> tf.
         embeddings: A B x T x K tensor
         seq_lengths: A B x T
     """
-    
     pool_mode = pool_mode.lower()
     if pool_mode == 'sum':
         masked_embeddings = embeddings * tf.cast(tf.expand_dims(mask), dtype=embeddings.dtype)
@@ -140,7 +139,7 @@ def rnn_cell(cell_type: str,
              state_is_tuple: bool = True) -> tf.nn.rnn_cell.RNNCell:
     if num_layers is not None and num_layers <= 0:
         raise ValueError(f'The number of layers must be non-negative. Received ({num_layers}).')
-    
+
     cell_type = cell_type.lower()
 
     def make_cell(cell_type: str, name: str):

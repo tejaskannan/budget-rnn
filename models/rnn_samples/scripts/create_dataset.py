@@ -115,6 +115,7 @@ def create(input_folder: RichPath,
 
     print(f'Wrote a total of {total} records.')
 
+
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--input-folder', type=str, required=True)

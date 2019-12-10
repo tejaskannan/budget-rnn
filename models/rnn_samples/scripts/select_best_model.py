@@ -32,7 +32,6 @@ def find_best_model(model_type: str, dataset: str, model_folder: RichPath) -> st
     return best_model
 
 
-
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--model-types', type=str, nargs='+')

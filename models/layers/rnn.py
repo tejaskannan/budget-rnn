@@ -142,7 +142,7 @@ def dropped_rnn(inputs: tf.Tensor,
 
     def step(index, outputs, states, gates):
         step_inputs = tf.gather(inputs, indices=index, axis=1)  # B x D
-        
+
         # Randomly draw T values and store drop/keep decision as a binary vector
         step_horizon = tf.minimum(index + 1, horizon)
         rand_drop_values = tf.random.uniform(shape=(step_horizon, rnn_layers, batch_size, 1), minval=0.0, maxval=1.0)

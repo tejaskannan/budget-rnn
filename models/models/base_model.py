@@ -33,7 +33,7 @@ class Model:
         self.hypers = hyper_parameters
         self.save_folder = to_rich_path(save_folder)
         self.metadata: Dict[str, Any] = dict()
-        
+
         self._sess = tf.Session(graph=tf.Graph())
         self._optimizer = get_optimizer(self.hypers.optimizer, self.hypers.learning_rate)
         self._ops: Dict[str, tf.Tensor] = dict()
@@ -365,7 +365,7 @@ class Model:
             if varname_dict is not None:
                 for loss_op_name, variable_names in varname_dict.items():
                     model_path = self.save_folder.join(f'model-{name}-{loss_op_name}.ckpt')
-                    
+
                     variables = list(filter(lambda v: v.name in variable_names, trainable_vars))
                     saver = tf.train.Saver(variables)
                     saver.restore(self._sess, model_path.path)

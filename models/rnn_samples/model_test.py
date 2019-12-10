@@ -57,7 +57,7 @@ def evaluate_model(model_params: Dict[str, str], dataset: RNNSampleDataset,
 
 def get_stat(metrics: List[TestMetrics], stat_name: str) -> float:
     values: List[float] = []
-    
+
     for metric in metrics:
         if stat_name == 'median':
             values.append(metric.median)
@@ -69,7 +69,7 @@ def get_stat(metrics: List[TestMetrics], stat_name: str) -> float:
             raise ValueError('Unknown stat name: {stat_name}')
 
     if stat_name == 'median':
-        return np.median(values) # This is not technically correct but is good enough for now
+        return np.median(values)  # This is not technically correct but is good enough for now
     elif stat_name == 'geom_mean':
         return np.prod(values)**(1.0 / len(metrics))
     elif stat_name == 'mean':
@@ -89,12 +89,6 @@ def plot_axis(test_metrics: Dict[str, List[TestMetrics]],
     for label, metrics in test_metrics.items():
         y = [get_stat([m[series][op] for m in metrics], stat_name) for op in prediction_ops]
         ax.errorbar(x=x_values, y=y, fmt='-o', label=label, linewidth=2, markersize=5)
-
-        y_str  = ' & '.join([f'{a:.3f}' for a in y])
-        print(f'Stat: {stat_name}')
-        print(f'Label: {label}')
-        print(f'Errors: {y_str}')
-        print('==========')
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
@@ -165,14 +159,8 @@ def plot_latency(test_metrics: Dict[str, List[TestMetrics]],
         else:
             raise ValueError(f'Unknown stat name {stat_name}.')
 
-        y_str = ' & '.join([f'{a:.3f} ($\pm {b:.3f}$)' for a, b in zip(y, yerr)])
-        print(f'Stat: {stat_name}')
-        print(f'Series: {series}')
-        print(f'Latencies: {y_str}')
-        print('==========')
-
         ax.errorbar(x=sample_fractions, y=y, fmt='-o', capsize=2, label=series, linewidth=2, markersize=5)
-    
+
     stat_label, acronym = STAT_LABEL_DICT[stat_name]
 
     ax.set_xlabel('Input Fraction')
@@ -236,7 +224,7 @@ def plot_errors(test_metrics: Dict[str, List[TestMetrics]],
 
     handles, labels = ax2.get_legend_handles_labels()
     fig.legend(handles, labels)
-    
+
     plt.tight_layout()
 
     if output_folder is None:

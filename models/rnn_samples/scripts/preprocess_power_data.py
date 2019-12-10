@@ -6,6 +6,7 @@ from datetime import datetime
 
 from processing_utils import try_convert_to_float
 
+
 def convert_row(record: List[str]):
     date = datetime.strptime(record[0], '%d/%m/%Y')
     time = datetime.strptime(record[1], '%H:%M:%S')

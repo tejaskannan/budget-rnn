@@ -147,7 +147,7 @@ class RNNSampleModel(Model):
             bin_means: List[float] = []
             stride = int(sorted_outputs.shape[0] / (self.hypers.model_params['num_bins'] - 1))
             for i in range(0, sorted_outputs.shape[0], stride):
-                split =sorted_outputs[i:i+stride, :]
+                split = sorted_outputs[i:i+stride, :]
                 bin_bouds.append((np.min(split), np.max(split)))
                 bin_meas.append(np.average(split))
 
