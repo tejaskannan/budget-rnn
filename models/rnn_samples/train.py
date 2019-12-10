@@ -40,7 +40,7 @@ def test(name: str, data_folder: str, save_folder: RichPath, hypers: HyperParame
 
     test_results = model.predict(dataset=dataset,
                                  name=model.name,
-                                 test_batch_size=1)
+                                 test_batch_size=hypers.batch_size)
 
     test_result_file = save_folder.join(f'model-test-log-{name}.pkl.gz')
     test_result_file.save_as_compressed_file(test_results)

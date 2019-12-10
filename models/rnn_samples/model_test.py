@@ -55,17 +55,29 @@ def evaluate_model(model_params: Dict[str, str], dataset: RNNSampleDataset,
     return metrics
 
 
-def get_stat(metrics: TestMetrics, stat_name: str) -> float:
+def get_stat(metrics: List[TestMetrics], stat_name: str) -> float:
+    values: List[float] = []
+    
+    for metric in metrics:
+        if stat_name == 'median':
+            values.append(metric.median)
+        elif stat_name == 'geom_mean':
+            values.append(metric.geom_mean)
+        elif stat_name == 'mean':
+            values.append(metric.mean)
+        else:
+            raise ValueError('Unknown stat name: {stat_name}')
+
     if stat_name == 'median':
-        return metrics.median
+        return np.median(values) # This is not technically correct but is good enough for now
     elif stat_name == 'geom_mean':
-        return metrics.geom_mean
+        return np.prod(values)**(1.0 / len(metrics))
     elif stat_name == 'mean':
-        return metrics.mean
+        return np.average(values)
     raise ValueError('Unknown stat name: {stat_name}')
 
 
-def plot_axis(test_metrics: Dict[str, TestMetrics],
+def plot_axis(test_metrics: Dict[str, List[TestMetrics]],
               series: str,
               stat_name: str,
               x_values: List[float],
@@ -75,10 +87,15 @@ def plot_axis(test_metrics: Dict[str, TestMetrics],
               ax: Axes):
     # Sample Fraction vs Squared Error
     for label, metrics in test_metrics.items():
-        y = [get_stat(metrics[series][op], stat_name) for op in prediction_ops]
-        ax.errorbar(x=x_values, y=y, fmt='-o', label=label, linewidth=1, markersize=3)
+        y = [get_stat([m[series][op] for m in metrics], stat_name) for op in prediction_ops]
+        ax.errorbar(x=x_values, y=y, fmt='-o', label=label, linewidth=2, markersize=5)
 
-    ax.legend()
+        y_str  = ' & '.join([f'{a:.3f}' for a in y])
+        print(f'Stat: {stat_name}')
+        print(f'Label: {label}')
+        print(f'Errors: {y_str}')
+        print('==========')
+
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
@@ -92,7 +109,7 @@ def plot_predictions(metrics: TestMetrics,
                      sample_frac: float):
     with plt.style.context('ggplot'):
 
-        fig, ax = plt.subplots(1, 1, figsize=(12, 9))
+        fig, ax = plt.subplots(1, 1, figsize=(12, 5))
 
         predictions = next(iter(metrics.predictions.values()))
         dates = [pred.sample_id for pred in predictions]
@@ -121,12 +138,68 @@ def plot_predictions(metrics: TestMetrics,
             plt.savefig(join(output_folder, f'{series}_predicted_values.pdf'))
 
 
-def plot_results(test_metrics: Dict[str, TestMetrics],
+def plot_latency(test_metrics: Dict[str, List[TestMetrics]],
                  prediction_ops: List[str],
                  sample_frac: float,
                  output_folder: Optional[str],
-                 stat_name: str,
-                 test_params: Dict[str, Any]):
+                 dataset_name: str,
+                 stat_name: str):
+    sample_fractions = [(i+1) * sample_frac for i in range(len(prediction_ops))]
+
+    # Create axis
+    fig, ax = plt.subplots(1, 1, figsize=(7, 4))
+
+    stat_name = stat_name.lower()
+    for series, metrics_list in test_metrics.items():
+        metrics = metrics_list[0]
+
+        if stat_name == 'median':
+            y = [metrics.latency[op].median for op in prediction_ops]
+            yerr = [[metrics.latency[op].first_quartile, metrics.latency[op].third_quartile] for op in prediction_ops]
+        elif stat_name == 'mean':
+            y = [metrics.latency[op].mean for op in prediction_ops]
+            yerr = [metrics.latency[op].std for op in prediction_ops]
+        elif stat_name == 'geom_mean':
+            y = [metrics.latency[op].geom_mean for op in prediction_ops]
+            yerr = [metrics.latency[op].geom_std for op in prediction_ops]
+        else:
+            raise ValueError(f'Unknown stat name {stat_name}.')
+
+        y_str = ' & '.join([f'{a:.3f} ($\pm {b:.3f}$)' for a, b in zip(y, yerr)])
+        print(f'Stat: {stat_name}')
+        print(f'Series: {series}')
+        print(f'Latencies: {y_str}')
+        print('==========')
+
+        ax.errorbar(x=sample_fractions, y=y, fmt='-o', capsize=2, label=series, linewidth=2, markersize=5)
+    
+    stat_label, acronym = STAT_LABEL_DICT[stat_name]
+
+    ax.set_xlabel('Input Fraction')
+    ax.set_ylabel('Latency (ms)')
+    ax.set_title(f'{stat_label} Inference Latency on the {dataset_name} Dataset')
+    ax.set_xticks(ticks=sample_fractions)
+    ax.legend()
+
+    plt.tight_layout()
+
+    if output_folder is None:
+        plt.show()
+        return
+
+    output_folder_path = RichPath.create(output_folder)
+    output_folder_name = split(output_folder)[1] + '-' + stat_name
+    plot_file = output_folder_path.join(output_folder_name + '-latency.pdf')
+    plt.savefig(plot_file.path)
+
+
+def plot_errors(test_metrics: Dict[str, List[TestMetrics]],
+                prediction_ops: List[str],
+                sample_frac: float,
+                output_folder: Optional[str],
+                dataset_name: str,
+                stat_name: str,
+                test_params: Dict[str, Any]):
     if len(test_metrics) <= 0:
         raise ValueError('Must provde some metrics to graph.')
 
@@ -138,7 +211,7 @@ def plot_results(test_metrics: Dict[str, TestMetrics],
     sample_fractions = [(i+1) * sample_frac for i in range(len(prediction_ops))]
 
     # Create axes
-    fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(16, 9))
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 5))
 
     stat_label, acronym = STAT_LABEL_DICT[stat_name]
 
@@ -147,38 +220,23 @@ def plot_results(test_metrics: Dict[str, TestMetrics],
               series='squared_error',
               stat_name=stat_name,
               x_values=sample_fractions,
-              title=f'{stat_label} Squared Error ({acronym}SE) on Testing Set',
+              title=f'{stat_label} Squared Error ({acronym}SE) on the {dataset_name} Dataset',
               xlabel='Input Fraction',
               ylabel=f'{acronym}SE',
               ax=ax1)
 
     plot_axis(test_metrics=test_metrics,
-              series='abs_error',
-              stat_name=stat_name,
-              x_values=sample_fractions,
-              title=f'{stat_label} Absolute Error ({acronym}AE) on Testing Set',
-              xlabel='Input Fraction',
-              ylabel=f'{acronym}AE',
-              ax=ax2)
-
-    plot_axis(test_metrics=test_metrics,
               series='abs_percentage_error',
               stat_name=stat_name,
               x_values=sample_fractions,
-              title=f'{stat_label} Absolute Percentage Error ({acronym}APE) on Testing Set',
+              title=f'{stat_label} Absolute Percentage Error ({acronym}APE) on the {dataset_name} Dataset',
               xlabel='Input Fraction',
               ylabel=f'{acronym}APE',
-              ax=ax3)
+              ax=ax2)
 
-    plot_axis(test_metrics=test_metrics,
-              series='latency',
-              stat_name=stat_name,
-              x_values=sample_fractions,
-              title=f'{stat_label} Inference Latency on Testing Set',
-              xlabel='Input Fraction',
-              ylabel=f'{stat_label}\nLatency (ms)',
-              ax=ax4)
-
+    handles, labels = ax2.get_legend_handles_labels()
+    fig.legend(handles, labels)
+    
     plt.tight_layout()
 
     if output_folder is None:
@@ -202,36 +260,6 @@ def plot_results(test_metrics: Dict[str, TestMetrics],
     metrics_file.save_as_compressed_file(test_metrics)
 
 
-#def error_results_as_json(test_metrics: Dict[str, TestMetrics],
-#                          metric_names: List[str],
-#                          output_file: RichPath,
-#                          prediction_ops: List[str]):
-#    results: Dict[str, Any] = dict()
-#    for series, metrics in test_metrics.items():
-# 
-#        metric_summary: Dict[str, Any] = dict()
-#        for metric_name in metric_names:
-#
-#            op_metrics: Dict[str, Dict[str, float]] = dict()
-#            for op in prediction_op:
-#                test_metrics = metrics[metric_name][op]
-#            
-#                #if metric_name == 'squared_error':
-#                #    errors = squared_error(test_metrics.predictions)
-#                #elif metric_name == 'abs_error':
-#                #    errors = abs_error(test_metrics.predictions)
-#                #elif metric_name == 'abs_percentage_error':
-#                #    errors = abs_perc_error(test_metrics.predictions)
-#
-#                op_metrics[op] = dict(mean=test_metrics.mean,
-#                                      std=test_metrics.std)
-#
-#            metric_summary[metric_name] = op_metrics
-#
-#        results[series] = metric_summary
-#
-#    output_file.save_as
-
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--test-params-file', type=str, required=True)
@@ -241,31 +269,31 @@ if __name__ == '__main__':
     with open(args.test_params_file, 'r') as test_params_file:
         test_params = json.load(test_params_file)
 
-    metrics: Dict[str, TestMetrics] = dict()
+    metrics: DefaultDict[str, TestMetrics] = defaultdict(list)
     num_models = len(test_params['models'])
 
     model_folder = RichPath.create(test_params['model_folder'])
 
     for i, model_params in enumerate(test_params['models']):
         model_test_log = model_folder.join(model_params['test_log_path'])
-        metrics[model_params['model_name']] = model_test_log.read_by_file_suffix()
+        metrics[model_params['model_name']].append(model_test_log.read_by_file_suffix())
 
     sample_frac = test_params['sample_frac']
     num_outputs = int(1.0 / sample_frac)
     prediction_ops = [f'prediction_{i}' for i in range(num_outputs)]
 
     output_folder = test_params.get('output_folder')
-    for stat_name in ['mean', 'median', 'geom_mean']:
-        plot_results(test_metrics=metrics,
+    for stat_name in ['mean', 'geom_mean']:
+        plot_errors(test_metrics=metrics,
+                    sample_frac=sample_frac,
+                    prediction_ops=prediction_ops,
+                    output_folder=output_folder,
+                    dataset_name=test_params['dataset_name'],
+                    stat_name=stat_name,
+                    test_params=test_params)
+        plot_latency(test_metrics=metrics,
                      sample_frac=sample_frac,
                      prediction_ops=prediction_ops,
                      output_folder=output_folder,
-                     stat_name=stat_name,
-                     test_params=test_params)
-
-    for series, series_metrics in metrics.items():
-        plot_predictions(metrics=series_metrics,
-                         series=series,
-                         output_name=test_params['output_name'],
-                         output_folder=output_folder,
-                         sample_frac=sample_frac)
+                     dataset_name=test_params['dataset_name'],
+                     stat_name=stat_name)
