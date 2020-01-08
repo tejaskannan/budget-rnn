@@ -1,4 +1,5 @@
 import tensorflow as tf
+
 import numpy as np
 import re
 import time
@@ -16,6 +17,7 @@ from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
 from testing_utils import TestMetrics, Prediction
+from policies.base_policy import get_policy
 
 
 VAR_NAME_REGEX = re.compile(r'.*(layer-[0-9])+.*')
@@ -279,6 +281,10 @@ class RNNSampleModel(Model):
             feed_dict = self.batch_to_feed_dict(batch, is_train=False)
             op_results: Dict[str, Any] = dict()
 
+            # Test the anytime inference (and stop here for now)
+            results = self.anytime_inference(feed_dict, policy_name='ops_per_sec', policy_params=dict(ops_per_sec=25))
+            return results
+
             # Execute operations individually for better profiling
             for i in range(len(prediction_ops)):
                 ops_to_run = prediction_ops[0:i+1]
@@ -515,6 +521,34 @@ class RNNSampleModel(Model):
         weighted_losses = tf.reduce_sum(losses * self._placeholders['loss_weights'], axis=-1)  # Scalar
 
         self._ops['loss'] = weighted_losses
+
+    def anytime_inference(self, feed_dict: Dict[tf.Tensor, List[Any]], policy_name: str, policy_params: Dict[str, Any]) -> Dict[str, np.ndarray]:
+        results: Dict[str, np.ndarray] = dict()
+        policy = get_policy(policy_name, policy_params)
+
+        with self.sess.graph.as_default():
+            prediction_level = 0
+
+            prediction_ops = [self._ops[op_name] for op_name in self.prediction_ops]
+            placeholders = list(self._placeholders.values())
+            handle = self.sess.partial_run_setup(prediction_ops, placeholders)
+
+            start = time.time()
+
+            time_so_far = time.time() - start
+            while prediction_level < len(prediction_ops) and policy.should_continue(prediction_level, time_so_far):
+                prediction_op = prediction_ops[prediction_level]
+                op_name = self.prediction_ops[prediction_level]
+
+                # Filter feed dict to avoid feeding the same inputs multiple times
+                op_feed_dict = {key: value for key, value in feed_dict.items() if key.name.endswith(str(prediction_level))}
+
+                prediction = self.sess.partial_run(handle, prediction_op, feed_dict=op_feed_dict)
+                results[op_name] = prediction
+                prediction_level += 1
+                time_so_far = time.time() - start
+
+        return results
 
     def _make_loss_ops(self, use_previous_layers: bool = True) -> OrderedDict:
         loss_ops = OrderedDict()

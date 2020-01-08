@@ -55,6 +55,10 @@ class Model:
     def loss_op_names(self) -> List[str]:
         return ['loss']
 
+    @property
+    def sess(self) -> tf.Session:
+        return self._sess
+
     def get_variable_group(self, loss_op_name: str) -> List[tf.Variable]:
         return [var for var in self._sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)]
 
@@ -147,7 +151,7 @@ class Model:
         for better numerical stability.
 
         Args:
-            loss_ops: Optional dictionary mapping loss operations to a the set of trainable variables.
+            loss_ops: Optional dictionary mapping loss operations to a list of trainable variables.
                 The learning rates can be individually scaled for each variable.
         """
         if loss_ops is None:
@@ -169,7 +173,7 @@ class Model:
             # Clip Gradients
             clipped_gradients, _ = tf.clip_by_global_norm(gradients, self.hypers.gradient_clip)
 
-            # Prune NoneType values from the set of gradients and apply gradient weights
+            # Prune None values from the set of gradients and apply gradient weights
             pruned_gradients = [(grad * var.weight, var.variable) for grad, var in zip(clipped_gradients, vars_with_weights) if grad is not None]
 
             optimizer_op = self._optimizer.apply_gradients(pruned_gradients)
