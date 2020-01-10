@@ -17,7 +17,6 @@ from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
 from testing_utils import TestMetrics, Prediction
-from policies.base_policy import get_policy
 
 
 VAR_NAME_REGEX = re.compile(r'.*(layer-[0-9])+.*')
@@ -281,10 +280,6 @@ class RNNSampleModel(Model):
             feed_dict = self.batch_to_feed_dict(batch, is_train=False)
             op_results: Dict[str, Any] = dict()
 
-            # Test the anytime inference (and stop here for now)
-            results = self.anytime_inference(feed_dict, policy_name='ops_per_sec', policy_params=dict(ops_per_sec=25))
-            return results
-
             # Execute operations individually for better profiling
             for i in range(len(prediction_ops)):
                 ops_to_run = prediction_ops[0:i+1]
@@ -522,33 +517,61 @@ class RNNSampleModel(Model):
 
         self._ops['loss'] = weighted_losses
 
-    def anytime_inference(self, feed_dict: Dict[tf.Tensor, List[Any]], policy_name: str, policy_params: Dict[str, Any]) -> Dict[str, np.ndarray]:
-        results: Dict[str, np.ndarray] = dict()
-        policy = get_policy(policy_name, policy_params)
-
+    def anytime_inference(self, feed_dict: Dict[tf.Tensor, List[Any]],
+                          max_num_levels: int,
+                          processing_params: Dict[str, float],
+                          system_energy: float,
+                          period_time: float,
+                          inference_time: float,
+                          min_energy: float,
+                          recharge_rate: float) -> Tuple[Optional[np.ndarray], float, float, int]:
+        """
+        Executes anytime inference with the given inference and system parameters.
+        """
+        remaining_time = inference_time - period_time
         with self.sess.graph.as_default():
-            prediction_level = 0
 
+            # Initialize partial run settings
             prediction_ops = [self._ops[op_name] for op_name in self.prediction_ops]
             placeholders = list(self._placeholders.values())
             handle = self.sess.partial_run_setup(prediction_ops, placeholders)
 
-            start = time.time()
-
-            time_so_far = time.time() - start
-            while prediction_level < len(prediction_ops) and policy.should_continue(prediction_level, time_so_far):
+            prediction_level = 0
+            while prediction_level < max_num_levels:
                 prediction_op = prediction_ops[prediction_level]
                 op_name = self.prediction_ops[prediction_level]
 
                 # Filter feed dict to avoid feeding the same inputs multiple times
                 op_feed_dict = {key: value for key, value in feed_dict.items() if key.name.endswith(str(prediction_level))}
-
                 prediction = self.sess.partial_run(handle, prediction_op, feed_dict=op_feed_dict)
-                results[op_name] = prediction
-                prediction_level += 1
-                time_so_far = time.time() - start
 
-        return results
+                step_energy = max(processing_params['energy'] + np.random.normal(loc=0.0, scale=processing_params['energy_noise']), 0.0)
+                step_time = max(processing_params['time'] + np.random.normal(loc=0.0, scale=processing_params['time_noise']), 0.0)
+
+                # Accumulate period time
+                period_time += step_time
+
+                # There is not enough energy to compute this result
+                if system_energy - step_energy < min_energy:
+                    if prediction_level == 0:
+                        return None, min_energy, period_time, 0
+                    return result, min_energy, period_time, prediction_level + 1
+
+                # Safely deduct from the system energy
+                system_energy -= step_energy
+
+                # There is not enough time to compute this result
+                if period_time > inference_time:
+                    if prediction_level == 0:
+                        result = prediction
+                        prediction_level += 1
+                    break
+
+                # Advance the prediction level
+                result = prediction
+                prediction_level += 1
+
+        return result, system_energy, period_time, prediction_level
 
     def _make_loss_ops(self, use_previous_layers: bool = True) -> OrderedDict:
         loss_ops = OrderedDict()
