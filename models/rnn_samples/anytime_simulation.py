@@ -12,6 +12,7 @@ from rnn_sample_model import RNNSampleModel
 from rnn_sample_dataset import RNNSampleDataset
 from policies import InferencePolicy, RechargeEstimator
 from utils.hyperparameters import extract_hyperparameters
+from plot_anytime_results import plot_energy
 
 
 Bounds = namedtuple('Bounds', ['min', 'max'])
@@ -70,6 +71,10 @@ def evaluate(model: RNNSampleModel,
     error_dict: Dict[float, float] = dict()  # time -> mean squared error
     inference_dict: Dict[float, float] = dict()  # time -> inference rate
 
+    # Initialize tracking
+    energy_dict[0] = energy_bounds.max
+    inference_dict[0] = 0
+
     for batch in test_batch_generator:
         
         # Exit if the experiment is over
@@ -87,9 +92,11 @@ def evaluate(model: RNNSampleModel,
             system_energy -= max(collection_params['energy'] + np.random.normal(loc=0.0, scale=collection_params['energy_noise']), 0.0)
             period_time += max(collection_params['time'] + np.random.normal(loc=0.0, scale=collection_params['time_noise']), 0.0)
 
-        # Log to energy dictionary
+            # Log to energy dictionary
+            energy_dict[system_time + period_time] = system_energy
+
+        # accumulate system time
         system_time += period_time
-        energy_dict[system_time] = system_energy
 
         # Estimate the recharge rate
         estimated_recharge_rate = recharge_estimator.estimate()
@@ -128,7 +135,16 @@ def evaluate(model: RNNSampleModel,
         recharge_estimator.update(true_recharge_rate)
         inference_policy.update(-1 * np.square(computed_levels - num_levels))
 
-    print(energy_dict)
+    # Save results
+    output_folder.make_as_dir()
+    energy_results_file = output_folder.join('energy_results.pkl.gz')
+    energy_results_file.save_as_compressed_file(energy_dict)
+
+    inference_results_file = output_folder.join('inference_results.pkl.gz')
+    inference_results_file.save_as_compressed_file(inference_dict)
+
+    # Call plotting script
+    plot_energy(energy_data=energy_dict, min_energy=energy_bounds.min, max_energy=energy_bounds.max)
 
 
 def initialize_dataset(dataset_folder: str) -> RNNSampleDataset:
