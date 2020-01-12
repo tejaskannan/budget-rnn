@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 from argparse import ArgumentParser
 from dpu_utils.utils import RichPath
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 
 def plot_energy(energy_data: Dict[float, float],
@@ -48,6 +48,33 @@ def plot_energy(energy_data: Dict[float, float],
             plt.savefig(output_file.path)
         else:
             plt.show()
+
+    plt.close()
+
+def plot_levels(selected_levels: List[int], max_num_levels: int,  output_folder: RichPath):
+
+    with plt.style.context('ggplot'):
+        # Get style colors
+        colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
+        fig, ax = plt.subplots()
+
+        for level in range(1, max_num_levels + 1):
+            xs = [i for i, ell in enumerate(selected_levels) if ell == level]
+            ys = [level for _ in range(len(xs))]
+            ax.scatter(xs, ys, color=colors[level - 1], label=f'Level {level}')
+
+        ax.set_title('Selected Output Levels per Iteration')
+        ax.set_ylabel('Selected Level')
+        ax.set_xlabel('Iteration')
+
+        if output_folder is not None:
+            output_file = output_folder.join('selected_levels.pdf')
+            plt.savefig(output_file.path)
+        else:
+            plt.show()
+
+    plt.close()
 
 if __name__ == '__main__':
     parser = ArgumentParser()

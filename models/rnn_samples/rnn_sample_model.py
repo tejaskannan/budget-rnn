@@ -538,6 +538,7 @@ class RNNSampleModel(Model):
             handle = self.sess.partial_run_setup(prediction_ops, placeholders)
 
             prediction_level = 0
+            result = None
             while prediction_level < max_num_levels:
                 prediction_op = prediction_ops[prediction_level]
                 op_name = self.prediction_ops[prediction_level]
@@ -565,12 +566,15 @@ class RNNSampleModel(Model):
                 energy_delta = max_energy - system_energy
                 time_delta = inference_time - period_time
                 
-                # print(f'Time delta: {time_delta}, Energy delta: {energy_delta}, Recharge rate: {recharge_rate}')
-                
                 if time_delta * recharge_rate <= energy_delta:
                     if prediction_level == 0:
                         result = prediction
                         prediction_level += 1
+
+                    # On an intermittent system, we might want to assume we can interrupt progress at any time
+                    # Thus, we set the period time as if we halted execution right when we see
+                    # time_delta * recharge_rate == energy_delta. Note this for later.
+
                     break
 
                 # Advance the prediction level

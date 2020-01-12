@@ -3,16 +3,17 @@ import numpy as np
 import os.path
 from argparse import ArgumentParser
 from dpu_utils.utils import RichPath
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, Any
 from collections import namedtuple
 from random import random
 
 from dataset.dataset import DataSeries
 from rnn_sample_model import RNNSampleModel
 from rnn_sample_dataset import RNNSampleDataset
-from policies import InferencePolicy, RechargeEstimator
+from inference_policies import get_inference_policy
+from recharge_estimators import get_recharge_estimator
 from utils.hyperparameters import extract_hyperparameters
-from plot_anytime_results import plot_energy
+from plot_anytime_results import plot_energy, plot_levels
 
 
 Bounds = namedtuple('Bounds', ['min', 'max'])
@@ -31,6 +32,8 @@ def evaluate(model: RNNSampleModel,
              dataset: RNNSampleDataset,
              inference_period: float,
              energy_bounds: Bounds,
+             recharge_estimator_params: Dict[str, Any],
+             inference_policy_params: Dict[str, Any],
              charging_params: Dict[str, float],
              collection_params: Dict[str, float],
              processing_params: Dict[str, float],
@@ -44,6 +47,8 @@ def evaluate(model: RNNSampleModel,
         dataset: The testing dataset
         inference_period: Desired sec / op to maintain
         energy_bounds: min/max energy
+        recharge_estimator_params: Parameters for the recharge estimator
+        inference_policy_params: Parameter for the inference policy
         charging_params: Parameters for charging
         collection_params: Parameters for data collection
         processing_params: Parameters for data processing
@@ -60,8 +65,11 @@ def evaluate(model: RNNSampleModel,
                                                        drop_incomplete_batches=True)
 
     # Polices which govern the system
-    inference_policy = InferencePolicy(model.num_outputs)  # Need to implement this
-    recharge_estimator = RechargeEstimator()  # Need to implement this
+    inference_policy = get_inference_policy(inference_policy_params['name'],
+                                            model.num_outputs,
+                                            **inference_policy_params['params'])
+    recharge_estimator = get_recharge_estimator(recharge_estimator_params['name'],
+                                                **recharge_estimator_params['params'])
 
     # Initialize the system time and energy
     system_time = 0.0
@@ -72,6 +80,7 @@ def evaluate(model: RNNSampleModel,
     energy_dict: Dict[float, float] = dict()  # time -> energy level
     error_dict: Dict[float, float] = dict()  # time -> mean squared error
     inference_dict: Dict[float, float] = dict()  # time -> inference rate
+    selected_levels: List[int] = []
 
     # Initialize tracking
     energy_dict[0] = energy_bounds.max
@@ -88,6 +97,7 @@ def evaluate(model: RNNSampleModel,
 
         # This tells us how many levels we need to collect / process
         num_levels = inference_policy.get_num_levels()
+        selected_levels.append(num_levels)
 
         # Simulate the loss of energy for collection num_levels worth of data
         for _ in range(num_levels):
@@ -137,10 +147,7 @@ def evaluate(model: RNNSampleModel,
 
         # Supply feedback
         recharge_estimator.update(true_recharge_rate)
-        inference_policy.update(-1 * np.square(computed_levels - num_levels))
-
-    print(energy_dict)
-    print(inference_dict)
+        inference_policy.update(level=num_levels, reward=-1 * np.square(computed_levels - num_levels))
 
     # Save results
     output_folder.make_as_dir()
@@ -150,12 +157,14 @@ def evaluate(model: RNNSampleModel,
     inference_results_file = output_folder.join('inference_results.pkl.gz')
     inference_results_file.save_as_compressed_file(inference_dict)
 
-    # Call plotting script
+    # Call plotting scripts
     plot_energy(energy_data=energy_dict,
                 inference_data=inference_dict,
                 min_energy=energy_bounds.min,
                 max_energy=energy_bounds.max,
                 output_folder=output_folder)
+
+    plot_levels(selected_levels, model.num_outputs, output_folder=output_folder)
 
 
 def initialize_dataset(dataset_folder: str) -> RNNSampleDataset:
@@ -207,6 +216,8 @@ if __name__ == '__main__':
     evaluate(model=model,
              dataset=dataset,
              energy_bounds=Bounds(*params_dict['energy_bounds']),
+             recharge_estimator_params=params_dict['recharge_estimator_params'],
+             inference_policy_params=params_dict['inference_policy_params'],
              inference_period=params_dict['inference_period'],
              charging_params=params_dict['charging_params'],
              collection_params=params_dict['collection_params'],
