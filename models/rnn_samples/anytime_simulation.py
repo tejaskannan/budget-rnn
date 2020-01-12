@@ -42,13 +42,15 @@ def evaluate(model: RNNSampleModel,
     Args:
         model: The trained RNN model
         dataset: The testing dataset
-        predictions_per_sec: Rate at which predictions should be computed
-        voltage_bounds: Min/Max energy values for the simulated environment
-        charging_params: Dictionary which has the charging rate and noise parameters
-        collection_params: Dictionary which has the collection energy, time and noises
-        processing_params: Dictionary which has the processing energy, time and noises
+        inference_period: Desired sec / op to maintain
+        energy_bounds: min/max energy
+        charging_params: Parameters for charging
+        collection_params: Parameters for data collection
+        processing_params: Parameters for data processing
         output_folder: Folder in which to store results
         max_time: Time in which this experiment is run
+    Returns:
+        Nothing. Outputs are directly written to files in the output folder.
     """
     # Generate the test batches
     test_batch_generator = dataset.minibatch_generator(series=DataSeries.TEST,
@@ -129,7 +131,7 @@ def evaluate(model: RNNSampleModel,
         # Log results
         system_time += period_time
         energy_dict[system_time] = system_energy
-        inference_dict[system_time] = num_inferences / system_time
+        inference_dict[system_time] = system_time / num_inferences if num_inferences > 0 else 0.0
 
         # Supply feedback
         recharge_estimator.update(true_recharge_rate)
@@ -144,7 +146,11 @@ def evaluate(model: RNNSampleModel,
     inference_results_file.save_as_compressed_file(inference_dict)
 
     # Call plotting script
-    plot_energy(energy_data=energy_dict, min_energy=energy_bounds.min, max_energy=energy_bounds.max)
+    plot_energy(energy_data=energy_dict,
+                inference_data=inference_dict,
+                min_energy=energy_bounds.min,
+                max_energy=energy_bounds.max,
+                output_folder=output_folder)
 
 
 def initialize_dataset(dataset_folder: str) -> RNNSampleDataset:
@@ -167,14 +173,8 @@ def restore_model(model_path: str, model_params_file: str) -> RNNSampleModel:
     path_tokens = os.path.split(model_path)
     folder, file_name = path_tokens[0], path_tokens[1]
 
-    print(hypers)
-    print(folder)
-    
     model = RNNSampleModel(hypers, folder)
-
     model_name = extract_model_name(file_name)
-
-    print(model_name)
 
     model.restore_parameters(model_name)
     model.make(is_train=False)
