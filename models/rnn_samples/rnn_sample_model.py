@@ -523,6 +523,7 @@ class RNNSampleModel(Model):
                           system_energy: float,
                           period_time: float,
                           inference_time: float,
+                          max_energy: float,
                           min_energy: float,
                           recharge_rate: float) -> Tuple[Optional[np.ndarray], float, float, int]:
         """
@@ -561,7 +562,12 @@ class RNNSampleModel(Model):
                 system_energy -= step_energy
 
                 # There is not enough time to compute this result
-                if period_time > inference_time:
+                energy_delta = max_energy - system_energy
+                time_delta = inference_time - period_time
+                
+                # print(f'Time delta: {time_delta}, Energy delta: {energy_delta}, Recharge rate: {recharge_rate}')
+                
+                if time_delta * recharge_rate <= energy_delta:
                     if prediction_level == 0:
                         result = prediction
                         prediction_level += 1

@@ -91,14 +91,14 @@ def evaluate(model: RNNSampleModel,
 
         # Simulate the loss of energy for collection num_levels worth of data
         for _ in range(num_levels):
-            system_energy -= max(collection_params['energy'] + np.random.normal(loc=0.0, scale=collection_params['energy_noise']), 0.0)
-            period_time += max(collection_params['time'] + np.random.normal(loc=0.0, scale=collection_params['time_noise']), 0.0)
+            collection_energy = max(collection_params['energy'] + np.random.normal(loc=0.0, scale=collection_params['energy_noise']), 0.0)
+            collection_time = max(collection_params['time'] + np.random.normal(loc=0.0, scale=collection_params['time_noise']), 0.0)
+ 
+            system_energy -= collection_energy
+            period_time += collection_time
 
             # Log to energy dictionary
             energy_dict[system_time + period_time] = system_energy
-
-        # accumulate system time
-        system_time += period_time
 
         # Estimate the recharge rate
         estimated_recharge_rate = recharge_estimator.estimate()
@@ -111,21 +111,23 @@ def evaluate(model: RNNSampleModel,
                                                                                                 system_energy=system_energy,
                                                                                                 period_time=period_time,
                                                                                                 inference_time=inference_period,
+                                                                                                max_energy=energy_bounds.max,
                                                                                                 min_energy=energy_bounds.min,
                                                                                                 recharge_rate=estimated_recharge_rate)
 
         # Log results
-        system_time += period_time
-        energy_dict[system_time] = system_energy
+        energy_dict[system_time + period_time] = system_energy
 
         # Log any obtained result
         if (computed_levels > 0):
-            error_dict[system_time] = np.sum(np.square(inference_result - batch['output']))  # Might need to un-normalize the results
+            error_dict[system_time + period_time] = np.sum(np.square(inference_result - batch['output']))  # Might need to un-normalize the results
             num_inferences += 1
 
         # Recharge the system
-        true_recharge_rate = max(charging_params['rate'] + np.random.normal(loc=0.0, scale=charging_params['rate']), 1e-7)
-        period_time += system_energy / true_recharge_rate
+        true_recharge_rate = max(charging_params['rate'] + np.random.normal(loc=0.0, scale=charging_params['noise']), 1e-7)
+        
+        energy_delta = energy_bounds.max - system_energy
+        period_time += energy_delta / true_recharge_rate
         system_energy = energy_bounds.max
 
         # Log results
@@ -136,6 +138,9 @@ def evaluate(model: RNNSampleModel,
         # Supply feedback
         recharge_estimator.update(true_recharge_rate)
         inference_policy.update(-1 * np.square(computed_levels - num_levels))
+
+    print(energy_dict)
+    print(inference_dict)
 
     # Save results
     output_folder.make_as_dir()
