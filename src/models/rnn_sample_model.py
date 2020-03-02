@@ -6,6 +6,7 @@ from layers.rnn import dynamic_rnn
 from layers.output_layers import compute_regression_output, compute_binary_classification_output, OutputType
 from layers.output_layers import ClassificationOutput, RegressionOutput
 from utils.rnn_utils import *
+from utils.tfutils import pool_rnn_outputs
 from .rnn_model import RNNModel
 
 
@@ -22,14 +23,15 @@ class RNNSampleModel(RNNModel):
         for i in range(self.num_sequences):
             # Get relevant variable names
             input_name = get_input_name(i)
-            cell_name = get_cell_layer_name(i, self.hypers.model_params['share_cell_weights'])
-            layer_name = get_layer_name(i)
+            cell_name = get_cell_level_name(i, self.hypers.model_params['share_cell_weights'])
+            rnn_level_name = get_rnn_level_name(i)
             output_layer_name = get_output_layer_name(i)
             logits_name = get_logits_name(i)
             prediction_name = get_prediction_name(i)
             loss_name = get_loss_name(i)
-            gate_name = get_gate_name(i)
-            state_name = get_state_name(i)
+            gate_name = get_gates_name(i)
+            state_name = get_states_name(i)
+            accuracy_name = get_accuracy_name(i)
 
             # Create Recurrent Cell
             cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
@@ -45,7 +47,7 @@ class RNNSampleModel(RNNModel):
             rnn_outputs, states, gates = dynamic_rnn(inputs=self._placeholders[input_name],
                                                      cell=cell,
                                                      previous_states=prev_states,
-                                                     name=layer_name)
+                                                     name=rnn_level_name)
 
             # Appends states to list
             last_index = tf.shape(self._placeholders[input_name])[1] - 1
@@ -67,8 +69,8 @@ class RNNSampleModel(RNNModel):
             if self.output_type == OutputType.CLASSIFICATION:
                 classification_output = compute_binary_classification_output(model_output=output,
                                                                              labels=self._placeholders['output'],
-                                                                             pos_weight=self.hypers.model_params['pos_weights'][i],
-                                                                             neg_weight=self.hypers.model_params['neg_weights'][i])
+                                                                             false_pos_weight=self.hypers.model_params['pos_weights'][i],
+                                                                             false_neg_weight=self.hypers.model_params['neg_weights'][i])
                 self._ops[logits_name] = classification_output.logits,
                 self._ops[prediction_name] = classification_output.predictions
                 self._ops[loss_name] = classification_output.loss

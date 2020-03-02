@@ -25,7 +25,7 @@ class RNNSampleDataset(Dataset):
         normalized_input = metadata['input_scaler'].transform(input_sample)
 
         # Normalize outputs (Scaler expects a 2D input)
-        if not metadata['normalize_output']:
+        if not metadata['should_normalize_output']:
             normalized_output = [sample['output']]
         elif not isinstance(sample['output'], list) and not isinstance(sample['output'], np.ndarray):
             normalized_output = metadata['output_scaler'].transform([[sample['output']]])
@@ -48,8 +48,5 @@ class RNNSampleDataset(Dataset):
             'output': normalized_output,
             'sample_id': sample_id
         }
-
-        if 'bin_means' in metadata:
-            batch_dict['bin_means'] = np.array(metadata['bin_means'])
 
         return batch_dict

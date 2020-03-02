@@ -3,7 +3,6 @@ import tensorflow as tf
 import numpy as np
 import re
 import time
-from enum import Enum, auto
 from collections import namedtuple, defaultdict, OrderedDict
 from typing import List, Optional, Tuple, Dict, Any, Set, Union, DefaultDict, Iterable
 from sklearn.preprocessing import StandardScaler
@@ -23,16 +22,6 @@ from rnn_samples.testing_utils import TestMetrics, Prediction
 
 
 VAR_NAME_REGEX = re.compile(r'.*(layer-[0-9])+.*')
-
-
-class RNNModelType:
-    VANILLA = auto()
-    SAMPLE = auto()
-    CASCADE = auto()
-    CHUNKED = auto()
-    SKIP = auto()
-    DROPPED = auto()
-    SINGLE = auto()
 
 
 def var_filter(trainable_vars: List[tf.Variable], var_prefixes: Optional[Dict[str, float]] = None) -> List[VariableWithWeight]:
@@ -104,6 +93,10 @@ class RNNModel(Model):
         return self.__output_type
 
     @property
+    def output_name(self) -> str:
+        return 'output'
+
+    @property
     def loss_op_names(self) -> List[str]:
         if self.model_type == RNNModelType.VANILLA:
             return [get_loss_name(i) for i in range(self.num_outputs)]
@@ -128,15 +121,9 @@ class RNNModel(Model):
         output_samples: List[List[float]] = []
 
         for sample in dataset.dataset[DataSeries.TRAIN]:
-
             # Shift input by the first sample to focus on trends
             input_sample = np.array(sample['inputs'])
-            if self.hypers.model_params.get('shift_inputs', False):
-                first_input = np.expand_dims(input_sample[0], axis=0)
-                shifted_input = input_sample - first_input
-                input_samples.append(shifted_input)
-            else:
-                input_samples.append(input_sample)
+            input_samples.append(input_sample)
 
             if not isinstance(sample['output'], list) and \
                     not isinstance(sample['output'], np.ndarray):
@@ -155,30 +142,12 @@ class RNNModel(Model):
         output_scaler = StandardScaler()
         output_scaler.fit(output_samples)
 
-        if self.hypers.model_params.get('bin_outputs', False):
-            assert num_output_features == 1, 'Can only bin when the number of output features is one'
-
-            normalized_outputs = output_scaler.transform(output_samples)
-            sorted_outputs = np.sort(normalized_outputs, axis=0)
-
-            bin_bounds: List[Tuple[float, float]] = []
-            bin_means: List[float] = []
-            stride = int(sorted_outputs.shape[0] / (self.hypers.model_params['num_bins'] - 1))
-            for i in range(0, sorted_outputs.shape[0], stride):
-                split = sorted_outputs[i:i+stride, :]
-                bin_bouds.append((np.min(split), np.max(split)))
-                bin_meas.append(np.average(split))
-
-            self.metadaa['bin_bounds'] = bin_bounds
-            self.metadaa['bin_means'] = bin_means
-
         self.metadata['input_scaler'] = input_scaler
         self.metadata['output_scaler'] = output_scaler
         self.metadata['num_input_features'] = num_input_features
         self.metadata['num_output_features'] = num_output_features
         self.metadata['seq_length'] = seq_length
-        self.metadata['shift_inputs'] = self.hypers.model_params.get('shift_inputs', False)
-        self.metadata['normalize_output'] = self.hypers.model_params['output_type'].lower() != 'classification'
+        self.metadata['should_normalize_output'] = self.output_type == OutputType.REGRESSION
 
     def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
         dropout = self.hypers.dropout_keep_rate if is_train else 1.0
@@ -252,17 +221,20 @@ class RNNModel(Model):
         for i in range(num_sequences):
             input_shape = [None, samples_per_seq, num_input_features]
 
-            # B x S x D
+            # [B, S, D]
             self._placeholders[get_input_name(i)] = tf.placeholder(shape=input_shape,
                                                                    dtype=tf.float32,
                                                                    name=get_input_name(i))
             if self.model_type in (RNNModelType.VANILLA, RNNModelType.DROPPED, RNNModelType.SINGLE):
                 samples_per_seq += self.samples_per_seq
 
-        self._placeholders['output'] = tf.placeholder(shape=[None, num_output_features],
-                                                      dtype=tf.float32,
-                                                      name='output')  # B x K
-        self._placeholders['dropout_keep_rate'] = tf.placeholder(shape=[], dtype=tf.float32, name='dropout-keep-rate')
+        # [B, K]
+        self._placeholders[self.output_name] = tf.placeholder(shape=[None, num_output_features],
+                                                              dtype=tf.float32,
+                                                              name=self.output_name)
+        self._placeholders['dropout_keep_rate'] = tf.placeholder(shape=[],
+                                                                 dtype=tf.float32,
+                                                                 name='dropout-keep-rate')
         self._placeholders['loss_weights'] = tf.placeholder(shape=[self.num_outputs],
                                                             dtype=tf.float32,
                                                             name='loss-weights')

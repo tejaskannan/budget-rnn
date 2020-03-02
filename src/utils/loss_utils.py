@@ -2,8 +2,7 @@ import tensorflow as tf
 
 from .constants import SMALL_NUMBER
 
-def binary_classification_loss(self,
-                               predicted_probs: tf.Tensor,
+def binary_classification_loss(predicted_probs: tf.Tensor,
                                predictions: tf.Tensor, 
                                labels: tf.Tensor, 
                                pos_weight: float, 
