@@ -19,10 +19,6 @@ class RNNModelType(Enum):
     VANILLA = auto()
     SAMPLE = auto()
     CASCADE = auto()
-    CHUNKED = auto()
-    SKIP = auto()
-    DROPPED = auto()
-    SINGLE = auto()
 
 
 def get_cell_level_name(level_index: int, should_share_weights: bool) -> str:

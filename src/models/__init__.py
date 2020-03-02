@@ -1,1 +1,1 @@
-from .model_factory import get_rnn_model
+from .rnn_model import RNNModel

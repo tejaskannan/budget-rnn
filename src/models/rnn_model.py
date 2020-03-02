@@ -40,24 +40,8 @@ class RNNModel(Model):
     def __init__(self, hyper_parameters: HyperParameters, save_folder: Union[str, RichPath]):
         super().__init__(hyper_parameters, save_folder)
 
-        model_type = self.hypers.model_params.get('model_type', '').lower()
-        if model_type == 'vanilla_rnn_model':
-            self.model_type = RNNModelType.VANILLA
-        elif model_type == 'sample_rnn_model':
-            self.model_type = RNNModelType.SAMPLE
-        elif model_type == 'cascade_rnn_model':
-            self.model_type = RNNModelType.CASCADE
-        elif model_type == 'chunked_rnn_model':
-            assert not self.hypers.model_params['share_cell_weights'], 'The chunked model cannot share cell weights.'
-            self.model_type = RNNModelType.CHUNKED
-        elif model_type == 'skip_rnn_model':
-            self.model_type = RNNModelType.SKIP
-        elif model_type == 'dropped_rnn_model':
-            self.model_type = RNNModelType.DROPPED
-        elif model_type == 'single_rnn_model':
-            self.model_type = RNNModelType.SINGLE
-        else:
-            raise ValueError(f'Unknown model type: {model_type}.')
+        model_type = self.hypers.model_params.get('model_type', '').upper()
+        self.model_type = RNNModelType[model_type]
 
         self.name = model_type
         self.__output_type = OutputType[self.hypers.model_params['output_type'].upper()]
@@ -190,7 +174,7 @@ class RNNModel(Model):
         for i in range(num_sequences):
             input_ph = self.placeholders[get_input_name(i)]
 
-            if self.model_type in (RNNModelType.VANILLA, RNNModelType.DROPPED, RNNModelType.SINGLE):
+            if self.model_type == RNNModelType.VANILLA:
                 seq_indexes.extend(range(i, seq_length, num_sequences))
                 seq_indexes = list(sorted(seq_indexes))
                 sample_tensor = input_batch[:, seq_indexes]
@@ -199,7 +183,7 @@ class RNNModel(Model):
                 seq_indexes = list(range(i, seq_length, num_sequences))
                 sample_tensor = input_batch[:, seq_indexes]
                 feed_dict[input_ph] = sample_tensor
-            else:  # Chunked or Cascade
+            else:  # Cascade
                 start, end = i * samples_per_seq, (i+1) * samples_per_seq
                 sample_tensor = input_batch[:, start:end]
                 feed_dict[input_ph] = sample_tensor
@@ -225,7 +209,7 @@ class RNNModel(Model):
             self._placeholders[get_input_name(i)] = tf.placeholder(shape=input_shape,
                                                                    dtype=tf.float32,
                                                                    name=get_input_name(i))
-            if self.model_type in (RNNModelType.VANILLA, RNNModelType.DROPPED, RNNModelType.SINGLE):
+            if self.model_type == RNNModelType.VANILLA:
                 samples_per_seq += self.samples_per_seq
 
         # [B, K]
@@ -432,7 +416,7 @@ class RNNModel(Model):
 
         combined_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), outputs), axis=1)
         self._ops[ALL_PREDICTIONS_NAME] = combined_outputs
-        use_previous_layers = self.model_type == RNNModelType.CHUNKED
+        use_previous_layers = self.model_type == RNNModelType.CASCADE
         self._loss_ops = self._make_loss_ops(use_previous_layers=use_previous_layers)
 
     def make_loss(self):
@@ -480,12 +464,12 @@ class RNNModel(Model):
             var_prefixes[layer_name] = 1.0
 
             layer_vars = var_filter(trainable_vars, var_prefixes)
-            if self.hypers.model_params['share_cell_weights'] or self.model_type in (RNNModelType.CASCADE, RNNModelType.SINGLE):
+            if self.hypers.model_params['share_cell_weights']:
                 # Always include the RNN cell weights
                 cell_vars = [VariableWithWeight(var, 1.0) for var in trainable_vars if 'rnn-cell' in var.name]
                 layer_vars.extend(cell_vars)
 
-            loss_ops[f'loss_{i}'] = layer_vars
+            loss_ops[get_loss_name(i)] = layer_vars
 
             if not use_previous_layers:
                 var_prefixes.pop(layer_name)
