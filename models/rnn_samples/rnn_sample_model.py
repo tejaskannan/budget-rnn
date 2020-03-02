@@ -5,7 +5,7 @@ import re
 import time
 from enum import Enum, auto
 from collections import namedtuple, defaultdict, OrderedDict
-from typing import List, Optional, Tuple, Dict, Any, Set, Union, DefaultDict
+from typing import List, Optional, Tuple, Dict, Any, Set, Union, DefaultDict, Iterable
 from sklearn.preprocessing import StandardScaler
 from dpu_utils.utils import RichPath
 
@@ -16,7 +16,8 @@ from layers.rnn import dynamic_rnn, dropped_rnn
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
-from testing_utils import TestMetrics, Prediction
+from utils.constants import SMALL_NUMBER
+from rnn_samples.testing_utils import TestMetrics, Prediction
 
 
 VAR_NAME_REGEX = re.compile(r'.*(layer-[0-9])+.*')
@@ -80,6 +81,10 @@ class RNNSampleModel(Model):
     @property
     def prediction_ops(self) -> List[str]:
         return [f'prediction_{i}' for i in range(self.num_outputs)]
+
+    @property
+    def accuracy_op_names(self) -> List[str]:
+        return [f'accuracy_{i}' for i in range(self.num_outputs)]
 
     @property
     def samples_per_seq(self) -> int:
@@ -161,6 +166,7 @@ class RNNSampleModel(Model):
         self.metadata['num_output_features'] = num_output_features
         self.metadata['seq_length'] = seq_length
         self.metadata['shift_inputs'] = self.hypers.model_params.get('shift_inputs', False)
+        self.metadata['normalize_output'] = self.hypers.model_params['output_type'].lower() != 'classification'
 
     def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
         dropout = self.hypers.dropout_keep_rate if is_train else 1.0
@@ -284,6 +290,7 @@ class RNNSampleModel(Model):
             for i in range(len(prediction_ops)):
                 ops_to_run = prediction_ops[0:i+1]
                 ops_to_run.append(f'gates_{i}')
+                ops_to_run.append(f'states_{i}')
 
                 start = time.time()
                 result = self.execute(feed_dict, ops_to_run)
@@ -300,14 +307,14 @@ class RNNSampleModel(Model):
                 latency_dict[op].append(elapsed * 1000.0)  # Latency in seconds
 
                 # The gates depend on the RNN type
-                if self.hypers.model_params['rnn_cell_type'] == 'gru':
-                    gates: DefaultDict[str, List[float]] = defaultdict(list)
-                    gate_values = result[f'gates_{i}']
+                #if self.hypers.model_params['rnn_cell_type'] == 'gru':
+                #    gates: DefaultDict[str, List[float]] = defaultdict(list)
+                #    gate_values = result[f'gates_{i}']
 
-                    gates['update'].extend(gate_values[:, :, 0, :].reshape(-1))
-                    gates['reset'].extend(gate_values[:, :, 1, :].reshape(-1))
+                #    gates['update'].extend(gate_values[:, :, 0, :].reshape(-1))
+                #    gates['reset'].extend(gate_values[:, :, 1, :].reshape(-1))
 
-                    gate_dict[op] = gates
+                #    gate_dict[op] = gates
 
             # Avoid analyzing the predictions for the first batch for consistency with the latency
             # measurements
@@ -318,10 +325,16 @@ class RNNSampleModel(Model):
             for prediction_op in prediction_ops:
                 prediction = op_results[prediction_op]
 
-                unnormalized_prediction = self.metadata['output_scaler'].inverse_transform(prediction)
-
                 raw_expected = np.array(batch['output']).reshape(-1, self.metadata['num_output_features'])
-                expected = self.metadata['output_scaler'].inverse_transform(raw_expected)
+
+                if self.hypers.model_params['output_type'].lower() == 'classification':
+                    unnormalized_prediction = prediction
+                    expected = raw_expected
+                else:
+                    unnormalized_prediction = self.metadata['output_scaler'].inverse_transform(prediction)
+                    raw_expected = np.array(batch['output']).reshape(-1, self.metadata['num_output_features'])
+                    expected = self.metadata['output_scaler'].inverse_transform(raw_expected)
+
                 true_values.append(expected)
 
                 difference = expected - unnormalized_prediction
@@ -354,6 +367,19 @@ class RNNSampleModel(Model):
                 self.make_rnn_sample_model(is_train)
             else:
                 self.make_rnn_model(is_train)
+
+    def classification_loss(self, predicted_probs: tf.Tensor, predictions: tf.Tensor, labels: tf.Tensor, pos_weight: float, neg_weight: float):
+        # False negative -> predict 0 when label is actually 1
+        # False positive -> predict 1 when label is actually 0
+        # If prediction = 0 and label = 1 -> false negative
+        # If prediction = 1 and label = 0 -> false positive
+        # If prediction = 0 and label = 0 -> (1 - 
+
+        log_probs = -tf.log(predicted_probs)
+        log_opp_probs = -tf.log(1.0 - predicted_probs)
+        return tf.where((1.0 - tf.abs(predictions - labels)) < SMALL_NUMBER,
+                        x=neg_weight * labels * log_probs + pos_weight * (1.0 - labels) * log_opp_probs,  # False negative or False Positive
+                        y=labels * log_probs + (1.0 - labels) * log_opp_probs)
 
     def make_rnn_model(self, is_train: bool):
         rnn_layers = self.hypers.model_params['rnn_layers']
@@ -432,9 +458,27 @@ class RNNSampleModel(Model):
                 output = tf.reduce_sum(output_probs * self._placeholders['bin_means'], axis=-1, keepdims=True)
                 self._ops[f'prediction_probs_{i}'] = output_probs
 
-            self._ops[f'prediction_{i}'] = output
-            self._ops[f'loss_{i}'] = tf.reduce_sum(tf.square(output - self._placeholders['output']), axis=-1)  # B
+            if self.hypers.model_params['output_type'].lower() == 'classification':
+                self._ops[f'logits_{i}'] = output
+
+                predicted_probs = tf.math.sigmoid(output)
+                predictions = tf.cast(predicted_probs > 0.5, tf.float32)
+                self._ops[f'prediction_{i}'] = predictions
+
+                self._ops[f'loss_{i}'] = self.classification_loss(predicted_probs=predicted_probs,
+                                                                  predictions=predictions,
+                                                                  labels=self._placeholders['output'],
+                                                                  pos_weight=self.hypers.model_params['pos_weights'][i],
+                                                                  neg_weight=self.hypers.model_params['neg_weights'][i])
+
+                self._ops[self.accuracy_op_names[i]] = tf.reduce_mean(1.0 - tf.abs(predictions - self._placeholders['output']))
+                output = predictions
+            else:
+                self._ops[f'prediction_{i}'] = output
+                self._ops[f'loss_{i}'] = tf.reduce_sum(tf.square(output - self._placeholders['output']), axis=-1)  # B
+
             self._ops[f'gates_{i}'] = rnn_gates.stack()  # B x T x M x D
+            self._ops[f'states_{i}'] = rnn_states.stack()  # B x T x D
 
             outputs.append(output)
 
@@ -495,10 +539,31 @@ class RNNSampleModel(Model):
                 output = tf.reduce_sum(output_probs * self._placeholders['bin_means'], axis=-1, keepdims=True)
                 self._ops[f'prediction_probs_{i}'] = output_probs
 
-            self._ops[f'prediction_{i}'] = output
+            if self.hypers.model_params['output_type'].lower() == 'classification':
+                self._ops[f'logits_{i}'] = output
 
-            self._ops[f'loss_{i}'] = tf.reduce_sum(tf.square(output - self._placeholders['output']), axis=-1)  # B
+                predicted_probs = tf.math.sigmoid(output)
+                predictions = tf.cast(predicted_probs > 0.5, tf.float32)
+                self._ops[f'prediction_{i}'] = predictions
+
+                #self._ops[f'loss_{i}'] = tf.nn.sigmoid_cross_entropy_with_logits(labels=self._placeholders['output'],
+                #                                                                 logits=output)
+
+                self._ops[f'loss_{i}'] = self.classification_loss(predicted_probs=predicted_probs,
+                                                                  predictions=predictions,
+                                                                  labels=self._placeholders['output'],
+                                                                  pos_weight=self.hypers.model_params['pos_weights'][i],
+                                                                  neg_weight=self.hypers.model_params['neg_weights'][i])
+
+                self._ops[self.accuracy_op_names[i]] = tf.reduce_mean(1.0 - tf.abs(predictions - self._placeholders['output']))
+                output = predictions
+            else:
+                self._ops[f'prediction_{i}'] = output
+                self._ops[f'loss_{i}'] = tf.reduce_sum(tf.square(output - self._placeholders['output']), axis=-1)  # B
+
             self._ops[f'gates_{i}'] = gates.stack()  # B x T x M x D
+            self._ops[f'states_{i}'] = states.stack()  # B x T x D
+
             outputs.append(output)
 
         combined_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), outputs), axis=1)
@@ -516,6 +581,28 @@ class RNNSampleModel(Model):
         weighted_losses = tf.reduce_sum(losses * self._placeholders['loss_weights'], axis=-1)  # Scalar
 
         self._ops['loss'] = weighted_losses
+
+    def anytime_generator(self, feed_dict: Dict[tf.Tensor, List[Any]],
+                          max_num_levels: int) -> Optional[Iterable[np.ndarray]]:
+        """
+        Anytime Inference in a generator-like fashion
+        """
+        with self.sess.graph.as_default():
+            # Initialize partial run settings
+            prediction_ops = [self._ops[op_name] for op_name in self.prediction_ops]
+            placeholders = list(self._placeholders.values())
+            handle = self.sess.partial_run_setup(prediction_ops, placeholders)
+
+            result = None
+            for level in range(max_num_levels):
+                prediction_op = prediction_ops[level]
+                op_name = self.prediction_ops[level]
+
+                # Filter feed dict to avoid feeding the same inputs multiple times
+                op_feed_dict = {key: value for key, value in feed_dict.items() if key.name.endswith(str(level))}
+                prediction = self.sess.partial_run(handle, prediction_op, feed_dict=op_feed_dict)
+
+                yield prediction
 
     def anytime_inference(self, feed_dict: Dict[tf.Tensor, List[Any]],
                           max_num_levels: int,

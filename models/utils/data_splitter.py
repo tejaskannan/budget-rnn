@@ -34,9 +34,9 @@ def compute_hash(sample: Dict[str, Any], hash_fields: List[str]) -> int:
     for field in hash_fields:
         field_val = sample[field]
         if isinstance(field_val, list):
-            tokens.extend(field_val)
+            tokens.extend(map(str, field_val))
         else:
-            tokens.append(field_val)
+            tokens.append(str(field_val))
 
     hash_token = '-'.join(tokens).encode()
     return int(md5(hash_token).hexdigest(), 16)
@@ -115,7 +115,7 @@ def split_dataset(input_dir: RichPath, output_dir: RichPath, fracs: Dict[DataPar
         split_points = get_split_points(input_dir, fracs, hash_fields[0])
         print('Found split points.')
 
-    data_files = sorted(input_dir.iterate_filtered_files_in_dir('data*.jsonl.gz'))
+    data_files = sorted(input_dir.iterate_filtered_files_in_dir('*.jsonl.gz'))
     data_samples = chain(*(data_file.read_by_file_suffix() for data_file in data_files))
     
     data_counters = Counter()

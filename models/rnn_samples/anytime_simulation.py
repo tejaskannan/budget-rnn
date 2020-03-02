@@ -13,7 +13,7 @@ from rnn_sample_dataset import RNNSampleDataset
 from inference_policies import get_inference_policy
 from recharge_estimators import get_recharge_estimator
 from utils.hyperparameters import extract_hyperparameters
-from plot_anytime_results import plot_energy, plot_levels
+from plot_anytime_results import plot_energy, plot_levels, plot_errors
 
 
 Bounds = namedtuple('Bounds', ['min', 'max'])
@@ -66,6 +66,7 @@ def evaluate(model: RNNSampleModel,
 
     # Polices which govern the system
     inference_policy = get_inference_policy(inference_policy_params['name'],
+                                            inference_period,
                                             model.num_outputs,
                                             **inference_policy_params['params'])
     recharge_estimator = get_recharge_estimator(recharge_estimator_params['name'],
@@ -147,7 +148,9 @@ def evaluate(model: RNNSampleModel,
 
         # Supply feedback
         recharge_estimator.update(true_recharge_rate)
-        inference_policy.update(level=num_levels, reward=-1 * np.square(computed_levels - num_levels))
+        inference_policy.update(level=num_levels,
+                                computed_levels=computed_levels,
+                                period_time=period_time)
 
     # Save results
     output_folder.make_as_dir()
@@ -157,6 +160,12 @@ def evaluate(model: RNNSampleModel,
     inference_results_file = output_folder.join('inference_results.pkl.gz')
     inference_results_file.save_as_compressed_file(inference_dict)
 
+    error_results_file = output_folder.join('error_results.pkl.gz')
+    error_results_file.save_as_compressed_file(error_dict)
+
+    selected_levels_file = output_folder.join('selected_levels.pkl.gz')
+    selected_levels_file.save_as_compressed_file(selected_levels)
+
     # Call plotting scripts
     plot_energy(energy_data=energy_dict,
                 inference_data=inference_dict,
@@ -165,6 +174,7 @@ def evaluate(model: RNNSampleModel,
                 output_folder=output_folder)
 
     plot_levels(selected_levels, model.num_outputs, output_folder=output_folder)
+    plot_errors(error_dict, labels='MSE', output_folder=output_folder)
 
 
 def initialize_dataset(dataset_folder: str) -> RNNSampleDataset:

@@ -2,6 +2,8 @@ import numpy as np
 from collections import namedtuple, defaultdict
 from typing import DefaultDict, Dict, Union, List, Optional, Tuple
 
+from utils.constants import SMALL_NUMBER
+
 
 SummaryMetrics = namedtuple('SummaryMetrics', ['mean', 'geom_mean', 'std', 'geom_std', 'median', 'first_quartile', 'third_quartile', 'minimum', 'maximum'])
 SaturationMetrics = namedtuple('SaturationMetrics', ['low', 'high'])
@@ -33,13 +35,13 @@ def absolute_percentage_error(predictions: Dict[str, List[Prediction]]) -> Dict[
     return ape_summaries
 
 
-def geometric_mean(array: np.array) -> float:
-    log_arr = np.log(array)
+def geometric_mean(array: Union[np.array, List[float]]) -> float:
+    log_arr = np.log(np.array(array) + SMALL_NUMBER)
     return np.exp(np.sum(log_arr) / len(log_arr))
 
 
-def geometric_standard_deviation(array: np.array, mean: float) -> float:
-    squared_log_ratio = np.square(np.log(array / mean))
+def geometric_standard_deviation(array: Union[np.array, List[float]], mean: float) -> float:
+    squared_log_ratio = np.square(np.log(np.array(array) / (mean + SMALL_NUMBER) + SMALL_NUMBER))
     return np.sqrt(np.average(squared_log_ratio))
 
 

@@ -48,6 +48,14 @@ class Model:
         self.name = ''
 
     @property
+    def ops(self) -> Dict[str, tf.Tensor]:
+        return self._ops
+
+    @property
+    def placeholders(self) -> Dict[str, tf.Tensor]:
+        return self._placeholders
+    
+    @property
     def optimizer_op_name(self) -> str:
         return 'optimizer_op'
 
@@ -181,6 +189,14 @@ class Model:
 
         self._ops[self.optimizer_op_name] = tf.group(optimizer_ops)
 
+    def get_weights(self) -> Dict[str, np.ndarray]:
+        with self._sess.graph.as_default():
+            trainable_vars = self._sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+            ops = {var.name: var for var in trainable_vars}
+            weights = self._sess.run(ops)
+            return weights
+
+
     def execute(self, feed_dict: Dict[tf.Tensor, List[Any]], ops: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Executes the model using the given feed dictionary. An optional set of operation names
@@ -237,10 +253,17 @@ class Model:
                                                           metadata=self.metadata,
                                                           should_shuffle=True,
                                                           drop_incomplete_batches=drop_incomplete_batches)
+            
             epoch_train_loss: DefaultDict[str, float] = defaultdict(float)
+            epoch_train_acc: DefaultDict[str, float] = defaultdict(float)
+
             for i, batch in enumerate(train_generator):
                 feed_dict = self.batch_to_feed_dict(batch, is_train=True)
                 ops_to_run = [self.optimizer_op_name] + self.loss_op_names
+                
+                if self.hypers.model_params.get('output_type', '').lower() == 'classification':
+                    ops_to_run += self.accuracy_op_names
+
                 train_results = self.execute(feed_dict, ops_to_run)
 
                 batch_loss = 0.0
@@ -253,7 +276,17 @@ class Model:
                 train_loss_agg = np.average(list(epoch_train_loss.values()))
                 avg_train_loss_so_far = train_loss_agg / (i+1)
 
-                print(f'Train Batch {i}. Average loss so far: {avg_train_loss_so_far:.4f}', end='\r')
+                for acc_op_name in self.accuracy_op_names:
+                    epoch_train_acc[acc_op_name] += train_results[acc_op_name]
+
+                train_acc_agg = np.average(list(epoch_train_acc.values()))
+                avg_train_acc_so_far = train_acc_agg / (i+1)
+
+                if self.hypers.model_params.get('output_type', '').lower() == 'classification':
+                    print(f'Train Batch {i}. Avg loss so far: {avg_train_loss_so_far:.4f}, Avg accuracy so far: {avg_train_acc_so_far:.4f}', end='\r')                
+                else:
+                    print(f'Train Batch {i}. Avg loss so far: {avg_train_loss_so_far:.4f}', end='\r')
+
             print()
 
             valid_generator = dataset.minibatch_generator(DataSeries.VALID,
@@ -261,10 +294,19 @@ class Model:
                                                           metadata=self.metadata,
                                                           should_shuffle=False,
                                                           drop_incomplete_batches=drop_incomplete_batches)
+            
             epoch_valid_loss: DefaultDict[str, float] = defaultdict(float)
+            epoch_valid_acc: DefaultDict[str, float] = defaultdict(float)
+            
             for i, batch in enumerate(valid_generator):
                 feed_dict = self.batch_to_feed_dict(batch, is_train=False)
-                valid_results = self.execute(feed_dict, self.loss_op_names)
+
+                ops_to_run: List[str] = []
+                if self.hypers.model_params.get('output_type', '').lower() == 'classification':
+                    ops_to_run += self.accuracy_op_names
+                
+                ops_to_run += self.loss_op_names
+                valid_results = self.execute(feed_dict, ops_to_run)
 
                 batch_loss = 0.0
                 for loss_op_name in self.loss_op_names:
@@ -276,7 +318,17 @@ class Model:
                 valid_loss_agg = np.average(list(epoch_valid_loss.values()))
                 avg_valid_loss_so_far = valid_loss_agg / (i+1)
 
-                print(f'Valid Batch {i}. Average loss so far: {avg_valid_loss_so_far:.4f}', end='\r')
+                for acc_op_name in self.accuracy_op_names:
+                    epoch_valid_acc[acc_op_name] += valid_results[acc_op_name]
+
+                valid_acc_agg = np.average(list(epoch_valid_acc.values()))
+                avg_valid_acc_so_far = valid_acc_agg / (i+1)
+
+                if self.hypers.model_params.get('output_type', '').lower() == 'classification':
+                    print(f'Valid Batch {i}. Avg loss so far: {avg_valid_loss_so_far:.4f}, Avg accuracy so far: {avg_valid_acc_so_far:.4f}', end='\r')
+                else:
+                    print(f'Valid Batch {i}. Avg loss so far: {avg_valid_loss_so_far:.4f}', end='\r')
+
             print()
 
             has_improved = False
