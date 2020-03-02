@@ -12,7 +12,7 @@ from models.base_model import Model, VariableWithWeight
 from layers.basic import rnn_cell, mlp
 from layers.cells.cells import make_rnn_cell, MultiRNNCell
 from layers.rnn import dynamic_rnn, dropped_rnn
-from layers.output_layers import OutputType
+from layers.output_layers import OutputType, compute_binary_classification_output, compute_regression_output
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
@@ -60,7 +60,6 @@ class RNNModel(Model):
             raise ValueError(f'Unknown model type: {model_type}.')
 
         self.name = model_type
-
         self.__output_type = OutputType[self.hypers.model_params['output_type'].upper()]
 
     @property
@@ -120,8 +119,8 @@ class RNNModel(Model):
         input_samples: List[List[float]] = []
         output_samples: List[List[float]] = []
 
+        # Fetch training samples to prepare for normalization
         for sample in dataset.dataset[DataSeries.TRAIN]:
-            # Shift input by the first sample to focus on trends
             input_sample = np.array(sample['inputs'])
             input_samples.append(input_sample)
 
@@ -131,6 +130,7 @@ class RNNModel(Model):
             else:
                 output_samples.append(sample['output'])
 
+        # Infer the number of input and output features
         num_input_features = len(input_samples[0][0])
         seq_length = len(input_samples[0])
         input_samples = np.reshape(input_samples, newshape=(-1, num_input_features))
@@ -344,70 +344,66 @@ class RNNModel(Model):
             self.make_rnn_model(is_train)
 
     def make_rnn_model(self, is_train: bool):
-        rnn_layers = self.hypers.model_params['rnn_layers']
         outputs: List[tf.Tensor] = []
+        states_list: List[tf.TensorArray] = []
         prev_state: Optional[tf.Tensor] = None
 
+        num_output_features = self.metadata['num_output_features']
+
         for i in range(self.num_sequences):
-            rnn_cell_name = 'rnn-cell'
-            output_layer_name = 'output-layer'
-            rnn_model_name = 'rnn-model'
+            # Get relevant variable names
+            input_name = get_input_name(i)
+            cell_name = get_cell_level_name(i, self.hypers.model_params['share_cell_weights'])
+            rnn_level_name = get_rnn_level_name(i)
+            output_layer_name = get_output_layer_name(i)
+            logits_name = get_logits_name(i)
+            prediction_name = get_prediction_name(i)
+            loss_name = get_loss_name(i)
+            gate_name = get_gates_name(i)
+            state_name = get_states_name(i)
+            accuracy_name = get_accuracy_name(i)
 
-            if self.model_type in (RNNModelType.CASCADE, RNNModelType.SINGLE):
-                # The Cascade model shares cell weights by design
-                output_layer_name = f'{output_layer_name}-layer-{i}'
-            elif not self.hypers.model_params.get('share_cell_weights', False):
-                rnn_cell_name = f'{rnn_cell_name}-layer-{i}'
-                output_layer_name = f'{output_layer_name}-layer-{i}'
-                rnn_model_name = f'{rnn_model_name}-layer-{i}'
-
+            # Create the RNN Cell
             cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
                                  input_units=self.metadata['num_input_features'],
                                  output_units=self.hypers.model_params['state_size'],
                                  activation=self.hypers.model_params['rnn_activation'],
                                  dropout_keep_rate=self._placeholders['dropout_keep_rate'],
-                                 num_layers=rnn_layers,
-                                 name=rnn_cell_name,
-                                 use_skip_connections=self.model_type == RNNModelType.SKIP)
+                                 num_layers=self.hypers.model_params['rnn_layers'],
+                                 name=cell_name)
 
-            inputs = self._placeholders[f'input_{i}']
+            inputs = self._placeholders[input_name]
             initial_state = cell.zero_state(batch_size=tf.shape(inputs)[0], dtype=tf.float32)
 
-            if self.model_type in (RNNModelType.CHUNKED, RNNModelType.CASCADE) and prev_state is not None:
+            # Set the initial state for chunked model types
+            if self.model_type == RNNModelType.CASCADE and prev_state is not None:
                 initial_state = prev_state
 
-            if self.model_type == RNNModelType.DROPPED:
-                rnn_outputs, rnn_states, rnn_gates = dropped_rnn(cell=cell,
-                                                                 inputs=inputs,
-                                                                 initial_state=initial_state,
-                                                                 horizon=5,
-                                                                 drop_rate=0.9,
-                                                                 name=rnn_model_name)
-            else:
-                skip_width = self.num_sequences if self.model_type == RNNModelType.SKIP else None
-                rnn_outputs, rnn_states, rnn_gates = dynamic_rnn(cell=cell,
-                                                                 inputs=inputs,
-                                                                 initial_state=initial_state,
-                                                                 skip_width=skip_width,
-                                                                 name=rnn_model_name)
+            # Set previous states for the Sample model type
+            prev_states = None
+            if self.model_type == RNNModelType.SAMPLE and i > 0:
+                prev_states = states_list[i-1]
+
+            rnn_outputs, rnn_states, rnn_gates = dynamic_rnn(cell=cell,
+                                                             inputs=inputs,
+                                                             previous_states=prev_states,
+                                                             initial_state=initial_state,
+                                                             name=rnn_level_name)
+            # Save previous states
+            states_list.append(rnn_states)
 
             # Get the final state
             last_index = tf.shape(inputs)[1] - 1
-            output = rnn_outputs.read(index=last_index)
+            final_output = rnn_outputs.read(index=last_index)
 
             # Save previous state for the chunked model
-            if self.model_type in (RNNModelType.CHUNKED, RNNModelType.CASCADE):
+            if self.model_type == RNNModelType.CASCADE:
                 prev_state = rnn_states.read(index=last_index)
 
-            # B x D
-            rnn_output = pool_rnn_outputs(rnn_outputs, output, pool_mode=self.hypers.model_params['pool_mode'])
+            # [B, D]
+            rnn_output = pool_rnn_outputs(rnn_outputs, final_output, pool_mode=self.hypers.model_params['pool_mode'])
 
-            if self.hypers.model_params.get('bin_outputs', False):
-                num_output_features = len(self.metadata['bin_means'])
-            else:
-                num_output_features = self.metadata['num_output_features']
-
-            # B x D'
+            # [B, K]
             output = mlp(inputs=rnn_output,
                          output_size=num_output_features,
                          hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
@@ -415,37 +411,27 @@ class RNNModel(Model):
                          dropout_keep_rate=self._placeholders['dropout_keep_rate'],
                          name=output_layer_name)
 
-            if self.hypers.model_params.get('bin_outputs', False):
-                output_probs = tf.nn.softmax(output, axis=-1)
-                output = tf.reduce_sum(output_probs * self._placeholders['bin_means'], axis=-1, keepdims=True)
-                self._ops[f'prediction_probs_{i}'] = output_probs
-
-            if self.hypers.model_params['output_type'].lower() == 'classification':
-                self._ops[f'logits_{i}'] = output
-
-                predicted_probs = tf.math.sigmoid(output)
-                predictions = tf.cast(predicted_probs > 0.5, tf.float32)
-                self._ops[f'prediction_{i}'] = predictions
-
-                self._ops[f'loss_{i}'] = self.classification_loss(predicted_probs=predicted_probs,
-                                                                  predictions=predictions,
-                                                                  labels=self._placeholders['output'],
-                                                                  pos_weight=self.hypers.model_params['pos_weights'][i],
-                                                                  neg_weight=self.hypers.model_params['neg_weights'][i])
-
-                self._ops[self.accuracy_op_names[i]] = tf.reduce_mean(1.0 - tf.abs(predictions - self._placeholders['output']))
-                output = predictions
+            if self.output_type == OutputType.CLASSIFICATION:
+                classification_output = compute_binary_classification_output(model_output=output,
+                                                                             labels=self._placeholders['output'],
+                                                                             false_pos_weight=self.hypers.model_params['pos_weights'][i],
+                                                                             false_neg_weight=self.hypers.model_params['neg_weights'][i])
+                self._ops[logits_name] = classification_output.logits,
+                self._ops[prediction_name] = classification_output.predictions
+                self._ops[loss_name] = classification_output.loss
+                self._ops[accuracy_name] = classification_output.accuracy
             else:
-                self._ops[f'prediction_{i}'] = output
-                self._ops[f'loss_{i}'] = tf.reduce_sum(tf.square(output - self._placeholders['output']), axis=-1)  # B
+                regression_output = compute_regression_output(model_output=output, expected_otuput=self._placeholders['output'])
+                self._ops[prediction_name] = regression_output.predictions
+                self._ops[loss_name] = regression_output.loss
 
-            self._ops[f'gates_{i}'] = rnn_gates.stack()  # B x T x M x D
-            self._ops[f'states_{i}'] = rnn_states.stack()  # B x T x D
+            self._ops[gate_name] = rnn_gates.stack()  # [B, T, M, D]
+            self._ops[state_name] = rnn_states.stack()  # [B, T, D]
 
             outputs.append(output)
 
-        self._ops['predictions'] = tf.concat([tf.expand_dims(t, axis=1) for t in outputs], axis=1)
-
+        combined_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), outputs), axis=1)
+        self._ops[ALL_PREDICTIONS_NAME] = combined_outputs
         use_previous_layers = self.model_type == RNNModelType.CHUNKED
         self._loss_ops = self._make_loss_ops(use_previous_layers=use_previous_layers)
 
@@ -464,7 +450,7 @@ class RNNModel(Model):
     def anytime_generator(self, feed_dict: Dict[tf.Tensor, List[Any]],
                           max_num_levels: int) -> Optional[Iterable[np.ndarray]]:
         """
-        Anytime Inference in a generator-like fashion
+        Anytime Inference in a generator-like fashion using Tensorflow's partial run API
         """
         with self.sess.graph.as_default():
             # Initialize partial run settings
@@ -482,72 +468,6 @@ class RNNModel(Model):
                 prediction = self.sess.partial_run(handle, prediction_op, feed_dict=op_feed_dict)
 
                 yield prediction
-
-    def anytime_inference(self, feed_dict: Dict[tf.Tensor, List[Any]],
-                          max_num_levels: int,
-                          processing_params: Dict[str, float],
-                          system_energy: float,
-                          period_time: float,
-                          inference_time: float,
-                          max_energy: float,
-                          min_energy: float,
-                          recharge_rate: float) -> Tuple[Optional[np.ndarray], float, float, int]:
-        """
-        Executes anytime inference with the given inference and system parameters.
-        """
-        remaining_time = inference_time - period_time
-        with self.sess.graph.as_default():
-
-            # Initialize partial run settings
-            prediction_ops = [self._ops[op_name] for op_name in self.prediction_ops]
-            placeholders = list(self._placeholders.values())
-            handle = self.sess.partial_run_setup(prediction_ops, placeholders)
-
-            prediction_level = 0
-            result = None
-            while prediction_level < max_num_levels:
-                prediction_op = prediction_ops[prediction_level]
-                op_name = self.prediction_ops[prediction_level]
-
-                # Filter feed dict to avoid feeding the same inputs multiple times
-                op_feed_dict = {key: value for key, value in feed_dict.items() if key.name.endswith(str(prediction_level))}
-                prediction = self.sess.partial_run(handle, prediction_op, feed_dict=op_feed_dict)
-
-                step_energy = max(processing_params['energy'] + np.random.normal(loc=0.0, scale=processing_params['energy_noise']), 0.0)
-                step_time = max(processing_params['time'] + np.random.normal(loc=0.0, scale=processing_params['time_noise']), 0.0)
-
-                # Accumulate period time
-                period_time += step_time
-
-                # There is not enough energy to compute this result
-                if system_energy - step_energy < min_energy:
-                    if prediction_level == 0:
-                        return None, min_energy, period_time, 0
-                    return result, min_energy, period_time, prediction_level + 1
-
-                # Safely deduct from the system energy
-                system_energy -= step_energy
-
-                # There is not enough time to compute this result
-                energy_delta = max_energy - system_energy
-                time_delta = inference_time - period_time
-                
-                if time_delta * recharge_rate <= energy_delta:
-                    if prediction_level == 0:
-                        result = prediction
-                        prediction_level += 1
-
-                    # On an intermittent system, we might want to assume we can interrupt progress at any time
-                    # Thus, we set the period time as if we halted execution right when we see
-                    # time_delta * recharge_rate == energy_delta. Note this for later.
-
-                    break
-
-                # Advance the prediction level
-                result = prediction
-                prediction_level += 1
-
-        return result, system_energy, period_time, prediction_level
 
     def _make_loss_ops(self, use_previous_layers: bool = True) -> OrderedDict:
         loss_ops = OrderedDict()

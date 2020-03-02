@@ -1,3 +1,0 @@
-BIG_NUMBER = 1e7
-SMALL_NUMBER = 1e-7
-DATE_FORMAT = '%Y-%m-%dT%H:%M:%S'
