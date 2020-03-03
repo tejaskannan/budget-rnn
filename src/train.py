@@ -1,5 +1,5 @@
+import os.path
 from argparse import ArgumentParser
-from os.path import join, exists
 from dpu_utils.utils import RichPath
 from datetime import datetime
 
@@ -15,9 +15,9 @@ def train(data_folder: str, save_folder: RichPath, hypers: HyperParameters, max_
     model = RNNModel(hypers, save_folder=save_folder)
 
     # Create dataset
-    train_folder = join(data_folder, TRAIN)
-    valid_folder = join(data_folder, VALID)
-    test_folder = join(data_folder, TEST)
+    train_folder = os.path.join(data_folder, TRAIN)
+    valid_folder = os.path.join(data_folder, VALID)
+    test_folder = os.path.join(data_folder, TEST)
     dataset = RNNSampleDataset(train_folder, valid_folder, test_folder)
 
     if max_epochs is not None:
@@ -43,20 +43,20 @@ if __name__ == '__main__':
 
     # Validate data folders before training (to fail fast)
     for data_folder in args.data_folders:
-        assert exists(data_folder), f'The data folder {data_folder} does not exist!'
+        assert os.path.exists(data_folder), f'The data folder {data_folder} does not exist!'
 
-        train_folder = join(data_folder, TRAIN)
-        assert exists(train_folder), f'The folder {train_folder} does not exist!'
+        train_folder = os.path.join(data_folder, TRAIN)
+        assert os.path.exists(train_folder), f'The folder {train_folder} does not exist!'
 
-        valid_folder = join(data_folder, VALID)
-        assert exists(valid_folder), f'The folder {valid_folder} does not exist!'
+        valid_folder = os.path.join(data_folder, VALID)
+        assert os.path.exists(valid_folder), f'The folder {valid_folder} does not exist!'
 
-        test_folder = join(data_folder, TEST)
-        assert exists(test_folder), f'The folder {test_folder} does not exist!'
+        test_folder = os.path.join(data_folder, TEST)
+        assert os.path.exists(test_folder), f'The folder {test_folder} does not exist!'
 
     # Validate params files (to fail fast)
     for params_file in args.params_files:
-        assert exists(params_file), f'The file {params_file} does not exist!'
+        assert os.path.exists(params_file), f'The file {params_file} does not exist!'
         assert params_file.endswith('.json'), f'The params file must be a JSON.'
 
     trials = max(args.trials, 1)
