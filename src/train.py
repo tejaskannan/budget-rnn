@@ -35,9 +35,8 @@ def test(name: str, data_folder: str, save_folder: RichPath, hypers: HyperParame
     test_folder = join(data_folder, 'test')
     dataset = RNNSampleDataset(train_folder, valid_folder, test_folder)
 
-    model.restore_parameters(name=name)
+    model.restore(name=name)
     model.make(is_train=False)
-    model.restore_weights(name=name)
 
     test_results = model.predict(dataset=dataset,
                                  test_batch_size=hypers.batch_size,

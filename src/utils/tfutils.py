@@ -1,5 +1,5 @@
 import tensorflow as tf
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from dpu_utils.tfutils import get_activation
 
 
@@ -24,11 +24,11 @@ def pool_rnn_outputs(outputs: tf.Tensor, final_state: tf.Tensor, pool_mode: str)
     Pools the outputs of an RNN using the given strategy.
 
     Args:
-        outputs: A B x T x D tensor containing the RNN outputs
-        final_state: A B x D tensor with the final RNN state
+        outputs: A [B, T, D] tensor containing the RNN outputs
+        final_state: A [B, D] tensor with the final RNN state
         pool_mode: Pooling strategy
     Returns:
-        A B x D tensor which represents an aggregation of the RNN outputs.
+        A [B, D] tensor which represents an aggregation of the RNN outputs.
     """
     if pool_mode == 'sum':
         return tf.reduce_sum(outputs, axis=-2)
@@ -45,7 +45,21 @@ def pool_rnn_outputs(outputs: tf.Tensor, final_state: tf.Tensor, pool_mode: str)
                                           activation=get_activation('leaky_relu'),
                                           kernel_initializer=tf.initializers.glorot_uniform(),
                                           name='attention-layer')
-        normalized_attn_weights = tf.nn.softmax(attention_layer, axis=-2)  # B x T x 1
-        return tf.reduce_sum(outputs * normalized_attn_weights, axis=-2)  # B x T x 1
+        normalized_attn_weights = tf.nn.softmax(attention_layer, axis=-2)  # [B, T, 1]
+        return tf.reduce_sum(outputs * normalized_attn_weights, axis=-2)  # [B, D]
     else:
         raise ValueError(f'Unknown pool mode {pool_mode}.')
+
+
+def variables_for_loss_op(variables: List[tf.Variable], loss_op: str) -> List[tf.Variable]:
+    """
+    Gets all variables that have a gradient with respect to the given loss operation.
+
+    Args:
+        variables: List of trainable variables
+        loss_op: Operation to compute gradient for
+    Returns:
+        A list of all variables with an existing gradient
+    """
+    gradients = tf.gradients(loss_op, variables)
+    return [v for g, v in zip(gradients, variables) if g is not None]

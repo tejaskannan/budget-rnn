@@ -10,7 +10,7 @@ from typing import Optional, Iterable, Dict, Any, Union, List, DefaultDict
 from dataset.dataset import Dataset, DataSeries
 from layers.output_layers import OutputType
 from utils.hyperparameters import HyperParameters
-from utils.tfutils import get_optimizer
+from utils.tfutils import get_optimizer, variables_for_loss_op
 from utils.file_utils import to_rich_path
 from utils.constants import BIG_NUMBER
 
@@ -72,8 +72,9 @@ class Model:
     def sess(self) -> tf.Session:
         return self._sess
 
-    def get_variable_group(self, loss_op_name: str) -> List[tf.Variable]:
-        return [var for var in self._sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)]
+    @property
+    def trainable_vars(self) -> List[tf.Variable]:
+        return list(self.sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES))
 
     def load_metadata(self, dataset: Dataset):
         """
@@ -134,10 +135,8 @@ class Model:
             self._sess.run(init_op)
 
     def count_parameters(self) -> int:
-        trainable_vars = self._sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-
         num_parameters = 0
-        for var in trainable_vars:
+        for var in self.trainable_vars:
             num_parameters += np.prod(var.shape)
         return int(num_parameters)
 
@@ -167,8 +166,8 @@ class Model:
             loss_ops: Optional dictionary mapping loss operations to a list of trainable variables.
                 The learning rates can be individually scaled for each variable.
         """
+        trainable_vars = self.trainable_vars
         if loss_ops is None:
-            trainable_vars = self._sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
             vars_with_weights = [VariableWithWeight(var) for var in trainable_vars]
             loss_ops = dict(loss=vars_with_weights)
 
@@ -196,8 +195,7 @@ class Model:
 
     def get_weights(self) -> Dict[str, np.ndarray]:
         with self._sess.graph.as_default():
-            trainable_vars = self._sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-            ops = {var.name: var for var in trainable_vars}
+            ops = {var.name: var for var in self.trainable_vars}
             weights = self._sess.run(ops)
             return weights
 
@@ -345,9 +343,7 @@ class Model:
                     group_dict: Dist[str, List[tf.Variable]] = dict()
                     group_dict[loss_op_name] = variable_group
 
-                    self.save(name=name,
-                              variable_groups=group_dict,
-                              data_folders=dataset.data_folders)
+                    self.save(name=name, data_folders=dataset.data_folders)
 
                     print(f'Saving Model For Operation: {loss_op_name}')
 
@@ -369,68 +365,54 @@ class Model:
 
         return name
 
-    def save(self, name: str, variable_groups: Optional[Dict[str, List[tf.Variable]]] = None,
-             data_folders: Optional[Dict[DataSeries, str]] = None):
+    def save(self, name: str, data_folders: Dict[DataSeries, str]):
         """
-        Save model weights and hyper-parameters.
+        Save model weights, hyper-parameters, and metadata
         """
+        # Save hyperparameters
         params_path = self.save_folder.join(f'model-hyper-params-{name}.pkl.gz')
         params_path.save_as_compressed_file(self.hypers.__dict__())
 
+        # Save metadata
         metadata_path = self.save_folder.join(f'model-metadata-{name}.pkl.gz')
         metadata_path.save_as_compressed_file(dict(metadata=self.metadata, data_folders=data_folders))
 
-        with self._sess.graph.as_default():
-            if variable_groups is None:
-                model_path = self.save_folder.join(f'model-{name}.ckpt')
-                saver = tf.train.Saver()
-                saver.save(self._sess, model_path.path)
-            else:
-                # Save variable groups.
-                varname_path = self.save_folder.join(f'model-varnames-{name}.pkl.gz')
-                variables_dict: Dict[str, List[str]] = dict()
-                if varname_path.exists():
-                    variables_dict = varname_path.read_by_file_suffix()
+        with self.sess.graph.as_default():
+            model_path = self.save_folder.join(f'model-{name}.pkl.gz')
+           
+            vars_to_save = {var.name: var for var in self.trainable_vars}
+            vars_dict = self.sess.run(vars_to_save)
 
-                varname_dict = {group_name: [var.name for var in variables] for group_name, variables in variable_groups.items()}
-                variables_dict.update(varname_dict)
-                varname_path.save_as_compressed_file(variables_dict)
-
-                # Save model weights
-                for group_name, var_set in variable_groups.items():
-                    model_path = self.save_folder.join(f'model-{name}-{group_name}.ckpt')
-                    saver = tf.train.Saver(var_set)
-                    saver.save(self._sess, model_path.path)
-
-    def restore_parameters(self, name: str):
+            model_path.save_as_compressed_file(vars_dict)
+   
+    def restore(self, name: str):
         """
-        Restore model metadata and hyperparameters.
+        Restore model metadata, hyper-parameters, and trainable parameters.
         """
+        # Restore hyperparameters
         params_path = self.save_folder.join(f'model-hyper-params-{name}.pkl.gz')
         self.hypers = HyperParameters.create_from_file(params_path)
 
+        # Restore metadata
         metadata_path = self.save_folder.join(f'model-metadata-{name}.pkl.gz')
         train_metadata = metadata_path.read_by_file_suffix()
         self.metadata = train_metadata['metadata']
 
-    def restore_weights(self, name: str):
-        """
-        Restore model weights.
-        """
-        with self._sess.graph.as_default():
-            varname_path = self.save_folder.join(f'model-varnames-{name}.pkl.gz')
-            varname_dict = varname_path.read_by_file_suffix() if varname_path.exists() else None
+        # Build the model
+        self.make(is_train=False)
+    
+        # Restore the trainable parameters
+        with self.sess.graph.as_default():
+            model_path = self.save_folder.join(f'model-{name}.pkl.gz')
+            vars_dict = model_path.read_by_file_suffix()
 
-            trainable_vars = list(self._sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES))
+            # Collect all saved variables
+            assign_ops = []
+            for trainable_var in self.trainable_vars:
+                saved_value = vars_dict[trainable_var.name]
+                assign_op = trainable_var.assign(saved_value, use_locking=True, read_value=False)
+                assign_ops.append(assign_op)
 
-            if varname_dict is not None:
-                for loss_op_name, variable_names in varname_dict.items():
-                    model_path = self.save_folder.join(f'model-{name}-{loss_op_name}.ckpt')
+            # Execute assignment
+            self.sess.run(assign_ops)
 
-                    variables = list(filter(lambda v: v.name in variable_names, trainable_vars))
-                    saver = tf.train.Saver(variables)
-                    saver.restore(self._sess, model_path.path)
-            else:
-                model_path = self.save_folder.join('model-{name}.ckpt')
-                saver = tf.train.Saver()
-                saver.restore(self._sess, model_path.path)

@@ -31,9 +31,8 @@ def model_test(path: str, dataset_folder: str, max_num_batches: Optional[int]):
     model = RNNModel(hyper_parameters=hypers, save_folder=save_folder)
 
     # Build model
-    model.restore_parameters(name=model_name)
-    model.make(is_train=False)
-    model.restore_weights(name=model_name)
+    model.restore(name=model_name)
+    # model.make(is_train=False)
 
     # Test the model
     print('Starting model testing.')
