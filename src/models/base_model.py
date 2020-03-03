@@ -343,7 +343,7 @@ class Model:
                     group_dict: Dist[str, List[tf.Variable]] = dict()
                     group_dict[loss_op_name] = variable_group
 
-                    self.save(name=name, data_folders=dataset.data_folders)
+                    self.save(name=name, data_folders=dataset.data_folders, loss_ops=None)
 
                     print(f'Saving Model For Operation: {loss_op_name}')
 
@@ -365,27 +365,55 @@ class Model:
 
         return name
 
-    def save(self, name: str, data_folders: Dict[DataSeries, str]):
+    def save(self, name: str, data_folders: Dict[DataSeries, str], loss_ops: Optional[List[str]]):
         """
         Save model weights, hyper-parameters, and metadata
+
+        Args:
+            name: Name of the model
+            data_folders: Data folders used for training and validation
+            loss_ops: Loss operations for which to save variables. None value indicates that ALL variables
+                are to be saved
         """
         # Save hyperparameters
         params_path = self.save_folder.join(f'model-hyper-params-{name}.pkl.gz')
         params_path.save_as_compressed_file(self.hypers.__dict__())
 
         # Save metadata
+        data_folders_dict = {series.name: path for series, path in data_folders.items()}
         metadata_path = self.save_folder.join(f'model-metadata-{name}.pkl.gz')
-        metadata_path.save_as_compressed_file(dict(metadata=self.metadata, data_folders=data_folders))
+        metadata_path.save_as_compressed_file(dict(metadata=self.metadata, data_folders=data_folders_dict))
 
         with self.sess.graph.as_default():
             model_path = self.save_folder.join(f'model-{name}.pkl.gz')
-           
-            vars_to_save = {var.name: var for var in self.trainable_vars}
+            
+            # Get all variable values
+            trainable_vars = self.trainable_vars
+            vars_to_save = {var.name: var for var in trainable_vars}
             vars_dict = self.sess.run(vars_to_save)
 
+            # Save only variables with existing gradients
+            if loss_ops is not None:
+                # Load existing variables
+                saved_vars: Dict[str, np.ndarray] = dict()
+                if model_path.exists():
+                    saved_vars = model_path.read_by_file_suffix()
+
+                # Get variables to save
+                for loss_op in loss_ops:
+                    valid_vars = variables_for_loss_op(trainable_vars, loss_op)
+                    valid_vars_dict = {v.name: vars_dict[v.name] for v in valid_vars}
+
+                    # Update values for the valid variables
+                    saved_vars.update(valid_vars_dict)
+
+                # Write the updated dictionary
+                vars_dict = saved_vars
+
+            # Save results
             model_path.save_as_compressed_file(vars_dict)
-   
-    def restore(self, name: str):
+
+    def restore(self, name: str, is_train: bool):
         """
         Restore model metadata, hyper-parameters, and trainable parameters.
         """
@@ -399,7 +427,7 @@ class Model:
         self.metadata = train_metadata['metadata']
 
         # Build the model
-        self.make(is_train=False)
+        self.make(is_train=is_train)
     
         # Restore the trainable parameters
         with self.sess.graph.as_default():
