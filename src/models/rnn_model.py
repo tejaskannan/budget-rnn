@@ -16,21 +16,21 @@ from layers.output_layers import OutputType, compute_binary_classification_outpu
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
-from utils.constants import SMALL_NUMBER
+from utils.constants import SMALL_NUMBER, BIG_NUMBER
 from utils.rnn_utils import *
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric
 
 
-VAR_NAME_REGEX = re.compile(r'.*(layer-[0-9])+.*')
+VAR_NAME_REGEX = re.compile(r'.*(level-[0-9])+.*')
 
 
 def var_filter(trainable_vars: List[tf.Variable], var_prefixes: Optional[Dict[str, float]] = None) -> List[VariableWithWeight]:
     result: List[VariableWithWeight] = []
     for var in trainable_vars:
         name_match = VAR_NAME_REGEX.match(var.name)
-        layer_name = name_match.group(1) if name_match is not None else None
-        if var_prefixes is None or layer_name in var_prefixes:
-            weight = 1.0 if var_prefixes is None else var_prefixes[layer_name]
+        level_name = name_match.group(1) if name_match is not None else None
+        if var_prefixes is None or level_name in var_prefixes:
+            weight = 1.0 if var_prefixes is None else var_prefixes[level_name]
             result.append(VariableWithWeight(var, weight))
     return result
 
@@ -96,7 +96,7 @@ class RNNModel(Model):
             variables.extend(filter(lambda v: 'rnn-cell' in v.name or 'rnn-model' in v.name, trainable_vars))
 
         loss_index = int(loss_op_name[-1])
-        variables.extend(filter(lambda v: f'layer-{loss_index}' in v.name, trainable_vars))
+        variables.extend(filter(lambda v: f'level-{loss_index}' in v.name, trainable_vars))
         return variables
 
     def load_metadata(self, dataset: Dataset):
@@ -254,7 +254,7 @@ class RNNModel(Model):
             start = time.time()
             prediction_generator = self.anytime_generator(feed_dict, self.num_outputs)
             for prediction_op, prediction in zip(self.prediction_ops, prediction_generator):
-                model_predictions[prediction_op] = prediction
+                model_predictions[prediction_op] = np.squeeze(prediction)
                 elapsed = time.time() - start
                 latencies.append(elapsed)
 
@@ -262,13 +262,13 @@ class RNNModel(Model):
 
             # Compute metrics for each individual level
             for level, prediction_op in enumerate(self.prediction_ops):
-                prediction = np.squeeze(model_predictions[prediction_op])
+                prediction = model_predictions[prediction_op]
 
                 for metric_name in ClassificationMetric:
                     if metric_name.name not in result[prediction_op]:
                         result[prediction_op][metric_name.name] = []
                     
-                    metric_value = get_classification_metric(metric_name, prediction, true_labels, latencies[level], level)
+                    metric_value = get_classification_metric(metric_name, prediction, true_labels, latencies[level], level + 1)
                     result[prediction_op][metric_name.name].append(metric_value)
 
             # Compute metrics for the scheduled model
@@ -279,23 +279,23 @@ class RNNModel(Model):
                 true_label = batch['output'][batch_index][0][0]
 
                 for level, prediction_op in enumerate(self.prediction_ops):
-                    prediction = model_predictions[prediction_op][batch_index][0]
+                    prediction = model_predictions[prediction_op][batch_index]
 
                     # Prediction was zero, so short circuit the computation
                     if abs(prediction) < SMALL_NUMBER or level == self.num_outputs - 1:
                         scheduled_predictions.append(prediction)
                         scheduled_latencies.append(latencies[level])
-                        scheduled_levels.append(level)
+                        scheduled_levels.append(level + 1)
                         break
 
             for metric_name in ClassificationMetric:
                 if metric_name.name not in result['scheduled_model']:
-                    result[prediction_op]['scheduled_model'] = []
+                    result['scheduled_model'][metric_name.name] = []
                 
                 avg_latency = np.average(scheduled_latencies)
                 avg_levels = np.average(scheduled_levels)
                 metric_value = get_classification_metric(metric_name, np.array(scheduled_predictions), true_labels, avg_latency, avg_levels)
-                result['scheduled_model'][metric_name.name] = metric_value
+                result['scheduled_model'][metric_name.name].append(metric_value)
 
             if max_num_batches is not None and batch_num >= max_num_batches:
                 break
@@ -347,6 +347,7 @@ class RNNModel(Model):
             if self.model_type == RNNModelType.SAMPLE and i > 0:
                 prev_states = states_list[i-1]
 
+            # Run RNN
             rnn_outputs, rnn_states, rnn_gates = dynamic_rnn(cell=cell,
                                                              inputs=inputs,
                                                              previous_states=prev_states,
@@ -358,13 +359,14 @@ class RNNModel(Model):
             # Get the final state
             last_index = tf.shape(inputs)[1] - 1
             final_output = rnn_outputs.read(index=last_index)
+            final_state = rnn_states.read(index=last_index)
 
             # Save previous state for the chunked model
             if self.model_type == RNNModelType.CASCADE:
                 prev_state = rnn_states.read(index=last_index)
 
             # [B, D]
-            rnn_output = pool_rnn_outputs(rnn_outputs, final_output, pool_mode=self.hypers.model_params['pool_mode'])
+            rnn_output = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
 
             # [B, K]
             output = mlp(inputs=rnn_output,
@@ -395,17 +397,18 @@ class RNNModel(Model):
 
         combined_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), outputs), axis=1)
         self._ops[ALL_PREDICTIONS_NAME] = combined_outputs
-        use_previous_layers = self.model_type == RNNModelType.CASCADE
-        self._loss_ops = self._make_loss_ops(use_previous_layers=use_previous_layers)
+        use_previous_layers = self.model_type == RNNModelType.CASCADE 
+        # self._loss_ops = self._make_loss_ops(use_previous_layers=use_previous_layers)
 
     def make_loss(self):
         losses: List[tf.Tensor] = []
 
         # The loss_op keys are ordered by the output level
-        for loss_op_name in self._loss_ops:
-            losses.append(tf.reduce_mean(self._ops[loss_op_name]))
+        for level in range(self.num_outputs):
+            batch_loss = self._ops[get_loss_name(level)]
+            losses.append(tf.reduce_mean(batch_loss))
 
-        losses = tf.stack(losses)  # N, N is the number of sequences
+        losses = tf.stack(losses)  # [N], N is the number of sequences
         weighted_losses = tf.reduce_sum(losses * self._placeholders['loss_weights'], axis=-1)  # Scalar
 
         self._ops['loss'] = weighted_losses
@@ -439,7 +442,7 @@ class RNNModel(Model):
         layer_weight = self.hypers.model_params['layer_weight']
 
         for i in range(self.num_outputs):
-            layer_name = f'layer-{i}'
+            layer_name = f'level-{i}'
             var_prefixes[layer_name] = 1.0
 
             layer_vars = var_filter(trainable_vars, var_prefixes)

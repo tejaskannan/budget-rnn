@@ -32,12 +32,12 @@ LOW_SATURATION = 0.1
 def get_classification_metric(metric_name: ClassificationMetric, model_output: np.ndarray, expected_output: np.ndarray, latency: float, level: int) -> float:
     if metric_name == ClassificationMetric.ACCURACY:
         return float(np.average(1.0 - np.abs(model_output - expected_output)))
-    elif metric_name == ClassificationMetric.PRECISION:
+    elif metric_name == ClassificationMetric.RECALL:
         num_ones = np.sum(expected_output)
         if num_ones <= SMALL_NUMBER:
             return 0.0
         return float(np.sum(model_output * expected_output) / num_ones)
-    elif metric_name == ClassificationMetric.RECALL:
+    elif metric_name == ClassificationMetric.PRECISION:
         num_ones = np.sum(model_output)
         if num_ones <= SMALL_NUMBER:
             return 0.0

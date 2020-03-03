@@ -8,6 +8,7 @@ from collections import defaultdict
 from typing import Optional, Iterable, Dict, Any, Union, List, DefaultDict
 
 from dataset.dataset import Dataset, DataSeries
+from layers.output_layers import OutputType
 from utils.hyperparameters import HyperParameters, extract_hyperparameters
 from utils.tfutils import get_optimizer
 from utils.file_utils import to_rich_path
@@ -62,6 +63,10 @@ class Model:
     @property
     def loss_op_names(self) -> List[str]:
         return ['loss']
+
+    @property
+    def accuracy_op_names(self) -> List[str]:
+        return ['accuracy']
 
     @property
     def sess(self) -> tf.Session:
@@ -242,7 +247,7 @@ class Model:
 
         train_loss_dict: DefaultDict[str, List[float]] = defaultdict(list)
         valid_loss_dict: DefaultDict[str, List[float]] = defaultdict(list)
-        best_valid_loss_dict: DefaultDict[str, BIG_NUMBER] = defaultdict(lambda: BIG_NUMBER)
+        best_valid_loss_dict: DefaultDict[str, float] = defaultdict(lambda: BIG_NUMBER)
 
         num_not_improved = 0
         for epoch in range(self.hypers.epochs):
@@ -261,7 +266,7 @@ class Model:
                 feed_dict = self.batch_to_feed_dict(batch, is_train=True)
                 ops_to_run = [self.optimizer_op_name] + self.loss_op_names
                 
-                if self.hypers.model_params.get('output_type', '').lower() == 'classification':
+                if self.output_type == OutputType.CLASSIFICATION:
                     ops_to_run += self.accuracy_op_names
 
                 train_results = self.execute(feed_dict, ops_to_run)
@@ -302,7 +307,7 @@ class Model:
                 feed_dict = self.batch_to_feed_dict(batch, is_train=False)
 
                 ops_to_run: List[str] = []
-                if self.hypers.model_params.get('output_type', '').lower() == 'classification':
+                if self.output_type == OutputType.CLASSIFICATION:
                     ops_to_run += self.accuracy_op_names
                 
                 ops_to_run += self.loss_op_names
