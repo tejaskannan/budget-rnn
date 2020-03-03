@@ -12,7 +12,9 @@ from layers.output_layers import OutputType
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import get_optimizer, variables_for_loss_op
 from utils.file_utils import to_rich_path
-from utils.constants import BIG_NUMBER
+from utils.constants import BIG_NUMBER, NAME_FMT, HYPERS_PATH
+from utils.constants import METADATA_PATH, MODEL_PATH, TRAIN_LOG_PATH
+from utils.constants import LOSS, ACCURACY, OPTIMIZER_OP
 
 
 class Model:
@@ -26,14 +28,13 @@ class Model:
         self._optimizer = get_optimizer(self.hypers.optimizer, self.hypers.learning_rate)
         self._ops: Dict[str, tf.Tensor] = dict()
         self._placeholders: Dict[str, tf.Tensor] = dict()
-        self._loss_ops: Dict[str, List[VariableWithWeight]] = None
 
         # Dictionary with inference operations
         self._inference_ops: Dict[str, tf.Tensor] = dict()
 
         # Make the output folder
         self.save_folder.make_as_dir()
-        self.name = ''
+        self.name = 'model'  # Default name
 
     @property
     def ops(self) -> Dict[str, tf.Tensor]:
@@ -45,15 +46,15 @@ class Model:
     
     @property
     def optimizer_op_name(self) -> str:
-        return 'optimizer_op'
+        return OPTIMIZER_OP
 
     @property
     def loss_op_names(self) -> List[str]:
-        return ['loss']
+        return [LOSS]
 
     @property
     def accuracy_op_names(self) -> List[str]:
-        return ['accuracy']
+        return [ACCURACY]
 
     @property
     def sess(self) -> tf.Session:
@@ -62,6 +63,10 @@ class Model:
     @property
     def trainable_vars(self) -> List[tf.Variable]:
         return list(self.sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES))
+
+    @property
+    def output_type(self) -> OutputType:
+        return OutputType.REGRESSION
 
     def load_metadata(self, dataset: Dataset):
         """
@@ -209,9 +214,7 @@ class Model:
         self.load_metadata(dataset)
 
         current_date = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
-        name = f'{dataset.dataset_name}-{current_date}_model_best'
-        if len(self.name) > 0:
-            name = f'{self.name}-{name}'
+        name = NAME_FMT.format(self.name, dataset.dataset_name, current_date)
 
         # Make Model and Initialize variables
         self.make(is_train=True)
@@ -261,7 +264,7 @@ class Model:
                 train_acc_agg = np.average(list(epoch_train_acc.values()))
                 avg_train_acc_so_far = train_acc_agg / (i+1)
 
-                if self.hypers.model_params.get('output_type', '').lower() == 'classification':
+                if self.output_type == OutputType.CLASSIFICATION:
                     print(f'Train Batch {i}. Avg loss so far: {avg_train_loss_so_far:.4f}, Avg accuracy so far: {avg_train_acc_so_far:.4f}', end='\r')                
                 else:
                     print(f'Train Batch {i}. Avg loss so far: {avg_train_loss_so_far:.4f}', end='\r')
@@ -303,7 +306,7 @@ class Model:
                 valid_acc_agg = np.average(list(epoch_valid_acc.values()))
                 avg_valid_acc_so_far = valid_acc_agg / (i+1)
 
-                if self.hypers.model_params.get('output_type', '').lower() == 'classification':
+                if self.output_type == OutputType.CLASSIFICATION:
                     print(f'Valid Batch {i}. Avg loss so far: {avg_valid_loss_so_far:.4f}, Avg accuracy so far: {avg_valid_acc_so_far:.4f}', end='\r')
                 else:
                     print(f'Valid Batch {i}. Avg loss so far: {avg_valid_loss_so_far:.4f}', end='\r')
@@ -333,10 +336,10 @@ class Model:
                 print('Exiting due to Early Stopping')
                 break
 
+        # Save training metrics
         metrics_dict = dict(train_losses=train_loss_dict, valid_losses=valid_loss_dict)
-
-        log_file = self.save_folder.join(f'model-train-log-{name}.pkl.gz')
-        log_file.save_as_compressed_file([metrics_dict])
+        log_file = self.save_folder.join(TRAIN_LOG_PATH.format(name))
+        log_file.save_as_compressed_file(metrics_dict)
 
         return name
 
@@ -351,16 +354,16 @@ class Model:
                 are to be saved
         """
         # Save hyperparameters
-        params_path = self.save_folder.join(f'model-hyper-params-{name}.pkl.gz')
+        params_path = self.save_folder.join(HYPERS_PATH.format(name))
         params_path.save_as_compressed_file(self.hypers.__dict__())
 
         # Save metadata
         data_folders_dict = {series.name: path for series, path in data_folders.items()}
-        metadata_path = self.save_folder.join(f'model-metadata-{name}.pkl.gz')
+        metadata_path = self.save_folder.join(METADATA_PATH.format(name))
         metadata_path.save_as_compressed_file(dict(metadata=self.metadata, data_folders=data_folders_dict))
 
         with self.sess.graph.as_default():
-            model_path = self.save_folder.join(f'model-{name}.pkl.gz')
+            model_path = self.save_folder.join(MODEL_PATH.format(name))
             
             # Get all variable values
             trainable_vars = self.trainable_vars
@@ -393,11 +396,11 @@ class Model:
         Restore model metadata, hyper-parameters, and trainable parameters.
         """
         # Restore hyperparameters
-        params_path = self.save_folder.join(f'model-hyper-params-{name}.pkl.gz')
+        params_path = self.save_folder.join(HYPERS_PATH.format(name))
         self.hypers = HyperParameters.create_from_file(params_path)
 
         # Restore metadata
-        metadata_path = self.save_folder.join(f'model-metadata-{name}.pkl.gz')
+        metadata_path = self.save_folder.join(METADATA_PATH.format(name))
         train_metadata = metadata_path.read_by_file_suffix()
         self.metadata = train_metadata['metadata']
 
@@ -406,7 +409,7 @@ class Model:
     
         # Restore the trainable parameters
         with self.sess.graph.as_default():
-            model_path = self.save_folder.join(f'model-{name}.pkl.gz')
+            model_path = self.save_folder.join(MODEL_PATH.format(name))
             vars_dict = model_path.read_by_file_suffix()
 
             # Collect all saved variables

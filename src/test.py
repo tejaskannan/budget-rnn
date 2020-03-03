@@ -8,24 +8,38 @@ from models.rnn_model import RNNModel
 from dataset.rnn_sample_dataset import RNNSampleDataset
 from utils.hyperparameters import HyperParameters
 from utils.file_utils import extract_model_name
-from train import test
+from utils.constants import HYPERS_PATH, TEST_LOG_PATH, TRAIN, VALID, TEST, METADATA_PATH
 
 
-def model_test(path: str, dataset_folder: str, max_num_batches: Optional[int]):
-    
+def model_test(path: str, max_num_batches: Optional[int]):
     save_folder, model_file = os.path.split(path)
-    
-    model_name = extract_model_name(model_file)
-    if model_name.endswith('-loss'):
-        model_name = model_name[:-len('-loss')]
-    
-    hypers_name = 'model-hyper-params-{0}.pkl.gz'.format(model_name)
-    hyperparams_file = os.path.join(save_folder, hypers_name)
-    hypers = HyperParameters.create_from_file(hyperparams_file)
 
-    train_folder = os.path.join(dataset_folder, 'train')
-    valid_folder = os.path.join(dataset_folder, 'valid')
-    test_folder = os.path.join(dataset_folder, 'test')
+    model_name = extract_model_name(model_file)
+    assert model_name is not None, f'Could not extract name from file: {model_file}'
+
+    save_folder = RichPath.create(save_folder)
+
+    # Extract hyperparameters
+    hypers_name = HYPERS_PATH.format(model_name)
+    hypers = HyperParameters.create_from_file(save_folder.join(hypers_name))
+
+    # Extract data folders
+    metadata_file = save_folder.join(METADATA_PATH.format(model_name))
+    metadata = metadata_file.read_by_file_suffix()
+    train_folder = metadata['data_folders'][TRAIN.upper()]
+    dataset_folder, _ = os.path.split(train_folder.path)
+
+    test(model_name=model_name,
+         dataset_folder=dataset_folder,
+         save_folder=save_folder,
+         hypers=hypers,
+         max_num_batches=max_num_batches)
+
+def test(model_name: str, dataset_folder: str, save_folder: RichPath, hypers: HyperParameters, max_num_batches: Optional[int]):
+    # Create the dataset
+    train_folder = os.path.join(dataset_folder, TRAIN)
+    valid_folder = os.path.join(dataset_folder, VALID)
+    test_folder = os.path.join(dataset_folder, TEST)
     dataset = RNNSampleDataset(train_folder, valid_folder, test_folder)
 
     model = RNNModel(hyper_parameters=hypers, save_folder=save_folder)
@@ -34,20 +48,20 @@ def model_test(path: str, dataset_folder: str, max_num_batches: Optional[int]):
     model.restore(name=model_name, is_train=False)
 
     # Test the model
-    print('Starting model testing.')
+    print('Starting model testing...')
     test_results = model.predict(dataset=dataset,
                                  test_batch_size=hypers.batch_size,
                                  max_num_batches=max_num_batches)
 
-    test_result_file = RichPath.create(save_folder).join(f'model-test-log-{model_name}.jsonl.gz')
+    test_result_file = save_folder.join(TEST_LOG_PATH.format(model_name))
     test_result_file.save_as_compressed_file([test_results])
+    print('Completed model testing.')
 
 
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--model-path', type=str, required=True)
-    parser.add_argument('--dataset-folder', type=str, required=True)
     parser.add_argument('--max-num-batches', type=int)
     args = parser.parse_args()
 
-    model_test(args.model_path, args.dataset_folder, args.max_num_batches)
+    model_test(args.model_path, args.max_num_batches)

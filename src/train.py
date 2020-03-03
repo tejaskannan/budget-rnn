@@ -4,18 +4,20 @@ from dpu_utils.utils import RichPath
 from datetime import datetime
 
 from utils.hyperparameters import HyperParameters
+from utils.constants import TRAIN, VALID, TEST
 from models.rnn_model import RNNModel
 from dataset.rnn_sample_dataset import RNNSampleDataset
 from typing import Optional, Dict
+from test import test
 
 
 def train(data_folder: str, save_folder: RichPath, hypers: HyperParameters, max_epochs: Optional[int] = None) -> str:
     model = RNNModel(hypers, save_folder=save_folder)
 
     # Create dataset
-    train_folder = join(data_folder, 'train')
-    valid_folder = join(data_folder, 'valid')
-    test_folder = join(data_folder, 'test')
+    train_folder = join(data_folder, TRAIN)
+    valid_folder = join(data_folder, VALID)
+    test_folder = join(data_folder, TEST)
     dataset = RNNSampleDataset(train_folder, valid_folder, test_folder)
 
     if max_epochs is not None:
@@ -24,25 +26,6 @@ def train(data_folder: str, save_folder: RichPath, hypers: HyperParameters, max_
     # Train the model
     train_label = model.train(dataset=dataset)
     return train_label
-
-
-def test(name: str, data_folder: str, save_folder: RichPath, hypers: HyperParameters):
-    model = RNNModel(hyper_parameters=hypers, save_folder=save_folder)
-
-    # Create dataset
-    train_folder = join(data_folder, 'train')
-    valid_folder = join(data_folder, 'valid')
-    test_folder = join(data_folder, 'test')
-    dataset = RNNSampleDataset(train_folder, valid_folder, test_folder)
-
-    model.restore(name=name, is_train=False)
-
-    test_results = model.predict(dataset=dataset,
-                                 test_batch_size=hypers.batch_size,
-                                 max_num_batches=None)
-
-    test_result_file = save_folder.join(f'model-test-log-{name}.jsonl.gz')
-    test_result_file.save_as_compressed_file([test_results])
 
 
 if __name__ == '__main__':
@@ -62,13 +45,13 @@ if __name__ == '__main__':
     for data_folder in args.data_folders:
         assert exists(data_folder), f'The data folder {data_folder} does not exist!'
 
-        train_folder = join(data_folder, 'train')
+        train_folder = join(data_folder, TRAIN)
         assert exists(train_folder), f'The folder {train_folder} does not exist!'
 
-        valid_folder = join(data_folder, 'valid')
+        valid_folder = join(data_folder, VALID)
         assert exists(valid_folder), f'The folder {valid_folder} does not exist!'
 
-        test_folder = join(data_folder, 'test')
+        test_folder = join(data_folder, TEST)
         assert exists(test_folder), f'The folder {test_folder} does not exist!'
 
     # Validate params files (to fail fast)
@@ -103,10 +86,9 @@ if __name__ == '__main__':
                              max_epochs=max_epochs)
 
                 print('==========')
-                print('Completed training. Started testing...')
-                test(name=name,
-                     data_folder=data_folder,
+                test(model_name=name,
+                     dataset_folder=data_folder,
                      save_folder=save_folder,
-                     hypers=hypers)
-
+                     hypers=hypers,
+                     max_num_batches=None)
                 print('====================')

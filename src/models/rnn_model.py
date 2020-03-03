@@ -26,7 +26,7 @@ class RNNModel(Model):
     def __init__(self, hyper_parameters: HyperParameters, save_folder: Union[str, RichPath]):
         super().__init__(hyper_parameters, save_folder)
 
-        model_type = self.hypers.model_params.get('model_type', '').upper()
+        model_type = self.hypers.model_params['model_type'].upper()
         self.model_type = RNNModelType[model_type]
 
         self.name = model_type
@@ -67,23 +67,9 @@ class RNNModel(Model):
 
     @property
     def loss_op_names(self) -> List[str]:
-        if self.model_type == RNNModelType.VANILLA:
+        if self.model_type == RNNModelType.VANILLA and not self.hypers.model_params['share_cell_weights']:
             return [get_loss_name(i) for i in range(self.num_outputs)]
         return ['loss']
-
-    def get_variable_group(self, loss_op_name: str) -> List[tf.Variable]:
-        variables: List[tf.Variable] = []
-        trainable_vars = list(self.sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES))
-
-        if self.model_type != RNNModelType.VANILLA:
-            return trainable_vars
-
-        if self.hypers.model_params.get('share_cell_weights', False):
-            variables.extend(filter(lambda v: 'rnn-cell' in v.name or 'rnn-model' in v.name, trainable_vars))
-
-        loss_index = int(loss_op_name[-1])
-        variables.extend(filter(lambda v: f'level-{loss_index}' in v.name, trainable_vars))
-        return variables
 
     def load_metadata(self, dataset: Dataset):
         input_samples: List[List[float]] = []
