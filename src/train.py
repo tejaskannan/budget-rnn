@@ -3,7 +3,7 @@ from os.path import join, exists
 from dpu_utils.utils import RichPath
 from datetime import datetime
 
-from utils.hyperparameters import HyperParameters, extract_hyperparameters
+from utils.hyperparameters import HyperParameters
 from models.rnn_model import RNNModel
 from dataset.rnn_sample_dataset import RNNSampleDataset
 from typing import Optional, Dict
@@ -54,7 +54,6 @@ if __name__ == '__main__':
     parser.add_argument('--params-files', type=str, nargs='+')
     parser.add_argument('--trials', type=int, default=1)
     parser.add_argument('--testrun', action='store_true')
-    parser.add_argument('--grid-fields', type=str, nargs='*')
     args = parser.parse_args()
 
     assert args.params_files is not None and len(args.params_files) > 0, f'Must provide at least one set of parameters'
@@ -81,7 +80,6 @@ if __name__ == '__main__':
 
     trials = max(args.trials, 1)
     num_models = trials * len(args.params_files)
-    grid_fields = args.grid_fields if args.grid_fields is not None and len(args.grid_fields) > 0 else None
 
     # Create save folder (if necessary)
     base_save_folder = RichPath.create(args.save_folder)
@@ -95,22 +93,22 @@ if __name__ == '__main__':
         print('====================')
 
         for trial in range(trials):
+            print(f'Starting trial {trial+1}/{trials}')
+
             for i, params_file in enumerate(args.params_files):
                 print(f'Started training model {i+1}/{num_models}')
-                hypers = extract_hyperparameters(params_file, search_fields=grid_fields)
+                hypers = HyperParameters.create_from_file(params_file)
 
-                for j, hyperparameters in enumerate(hypers):
-                    print(f'Started hyperparameter setting {j+1}/{len(hypers)}')
-                    name = train(data_folder=data_folder,
-                                 save_folder=save_folder,
-                                 hypers=hyperparameters,
-                                 max_epochs=max_epochs)
+                name = train(data_folder=data_folder,
+                             save_folder=save_folder,
+                             hypers=hypers,
+                             max_epochs=max_epochs)
 
-                    print('Completed training. Started testing...')
-                    test(name=name,
-                         data_folder=data_folder,
-                         save_folder=save_folder,
-                         hypers=hyperparameters)
+                print('==========')
+                print('Completed training. Started testing...')
+                test(name=name,
+                     data_folder=data_folder,
+                     save_folder=save_folder,
+                     hypers=hypers)
 
-                    print('==========')
                 print('====================')

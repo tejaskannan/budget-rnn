@@ -9,7 +9,7 @@ from typing import Optional, Iterable, Dict, Any, Union, List, DefaultDict
 
 from dataset.dataset import Dataset, DataSeries
 from layers.output_layers import OutputType
-from utils.hyperparameters import HyperParameters, extract_hyperparameters
+from utils.hyperparameters import HyperParameters
 from utils.tfutils import get_optimizer
 from utils.file_utils import to_rich_path
 from utils.constants import BIG_NUMBER
@@ -407,7 +407,7 @@ class Model:
         Restore model metadata and hyperparameters.
         """
         params_path = self.save_folder.join(f'model-hyper-params-{name}.pkl.gz')
-        self.hypers = extract_hyperparameters(params_path)[0]
+        self.hypers = HyperParameters.create_from_file(params_path)
 
         metadata_path = self.save_folder.join(f'model-metadata-{name}.pkl.gz')
         train_metadata = metadata_path.read_by_file_suffix()

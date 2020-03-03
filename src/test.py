@@ -6,7 +6,7 @@ from typing import Optional
 
 from models.rnn_model import RNNModel
 from dataset.rnn_sample_dataset import RNNSampleDataset
-from utils.hyperparameters import HyperParameters, extract_hyperparameters
+from utils.hyperparameters import HyperParameters
 from utils.file_utils import extract_model_name
 from train import test
 
@@ -21,7 +21,7 @@ def model_test(path: str, dataset_folder: str, max_num_batches: Optional[int]):
     
     hypers_name = 'model-hyper-params-{0}.pkl.gz'.format(model_name)
     hyperparams_file = os.path.join(save_folder, hypers_name)
-    hypers = extract_hyperparameters(hyperparams_file)[0]
+    hypers = HyperParameters.create_from_file(hyperparams_file)
 
     train_folder = os.path.join(dataset_folder, 'train')
     valid_folder = os.path.join(dataset_folder, 'valid')

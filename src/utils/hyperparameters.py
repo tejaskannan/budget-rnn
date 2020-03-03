@@ -39,41 +39,13 @@ class HyperParameters:
     def __str__(self) -> str:
         return str(self.__dict__())
 
+    @classmethod
+    def create_from_file(cls, params_file: Union[str, RichPath]):
+        """
+        Reads the given hyper parameters from the serialized file.
+        """
+        params_file = to_rich_path(params_file)
+        assert params_file.exists(), f'The parameters file {params_file} does not exist!'
 
-def extract_hyperparameters(params_file: Union[str, RichPath],
-                            search_fields: Optional[List[str]] = None) -> List[HyperParameters]:
-    params_file = to_rich_path(params_file)
-    assert params_file.exists(), f'The parameters file {params_file} does not exist!'
-
-    parameters = params_file.read_by_file_suffix()
-
-    if search_fields is None:
-        return [HyperParameters(parameters)]
-
-    grid_params: List[List[Any]] = []
-    for field in search_fields:
-        if field in parameters:
-            field_values = parameters[field]
-        else:
-            field_values = parameters['model_params'][field]
-
-        # Tread non-list grid fields as single-element lists
-        if not isinstance(field_values, list):
-            grid_params.append([field_values])
-        else:
-            grid_params.append(field_values)
-
-    grid_permutations = product(*grid_params)
-
-    hyperparameters: List[HyperParameters] = []
-    for grid_setting in grid_permutations:
-        for field, setting in zip(search_fields, grid_setting):
-            if field in parameters:
-                parameters[field] = setting
-            else:
-                parameters['model_params'][field] = setting
-
-        hypers = HyperParameters(parameters)
-        hyperparameters.append(hypers)
-
-    return hyperparameters
+        parameters = params_file.read_by_file_suffix()
+        return HyperParameters(parameters)
