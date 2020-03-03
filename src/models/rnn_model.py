@@ -8,7 +8,7 @@ from typing import List, Optional, Tuple, Dict, Any, Set, Union, DefaultDict, It
 from sklearn.preprocessing import StandardScaler
 from dpu_utils.utils import RichPath
 
-from models.base_model import Model, VariableWithWeight
+from models.base_model import Model
 from layers.basic import rnn_cell, mlp
 from layers.cells.cells import make_rnn_cell, MultiRNNCell
 from layers.rnn import dynamic_rnn, dropped_rnn
@@ -19,20 +19,6 @@ from utils.tfutils import pool_rnn_outputs
 from utils.constants import SMALL_NUMBER, BIG_NUMBER
 from utils.rnn_utils import *
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric
-
-
-VAR_NAME_REGEX = re.compile(r'.*(level-[0-9])+.*')
-
-
-def var_filter(trainable_vars: List[tf.Variable], var_prefixes: Optional[Dict[str, float]] = None) -> List[VariableWithWeight]:
-    result: List[VariableWithWeight] = []
-    for var in trainable_vars:
-        name_match = VAR_NAME_REGEX.match(var.name)
-        level_name = name_match.group(1) if name_match is not None else None
-        if var_prefixes is None or level_name in var_prefixes:
-            weight = 1.0 if var_prefixes is None else var_prefixes[level_name]
-            result.append(VariableWithWeight(var, weight))
-    return result
 
 
 class RNNModel(Model):
@@ -398,7 +384,6 @@ class RNNModel(Model):
         combined_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), outputs), axis=1)
         self._ops[ALL_PREDICTIONS_NAME] = combined_outputs
         use_previous_layers = self.model_type == RNNModelType.CASCADE 
-        # self._loss_ops = self._make_loss_ops(use_previous_layers=use_previous_layers)
 
     def make_loss(self):
         losses: List[tf.Tensor] = []
@@ -434,31 +419,3 @@ class RNNModel(Model):
                 prediction = self.sess.partial_run(handle, prediction_op, feed_dict=op_feed_dict)
 
                 yield prediction
-
-    def _make_loss_ops(self, use_previous_layers: bool = True) -> OrderedDict:
-        loss_ops = OrderedDict()
-        var_prefixes: Dict[str, float] = dict()  # Maps prefix name to current weight
-        trainable_vars = self._sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-        layer_weight = self.hypers.model_params['layer_weight']
-
-        for i in range(self.num_outputs):
-            layer_name = f'level-{i}'
-            var_prefixes[layer_name] = 1.0
-
-            layer_vars = var_filter(trainable_vars, var_prefixes)
-            if self.hypers.model_params['share_cell_weights']:
-                # Always include the RNN cell weights
-                cell_vars = [VariableWithWeight(var, 1.0) for var in trainable_vars if 'rnn-cell' in var.name]
-                layer_vars.extend(cell_vars)
-
-            loss_ops[get_loss_name(i)] = layer_vars
-
-            if not use_previous_layers:
-                var_prefixes.pop(layer_name)
-
-            if layer_weight < 1.0:
-                # Update the layer weights
-                for prefix in var_prefixes:
-                    var_prefixes[prefix] = var_prefixes[prefix] * layer_weight
-
-        return loss_ops

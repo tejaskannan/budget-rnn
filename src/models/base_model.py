@@ -15,19 +15,6 @@ from utils.file_utils import to_rich_path
 from utils.constants import BIG_NUMBER
 
 
-class VariableWithWeight:
-
-    __slots__ = ['variable', 'weight']
-
-    def __init__(self, variable: tf.Variable, weight: float = 1.0):
-        assert 0.0 <= weight <= 1.0, 'Weight must be a number between 0 and 1.'
-        self.variable = variable
-        self.weight = weight
-
-    def __str__(self) -> str:
-        return f'({self.variable.name}, {self.weight})'
-
-
 class Model:
 
     def __init__(self, hyper_parameters: HyperParameters, save_folder: Union[str, RichPath]):
@@ -130,11 +117,14 @@ class Model:
         """
         Initializes all variables in the computation graph.
         """
-        with self._sess.graph.as_default():
+        with self.sess.graph.as_default():
             init_op = tf.global_variables_initializer()
-            self._sess.run(init_op)
+            self.sess.run(init_op)
 
     def count_parameters(self) -> int:
+        """
+        Returns the number of trainable parameters in this model
+        """
         num_parameters = 0
         for var in self.trainable_vars:
             num_parameters += np.prod(var.shape)
@@ -155,9 +145,9 @@ class Model:
             # guaranteed to be defined when the model is built for training
             if is_train:
                 self.make_loss()
-                self.make_training_step(loss_ops=self._loss_ops)
+                self.make_training_step()
 
-    def make_training_step(self, loss_ops: Optional[Dict[str, List[VariableWithWeight]]] = None):
+    def make_training_step(self):
         """
         Creates the training step for this model. Gradients are clipped
         for better numerical stability.
@@ -166,39 +156,25 @@ class Model:
             loss_ops: Optional dictionary mapping loss operations to a list of trainable variables.
                 The learning rates can be individually scaled for each variable.
         """
+        optimizer_ops = []
         trainable_vars = self.trainable_vars
-        if loss_ops is None:
-            vars_with_weights = [VariableWithWeight(var) for var in trainable_vars]
-            loss_ops = dict(loss=vars_with_weights)
-
-        # Validate operations
-        for loss_op_name in loss_ops:
-            if loss_op_name not in self._ops:
-                raise ValueError(f'The operation `{loss_op_name}` does not exist.')
-
-        optimizer_ops: List[Tuple[tf.Tensor, tf.Tensor]] = []
-        for loss_op_name, vars_with_weights in loss_ops.items():
-            # Compute Gradients
-            trainable_vars = [var.variable for var in vars_with_weights]
-            gradients = tf.gradients(self._ops[loss_op_name], trainable_vars)
+       
+        # Compute gradients for each loss operation
+        for loss_op in self.loss_op_names:
+            gradients = tf.gradients(self._ops[loss_op], trainable_vars)
 
             # Clip Gradients
             clipped_gradients, _ = tf.clip_by_global_norm(gradients, self.hypers.gradient_clip)
 
             # Prune None values from the set of gradients and apply gradient weights
-            pruned_gradients = [(grad * var.weight, var.variable) for grad, var in zip(clipped_gradients, vars_with_weights) if grad is not None]
+            pruned_gradients = [(grad, var) for grad, var in zip(clipped_gradients, trainable_vars) if grad is not None]
 
+            # Apply clipped gradients
             optimizer_op = self._optimizer.apply_gradients(pruned_gradients)
             optimizer_ops.append(optimizer_op)
 
+        # Group all optimizer operations
         self._ops[self.optimizer_op_name] = tf.group(optimizer_ops)
-
-    def get_weights(self) -> Dict[str, np.ndarray]:
-        with self._sess.graph.as_default():
-            ops = {var.name: var for var in self.trainable_vars}
-            weights = self._sess.run(ops)
-            return weights
-
 
     def execute(self, feed_dict: Dict[tf.Tensor, List[Any]], ops: Optional[List[str]] = None) -> Dict[str, Any]:
         """
@@ -334,20 +310,19 @@ class Model:
 
             print()
 
+            # Collect operations to save
             has_improved = False
+            loss_ops_to_save: List[str] = []
             for loss_op_name, valid_loss in epoch_valid_loss.items():
                 if valid_loss < best_valid_loss_dict[loss_op_name]:
+                    loss_ops_to_save.append(loss_op_name)
+                    best_valid_loss_dict[loss_op_name] = valid_loss
                     has_improved = True
 
-                    variable_group = self.get_variable_group(loss_op_name)
-                    group_dict: Dist[str, List[tf.Variable]] = dict()
-                    group_dict[loss_op_name] = variable_group
-
-                    self.save(name=name, data_folders=dataset.data_folders, loss_ops=None)
-
-                    print(f'Saving Model For Operation: {loss_op_name}')
-
-                    best_valid_loss_dict[loss_op_name] = valid_loss
+            # Save model if necessary
+            if len(loss_ops_to_save) > 0:
+                print('Saving model for operations: {0}'.format(','.join(loss_ops_to_save)))
+                self.save(name=name, data_folders=dataset.data_folders, loss_ops=loss_ops_to_save)
 
             if has_improved:
                 num_not_improved = 0
@@ -401,7 +376,7 @@ class Model:
 
                 # Get variables to save
                 for loss_op in loss_ops:
-                    valid_vars = variables_for_loss_op(trainable_vars, loss_op)
+                    valid_vars = variables_for_loss_op(trainable_vars, self.ops[loss_op])
                     valid_vars_dict = {v.name: vars_dict[v.name] for v in valid_vars}
 
                     # Update values for the valid variables
