@@ -18,7 +18,7 @@ from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
 from utils.constants import SMALL_NUMBER
 from utils.rnn_utils import *
-from rnn_samples.testing_utils import TestMetrics, Prediction
+from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric
 
 
 VAR_NAME_REGEX = re.compile(r'.*(layer-[0-9])+.*')
@@ -223,105 +223,84 @@ class RNNModel(Model):
                                                             dtype=tf.float32,
                                                             name='loss-weights')
 
-    def predict(self, dataset: Dataset, name: str,
-                test_batch_size: Optional[int] = None,
-                max_num_batches: Optional[int] = None) -> TestMetrics:
+    def predict(self, dataset: Dataset,
+                test_batch_size: Optional[int],
+                max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, List[float]]]:
+        
         test_batch_size = test_batch_size if test_batch_size is not None else self.hypers.batch_size
         test_batch_generator = dataset.minibatch_generator(series=DataSeries.TEST,
                                                            batch_size=test_batch_size,
                                                            metadata=self.metadata,
                                                            should_shuffle=False,
                                                            drop_incomplete_batches=True)
-        prediction_ops = self.prediction_ops
 
-        sq_error_dict: DefaultDict[str, List[float]] = defaultdict(list)
-        abs_error_dict: DefaultDict[str, List[float]] = defaultdict(list)
-        abs_perc_dict: DefaultDict[str, List[float]] = defaultdict(list)
-        latency_dict: DefaultDict[str, List[float]] = defaultdict(list)
-        gate_dict: DefaultDict[str, Dict[str, List[float]]] = defaultdict(dict)
-        predictions_dict: DefaultDict[str, List[Prediction]] = defaultdict(list)
+        if self.output_type == OutputType.CLASSIFICATION:
+            return self.predict_classification(test_batch_generator, test_batch_size, max_num_batches)
+        else:  # Regression
+            return self.predict_regression(test_batch_generator, test_batch_size, max_num_batches)
 
-        true_values: List[np.array] = []
-
-        num_batches = 0
-        for batch in test_batch_generator:
+    def predict_classification(self, test_batch_generator: Iterable[Any],
+                               batch_size: int,
+                               max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, List[float]]]:
+        result = defaultdict(dict)
+        
+        for batch_num, batch in enumerate(test_batch_generator):
             feed_dict = self.batch_to_feed_dict(batch, is_train=False)
-            op_results: Dict[str, Any] = dict()
 
-            # Execute operations individually for better profiling
-            for i in range(len(prediction_ops)):
-                ops_to_run = prediction_ops[0:i+1]
-                ops_to_run.append(f'gates_{i}')
-                ops_to_run.append(f'states_{i}')
+            # Execute predictions and time results
+            latencies: List[float] = []
+            model_predictions: Dict[str, Any] = dict()
 
-                start = time.time()
-                result = self.execute(feed_dict, ops_to_run)
+            start = time.time()
+            prediction_generator = self.anytime_generator(feed_dict, self.num_outputs)
+            for prediction_op, prediction in zip(self.prediction_ops, prediction_generator):
+                model_predictions[prediction_op] = prediction
                 elapsed = time.time() - start
+                latencies.append(elapsed)
 
-                # Save results
-                op = prediction_ops[i]
-                op_results[op] = result[op]
+            true_labels = np.squeeze(batch['output'])
 
-                # Do not accumulate latency metrics on first batch (to avoid outliers from caching)
-                if num_batches == 0:
-                    continue
+            # Compute metrics for each individual level
+            for level, prediction_op in enumerate(self.prediction_ops):
+                prediction = np.squeeze(model_predictions[prediction_op])
 
-                latency_dict[op].append(elapsed * 1000.0)  # Latency in seconds
+                for metric_name in ClassificationMetric:
+                    if metric_name.name not in result[prediction_op]:
+                        result[prediction_op][metric_name.name] = []
+                    
+                    metric_value = get_classification_metric(metric_name, prediction, true_labels, latencies[level], level)
+                    result[prediction_op][metric_name.name].append(metric_value)
 
-                # The gates depend on the RNN type
-                #if self.hypers.model_params['rnn_cell_type'] == 'gru':
-                #    gates: DefaultDict[str, List[float]] = defaultdict(list)
-                #    gate_values = result[f'gates_{i}']
+            # Compute metrics for the scheduled model
+            scheduled_predictions: List[float] = []
+            scheduled_latencies: List[float] = []
+            scheduled_levels: List[float] = []
+            for batch_index in range(batch_size):
+                true_label = batch['output'][batch_index][0][0]
 
-                #    gates['update'].extend(gate_values[:, :, 0, :].reshape(-1))
-                #    gates['reset'].extend(gate_values[:, :, 1, :].reshape(-1))
+                for level, prediction_op in enumerate(self.prediction_ops):
+                    prediction = model_predictions[prediction_op][batch_index][0]
 
-                #    gate_dict[op] = gates
+                    # Prediction was zero, so short circuit the computation
+                    if abs(prediction) < SMALL_NUMBER or level == self.num_outputs - 1:
+                        scheduled_predictions.append(prediction)
+                        scheduled_latencies.append(latencies[level])
+                        scheduled_levels.append(level)
+                        break
 
-            # Avoid analyzing the predictions for the first batch for consistency with the latency
-            # measurements
-            if num_batches == 0:
-                num_batches += 1
-                continue
+            for metric_name in ClassificationMetric:
+                if metric_name.name not in result['scheduled_model']:
+                    result[prediction_op]['scheduled_model'] = []
+                
+                avg_latency = np.average(scheduled_latencies)
+                avg_levels = np.average(scheduled_levels)
+                metric_value = get_classification_metric(metric_name, np.array(scheduled_predictions), true_labels, avg_latency, avg_levels)
+                result['scheduled_model'][metric_name.name] = metric_value
 
-            for prediction_op in prediction_ops:
-                prediction = op_results[prediction_op]
-
-                raw_expected = np.array(batch['output']).reshape(-1, self.metadata['num_output_features'])
-
-                if self.hypers.model_params['output_type'].lower() == 'classification':
-                    unnormalized_prediction = prediction
-                    expected = raw_expected
-                else:
-                    unnormalized_prediction = self.metadata['output_scaler'].inverse_transform(prediction)
-                    raw_expected = np.array(batch['output']).reshape(-1, self.metadata['num_output_features'])
-                    expected = self.metadata['output_scaler'].inverse_transform(raw_expected)
-
-                true_values.append(expected)
-
-                difference = expected - unnormalized_prediction
-                squared_error = np.sum(np.square(difference), axis=-1)
-                abs_error = np.sum(np.abs(difference), axis=-1)
-                abs_percentage_error = np.sum(np.abs(difference) / (expected + 1e-7), axis=-1)
-
-                predictions = [Prediction(sample_id=s, prediction=p[0], expected=e[0]) for s, p, e in zip(batch['sample_id'], unnormalized_prediction, expected)]
-
-                sq_error_dict[prediction_op].extend(squared_error)
-                abs_error_dict[prediction_op].extend(abs_error)
-                abs_perc_dict[prediction_op].extend(abs_percentage_error)
-                predictions_dict[prediction_op].extend(predictions)
-
-            num_batches += 1
-
-            if max_num_batches is not None and num_batches >= max_num_batches:
+            if max_num_batches is not None and batch_num >= max_num_batches:
                 break
 
-        return TestMetrics(squared_error=sq_error_dict,
-                           abs_error=abs_error_dict,
-                           abs_percentage_error=abs_perc_dict,
-                           latency=latency_dict,
-                           gate_values=gate_dict,
-                           predictions=predictions_dict)
+        return result
 
     def make_model(self, is_train: bool):
         with tf.variable_scope('model', reuse=tf.AUTO_REUSE):

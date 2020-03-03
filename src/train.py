@@ -40,11 +40,11 @@ def test(name: str, data_folder: str, save_folder: RichPath, hypers: HyperParame
     model.restore_weights(name=name)
 
     test_results = model.predict(dataset=dataset,
-                                 name=model.name,
-                                 test_batch_size=hypers.batch_size)
+                                 test_batch_size=hypers.batch_size,
+                                 max_num_batches=None)
 
-    test_result_file = save_folder.join(f'model-test-log-{name}.pkl.gz')
-    test_result_file.save_as_compressed_file(test_results)
+    test_result_file = save_folder.join(f'model-test-log-{name}.jsonl.gz')
+    test_result_file.save_as_compressed_file([test_results])
 
 
 if __name__ == '__main__':
