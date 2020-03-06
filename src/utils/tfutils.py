@@ -3,18 +3,22 @@ from typing import Dict, Optional, List
 from dpu_utils.tfutils import get_activation
 
 
-def get_optimizer(name: str, learning_rate: float, momentum: Optional[float] = None):
+def get_optimizer(name: str, learning_rate: float, learning_rate_decay: float, global_step: tf.Variable, decay_steps: int = 100000, momentum: Optional[float] = None):
     momentum = momentum if momentum is not None else 0.0
     name = name.lower()
 
+    scheduled_learning_rate = tf.train.exponential_decay(learning_rate=learning_rate,
+                                                         global_step=global_step,
+                                                         decay_steps=decay_steps,
+                                                         decay_rate=learning_rate_decay)
     if name == 'sgd':
-        return tf.train.GradientDescentOptimizer(learning_rate=learning_rate)
+        return tf.train.GradientDescentOptimizer(learning_rate=scheduled_learning_rate)
     elif name == 'nesterov':
-        return tf.train.MomentumOptimizer(learning_rate=learning_rate, momentum=momentum)
+        return tf.train.MomentumOptimizer(learning_rate=scheduled_learning_rate, momentum=momentum)
     elif name == 'adagrad':
-        return tf.train.AdagradOptimizer(learning_rate=learning_rate)
+        return tf.train.AdagradOptimizer(learning_rate=scheduled_learning_rate)
     elif name == 'adam':
-        return tf.train.AdamOptimizer(learning_rate=learning_rate)
+        return tf.train.AdamOptimizer(learning_rate=scheduled_learning_rate)
     else:
         raise ValueError(f'Unknown optimizer {name}!')
 

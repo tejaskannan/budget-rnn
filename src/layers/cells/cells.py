@@ -18,7 +18,7 @@ def make_rnn_cell(cell_type: str,
                         input_units=input_units,
                         output_units=output_units,
                         activation=activation,
-                        dropout_keep_prob=dropout_keep_rate,
+                        dropout_keep_rate=dropout_keep_rate,
                         cell_type=cell_type,
                         name=name,
                         use_skip_connections=use_skip_connections)
@@ -48,7 +48,7 @@ class RNNCell:
                  input_units: int,
                  output_units: int,
                  activation: str,
-                 dropout_keep_prob: tf.Tensor,
+                 dropout_keep_rate: tf.Tensor,
                  name: str,
                  use_skip_connections: bool = False,
                  state_size: Optional[int] = None):
@@ -59,7 +59,7 @@ class RNNCell:
             input_units: Number of dimensions of the input vectors
             output_units: Number of dimensions of the output vectors
             activation: Name of the activation function (i.e. tanh)
-            dropout_keep_prob: Dropout keep rate for gate values
+            dropout_keep_rate: Dropout keep rate for gate values
             name: Name of the RNN Cell
             use_skip_connections: Whether to allow skip connections through this cell
             state_size: Size of the state. Defaults to output_units
@@ -67,7 +67,7 @@ class RNNCell:
         self.input_units = input_units
         self.output_units = output_units
         self.activation = get_activation(activation)
-        self.dropout_keep_prob = dropout_keep_prob
+        self.dropout_keep_rate = dropout_keep_rate
         self.initializer = tf.initializers.glorot_uniform()
         self.state_size = output_units if state_size is None else state_size
         self.use_skip_connections = use_skip_connections
@@ -114,13 +114,13 @@ class MultiRNNCell(RNNCell):
                  input_units: int,
                  output_units: int,
                  activation: str,
-                 dropout_keep_prob: tf.Tensor,
+                 dropout_keep_rate: tf.Tensor,
                  name: str,
                  cell_type: str,
                  use_skip_connections: bool = False,
                  state_size: Optional[int] = None):
         assert num_layers >= 1, 'Must provide at least one layer'
-        super().__init__(input_units, output_units, activation, dropout_keep_prob, name, use_skip_connections, state_size)
+        super().__init__(input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections, state_size)
         self.num_layers = num_layers
 
         self.cells: List[RNNCell] = []
@@ -129,7 +129,7 @@ class MultiRNNCell(RNNCell):
                                         input_units=input_units if i == 0 else output_units,
                                         output_units=output_units,
                                         activation=activation,
-                                        dropout_keep_rate=dropout_keep_prob,
+                                        dropout_keep_rate=dropout_keep_rate,
                                         name=f'{name}-cell-{i}',
                                         use_skip_connections=use_skip_connections)
             self.cells.append(cell)
@@ -232,8 +232,8 @@ class GRU(RNNCell):
         update_gate = tf.math.sigmoid(update_vector)
         reset_gate = tf.math.sigmoid(reset_vector)
 
-        update_with_dropout = tf.nn.dropout(update_gate, keep_prob=self.dropout_keep_prob)
-        reset_with_dropout = tf.nn.dropout(reset_gate, keep_prob=self.dropout_keep_prob)
+        update_with_dropout = tf.nn.dropout(update_gate, keep_prob=self.dropout_keep_rate)
+        reset_with_dropout = tf.nn.dropout(reset_gate, keep_prob=self.dropout_keep_rate)
 
         candidate_vector = tf.matmul(state * reset_with_dropout, self.W) + tf.matmul(inputs, self.U) + self.b
         candidate_state = self.activation(candidate_vector)
@@ -279,7 +279,7 @@ class VanillaCell(RNNCell):
             state = skip_gate * state + (1.0 - skip_gate) * skip_input
 
         candidate_vector = tf.matmul(state, self.W) + tf.matmul(inputs, self.U) + self.b
-        candidate_vector_with_dropout = tf.nn.dropout(candidate_vector, keep_prob=self.dropout_keep_prob)
+        candidate_vector_with_dropout = tf.nn.dropout(candidate_vector, keep_prob=self.dropout_keep_rate)
 
         next_state = self.activation(candidate_vector_with_dropout)
         return next_state, next_state, [candidate_vector]
@@ -394,9 +394,9 @@ class LSTM(RNNCell):
         read_gate = tf.math.sigmoid(read_vector)
         forget_gate = tf.math.sigmoid(forget_vector)
 
-        write_with_dropout = tf.nn.dropout(write_gate, keep_prob=self.dropout_keep_prob)
-        read_with_dropout = tf.nn.dropout(read_gate, keep_prob=self.dropout_keep_prob)
-        forget_with_dropout = tf.nn.dropout(forget_gate, keep_prob=self.dropout_keep_prob)
+        write_with_dropout = tf.nn.dropout(write_gate, keep_prob=self.dropout_keep_rate)
+        read_with_dropout = tf.nn.dropout(read_gate, keep_prob=self.dropout_keep_rate)
+        forget_with_dropout = tf.nn.dropout(forget_gate, keep_prob=self.dropout_keep_rate)
 
         candidate_vector = tf.matmul(state_h, self.W) + tf.matmul(inputs, self.U) + self.b
         candidate_state = self.activation(candidate_vector)

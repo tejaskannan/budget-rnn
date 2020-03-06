@@ -7,13 +7,14 @@ from utils.file_utils import to_rich_path
 
 class HyperParameters:
 
-    __slots__ = ['epochs', 'patience', 'learning_rate', 'gradient_clip', 'learning_rate_decay', 'optimizer', 'batch_size', 'model', 'dropout_keep_rate', 'model_params']
+    __slots__ = ['epochs', 'patience', 'learning_rate', 'gradient_clip', 'learning_rate_decay', 'optimizer', 'batch_size', 'model', 'dropout_keep_rate', 'model_params', 'decay_steps']
 
     def __init__(self, parameters: Dict[str, Any]):
         # Unpack arguments
         self.learning_rate = parameters.get('learning_rate', 0.0001)
         self.gradient_clip = parameters.get('gradient_clip', 1)
         self.learning_rate_decay = parameters.get('learning_rate_decay', 0.99)
+        self.decay_steps = parameters.get('learning_rate_decay_steps', 100000)
         self.dropout_keep_rate = parameters.get('dropout_keep_rate', 1.0)
         self.optimizer = parameters.get('optimizer', 'adam')
         self.batch_size = parameters.get('batch_size', 1000)
@@ -29,6 +30,7 @@ class HyperParameters:
             'learning_rate': self.learning_rate,
             'gradient_clip': self.gradient_clip,
             'learning_rate_decay': self.learning_rate_decay,
+            'decay_steps': self.decay_steps,
             'optimizer': self.optimizer,
             'batch_size': self.batch_size,
             'dropout_keep_rate': self.dropout_keep_rate,

@@ -25,9 +25,11 @@ class Model:
         self.metadata: Dict[str, Any] = dict()
 
         self._sess = tf.Session(graph=tf.Graph())
-        self._optimizer = get_optimizer(self.hypers.optimizer, self.hypers.learning_rate)
+        self._optimizer = None
         self._ops: Dict[str, tf.Tensor] = dict()
         self._placeholders: Dict[str, tf.Tensor] = dict()
+        self._global_step = None
+        self._is_made = False
 
         # Dictionary with inference operations
         self._inference_ops: Dict[str, tf.Tensor] = dict()
@@ -57,8 +59,16 @@ class Model:
         return [ACCURACY]
 
     @property
+    def global_step_op_name(self) -> str:
+        return 'global_step'
+
+    @property
     def sess(self) -> tf.Session:
         return self._sess
+
+    @property
+    def is_made(self) -> bool:
+        return self._is_made
 
     @property
     def trainable_vars(self) -> List[tf.Variable]:
@@ -142,15 +152,27 @@ class Model:
         Args:
             is_train: Whether the model is built for training or just for inference.
         """
+        if self.is_made:
+            return  # Prevent building twice
+
         with self._sess.graph.as_default():
             self.make_placeholders()
             self.make_model(is_train=is_train)
+
+            self._global_step = tf.Variable(0, trainable=False)
+            self._optimizer = get_optimizer(name=self.hypers.optimizer,
+                                            learning_rate=self.hypers.learning_rate,
+                                            learning_rate_decay=self.hypers.learning_rate_decay,
+                                            global_step=self._global_step,
+                                            decay_steps=self.hypers.decay_steps)
 
             # The loss and optimization criteria are only
             # guaranteed to be defined when the model is built for training
             if is_train:
                 self.make_loss()
                 self.make_training_step()
+
+        self._is_made = True
 
     def make_training_step(self):
         """
@@ -180,6 +202,9 @@ class Model:
 
         # Group all optimizer operations
         self._ops[self.optimizer_op_name] = tf.group(optimizer_ops)
+
+        # Include the global step operation
+        self._ops[self.global_step_op_name] = tf.assign_add(self._global_step, 1)
 
     def execute(self, feed_dict: Dict[tf.Tensor, List[Any]], ops: Optional[List[str]] = None) -> Dict[str, Any]:
         """
@@ -241,7 +266,7 @@ class Model:
 
             for i, batch in enumerate(train_generator):
                 feed_dict = self.batch_to_feed_dict(batch, is_train=True)
-                ops_to_run = [self.optimizer_op_name] + self.loss_op_names
+                ops_to_run = [self.optimizer_op_name, self.global_step_op_name] + self.loss_op_names
                 
                 if self.output_type == OutputType.CLASSIFICATION:
                     ops_to_run += self.accuracy_op_names

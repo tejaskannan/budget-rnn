@@ -151,7 +151,7 @@ class RNNModel(Model):
                 seq_indexes = list(sorted(seq_indexes))
                 sample_tensor = input_batch[:, seq_indexes]
                 feed_dict[input_ph] = sample_tensor
-            elif self.model_type == RNNModelType.SAMPLE:
+            elif self.model_type in (RNNModelType.SAMPLE, RNNModelType.LINKED):
                 seq_indexes = list(range(i, seq_length, num_sequences))
                 sample_tensor = input_batch[:, seq_indexes]
                 feed_dict[input_ph] = sample_tensor
@@ -311,8 +311,9 @@ class RNNModel(Model):
             initial_state = cell.zero_state(batch_size=tf.shape(inputs)[0], dtype=tf.float32)
 
             # Set the initial state for chunked model types
-            if self.model_type == RNNModelType.CASCADE and prev_state is not None:
-                initial_state = prev_state
+            if prev_state is not None:
+                if self.model_type == RNNModelType.CASCADE or (self.model_type == RNNModelType.SAMPLE and self.hypers.model_params['link_levels']):
+                    initial_state = prev_state
 
             # Set previous states for the Sample model type
             prev_states = None
@@ -333,9 +334,8 @@ class RNNModel(Model):
             final_output = rnn_outputs.read(index=last_index)
             final_state = rnn_states.read(index=last_index)
 
-            # Save previous state for the chunked model
-            if self.model_type == RNNModelType.CASCADE:
-                prev_state = rnn_states.read(index=last_index)
+            # Save previous state for possible reuse at the next level
+            prev_state = rnn_states.read(index=last_index)
 
             # [B, D]
             rnn_output = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
