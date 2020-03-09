@@ -12,9 +12,9 @@ from layers.output_layers import OutputType
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import get_optimizer, variables_for_loss_op
 from utils.file_utils import to_rich_path
-from utils.constants import BIG_NUMBER, NAME_FMT, HYPERS_PATH
+from utils.constants import BIG_NUMBER, NAME_FMT, HYPERS_PATH, GLOBAL_STEP
 from utils.constants import METADATA_PATH, MODEL_PATH, TRAIN_LOG_PATH
-from utils.constants import LOSS, ACCURACY, OPTIMIZER_OP
+from utils.constants import LOSS, ACCURACY, OPTIMIZER_OP, F1_SCORE
 
 
 class Model:
@@ -59,8 +59,12 @@ class Model:
         return [ACCURACY]
 
     @property
+    def f1_op_names(self) -> List[str]:
+        return [F1_SCORE]
+
+    @property
     def global_step_op_name(self) -> str:
-        return 'global_step'
+        return GLOBAL_STEP
 
     @property
     def sess(self) -> tf.Session:
@@ -263,13 +267,14 @@ class Model:
             
             epoch_train_loss: DefaultDict[str, float] = defaultdict(float)
             epoch_train_acc: DefaultDict[str, float] = defaultdict(float)
+            epoch_train_f1: DefaultDict[str, float] = defaultdict(float)
 
             for i, batch in enumerate(train_generator):
                 feed_dict = self.batch_to_feed_dict(batch, is_train=True)
                 ops_to_run = [self.optimizer_op_name, self.global_step_op_name] + self.loss_op_names
                 
                 if self.output_type == OutputType.CLASSIFICATION:
-                    ops_to_run += self.accuracy_op_names
+                    ops_to_run += self.accuracy_op_names + self.f1_score_op_names
 
                 train_results = self.execute(feed_dict, ops_to_run)
 
@@ -286,11 +291,24 @@ class Model:
                 for acc_op_name in self.accuracy_op_names:
                     epoch_train_acc[acc_op_name] += train_results[acc_op_name]
 
-                train_acc_agg = np.average(list(epoch_train_acc.values()))
+                for f1_op_name in self.f1_score_op_names:
+                    epoch_train_f1[f1_op_name] += train_results[f1_op_name]
+
+                train_acc_agg, train_f1_agg = 0.0, 0.0
+
+                train_acc_values = list(epoch_train_acc.values())
+                if len(train_acc_values) > 0:
+                    train_acc_agg = np.average(train_acc_values)
+
+                train_f1_values = list(epoch_train_f1.values())
+                if len(train_f1_values) > 0:
+                    train_f1_agg = np.average(train_f1_values)
+
                 avg_train_acc_so_far = train_acc_agg / (i+1)
+                avg_train_f1_so_far = train_f1_agg / (i+1)
 
                 if self.output_type == OutputType.CLASSIFICATION:
-                    print(f'Train Batch {i}. Avg loss so far: {avg_train_loss_so_far:.4f}, Avg accuracy so far: {avg_train_acc_so_far:.4f}', end='\r')                
+                    print(f'Train Batch {i}. Avg loss so far: {avg_train_loss_so_far:.4f}, Avg accuracy so far: {avg_train_acc_so_far:.4f}, Avg F1 Score so far: {avg_train_f1_so_far:.4f}', end='\r')
                 else:
                     print(f'Train Batch {i}. Avg loss so far: {avg_train_loss_so_far:.4f}', end='\r')
 
@@ -304,14 +322,15 @@ class Model:
             
             epoch_valid_loss: DefaultDict[str, float] = defaultdict(float)
             epoch_valid_acc: DefaultDict[str, float] = defaultdict(float)
-            
+            epoch_valid_f1: DefaultDict[str, float] = defaultdict(float)
+
             for i, batch in enumerate(valid_generator):
                 feed_dict = self.batch_to_feed_dict(batch, is_train=False)
 
                 ops_to_run: List[str] = []
                 if self.output_type == OutputType.CLASSIFICATION:
-                    ops_to_run += self.accuracy_op_names
-                
+                    ops_to_run += self.accuracy_op_names + self.f1_score_op_names
+        
                 ops_to_run += self.loss_op_names
                 valid_results = self.execute(feed_dict, ops_to_run)
 
@@ -325,14 +344,28 @@ class Model:
                 valid_loss_agg = np.average(list(epoch_valid_loss.values()))
                 avg_valid_loss_so_far = valid_loss_agg / (i+1)
 
+                # Compute accuracy and F1 Scores
                 for acc_op_name in self.accuracy_op_names:
                     epoch_valid_acc[acc_op_name] += valid_results[acc_op_name]
 
-                valid_acc_agg = np.average(list(epoch_valid_acc.values()))
+                for f1_op_name in self.f1_score_op_names:
+                    epoch_valid_f1[f1_op_name] += valid_results[f1_op_name]
+
+                valid_acc_agg, valid_f1_agg = 0.0, 0.0
+
+                valid_acc_values = list(epoch_valid_acc.values())
+                if len(valid_acc_values) > 0:
+                    valid_acc_agg = np.average(valid_acc_values)
+
+                valid_f1_values = list(epoch_valid_f1.values())
+                if len(valid_f1_values) > 0:
+                    valid_f1_agg = np.average(valid_f1_values)
+                
                 avg_valid_acc_so_far = valid_acc_agg / (i+1)
+                avg_valid_f1_so_far = valid_f1_agg / (i+1)
 
                 if self.output_type == OutputType.CLASSIFICATION:
-                    print(f'Valid Batch {i}. Avg loss so far: {avg_valid_loss_so_far:.4f}, Avg accuracy so far: {avg_valid_acc_so_far:.4f}', end='\r')
+                    print(f'Valid Batch {i}. Avg loss so far: {avg_valid_loss_so_far:.4f}, Avg accuracy so far: {avg_valid_acc_so_far:.4f}, Avg F1 Score so far: {avg_valid_f1_so_far:.4f}', end='\r')
                 else:
                     print(f'Valid Batch {i}. Avg loss so far: {avg_valid_loss_so_far:.4f}', end='\r')
 

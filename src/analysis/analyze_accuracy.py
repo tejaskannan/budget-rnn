@@ -21,9 +21,7 @@ def get_aggregate_stats(stats_dict: Dict[str, Dict[str, List[float]]]) -> Defaul
         for metric_name in ClassificationMetric:
             # Remove nonzero values from precision and recall
             metric_values = metric_dict[metric_name.name]
-            if metric_name in (ClassificationMetric.PRECISION, ClassificationMetric.RECALL):
-                metric_values = [x for x in metric_values if abs(x) > SMALL_NUMBER]
-            elif metric_name == ClassificationMetric.LATENCY:
+            if metric_name == ClassificationMetric.LATENCY:
                 metric_values = metric_values[1:]
             
             agg_stats[op_name][metric_name.name + '_mean'] = float(np.average(metric_values))
@@ -89,10 +87,10 @@ def plot(agg_stats: DefaultDict[str, Dict[str, float]], metric: ClassificationMe
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--accuracy-file', type=str, required=True)
+    parser.add_argument('--test-log', type=str, required=True)
     args = parser.parse_args() 
 
-    accuracy_file = RichPath.create(args.accuracy_file)
+    accuracy_file = RichPath.create(args.test_log)
     assert accuracy_file.exists(), f'The file {accuracy_file} does not exist!'
 
     output_folder = RichPath.create(accuracy_file.path[:-len('.jsonl.gz')])
@@ -104,10 +102,6 @@ if __name__ == '__main__':
 
     agg_stats_file = output_folder.join('aggregate_stats.jsonl.gz')
     agg_stats_file.save_as_compressed_file([agg_stats])
-
-    #latency_test_results = latency_ttest(stats_dict)
-    #latency_test_file = output_folder.join('latency_ttests.jsonl.gz')
-    #latency_test_file.save_as_compressed_file([latency_test_results])
 
     for metric in ClassificationMetric:
         t_tests(stats_dict, metric=metric, output_folder=output_folder)

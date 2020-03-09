@@ -6,7 +6,7 @@ def binary_classification_loss(predicted_probs: tf.Tensor,
                                predictions: tf.Tensor, 
                                labels: tf.Tensor, 
                                pos_weight: float, 
-                               neg_weight: float):
+                               neg_weight: float) -> tf.Tensor:
         """
         Computes a weighted binary cross entropy loss to bias towards specific types of errors.
 
@@ -24,3 +24,24 @@ def binary_classification_loss(predicted_probs: tf.Tensor,
                         y=labels * log_probs + (1.0 - labels) * log_opp_probs)
 
 
+def f1_score_loss(predicted_probs: tf.Tensor, labels: tf.Tensor) -> tf.Tensor:
+    """
+    Computes a loss function based on F1 scores (harmonic mean of precision an recall).
+
+    Args:
+        predicted_probs: A [B, 1] tensor of predicted probabilities
+        labels: A [B, 1] tensor of expected labels
+    Returns:
+        A tensor of sample-wise losses
+    """
+    # probability-based assessment of true positives, false negatives, and false positives
+    # we use probabilities instead of thresholded labels to ensure that the loss function is differentiable
+    true_positives = predicted_probs * labels
+    false_negatives = (1.0 - predicted_probs) * labels
+    false_positives = predicted_probs * (1.0 - labels)
+
+    precision = true_positives / (true_positives + false_positives + SMALL_NUMBER)
+    recall = true_positives / (true_positives + false_negatives + SMALL_NUMBER)
+
+    f1_score = 2 * precision * recall / (precision + recall + SMALL_NUMBER)
+    return 1.0 - f1_score

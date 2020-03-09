@@ -27,3 +27,9 @@ def pad_array(arr: np.array, new_size: int, value: Any, axis: int) -> np.array:
     widths[axis] = (0, pad_width)
     return np.pad(arr, widths, mode='constant', constant_values=value)
 
+def softmax(arr: np.ndarray):
+    exp_array = np.exp(arr)
+    return exp_array / np.sum(exp_array)
+
+def sigmoid(arr: np.ndarray):
+    return 1.0 / (1.0 + np.exp(-arr))

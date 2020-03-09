@@ -6,6 +6,8 @@ DATE_FORMAT = '%Y-%m-%dT%H:%M:%S'
 LOSS = 'loss'
 ACCURACY = 'accuracy'
 OPTIMIZER_OP = 'optimizer_op'
+F1_SCORE = 'f1_score'
+GLOBAL_STEP = 'global_step'
 
 # Data folder names
 TRAIN = 'train'

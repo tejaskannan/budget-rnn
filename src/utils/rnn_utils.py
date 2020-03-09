@@ -13,6 +13,7 @@ PREDICTION_NAME = 'prediction'
 PREDICTION_PROB_NAME = 'prediction_probs'
 LOGITS_NAME = 'logits'
 ACCURACY_NAME = 'accuracy'
+F1_SCORE_NAME = 'f1_score'
 
 
 class RNNModelType(Enum):
@@ -66,3 +67,7 @@ def get_gates_name(level_index: int) -> str:
 
 def get_states_name(level_index: int) -> str:
     return f'{STATES_NAME}_{level_index}'
+
+
+def get_f1_score_name(level_index: int) -> str:
+    return f'{F1_SCORE_NAME}_{level_index}'

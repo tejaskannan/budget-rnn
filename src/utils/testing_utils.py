@@ -11,6 +11,7 @@ class ClassificationMetric(Enum):
     PRECISION = auto()
     RECALL = auto()
     LATENCY = auto()
+    F1_SCORE = auto()
     LEVEL = auto()
 
 
@@ -33,15 +34,22 @@ def get_classification_metric(metric_name: ClassificationMetric, model_output: n
     if metric_name == ClassificationMetric.ACCURACY:
         return float(np.average(1.0 - np.abs(model_output - expected_output)))
     elif metric_name == ClassificationMetric.RECALL:
-        num_ones = np.sum(expected_output)
-        if num_ones <= SMALL_NUMBER:
-            return 0.0
-        return float(np.sum(model_output * expected_output) / num_ones)
+        true_positives = np.sum(model_output * expected_output)
+        false_negatives = np.sum((1.0 - model_output) * expected_output)
+        return float((true_positives) / (true_positives + false_negatives + SMALL_NUMBER))
     elif metric_name == ClassificationMetric.PRECISION:
-        num_ones = np.sum(model_output)
-        if num_ones <= SMALL_NUMBER:
-            return 0.0
-        return float(np.sum(model_output * expected_output) / num_ones)
+        true_positives = np.sum(model_output * expected_output)
+        false_positives = np.sum(model_output * (1.0 - expected_output))
+        return float((true_positives) / (true_positives + false_positives + SMALL_NUMBER))
+    elif metric_name == ClassificationMetric.F1_SCORE:
+        true_positives = np.sum(model_output * expected_output)
+        false_positives = np.sum(model_output * (1.0 - expected_output))
+        false_negatives = np.sum((1.0 - model_output) * expected_output)
+
+        precision = true_positives / (true_positives + false_positives + SMALL_NUMBER)
+        recall = true_positives / (true_positives + false_negatives + SMALL_NUMBER)
+
+        return 2 * (precision * recall) / (precision + recall + SMALL_NUMBER)
     elif metric_name == ClassificationMetric.LATENCY:
         return latency
     elif metric_name == ClassificationMetric.LEVEL:

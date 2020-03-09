@@ -1,0 +1,28 @@
+{
+	"batch_size": 50,
+	"dropout_keep_rate": 0.9,
+	"learning_rate": 0.0001,
+	"gradient_clip": 1,
+	"epochs": 10,
+	"patience": 10,
+	"model_params": {
+		"state_size": 8,
+		"sample_frac": 0.25,
+		"rnn_cell_type": "gru",
+		"rnn_activation": "tanh",
+		"rnn_layers": 1,
+		"output_hidden_units": [16],
+		"output_hidden_activation": "tanh",
+        "output_type": "classification",
+        "pos_weights": [1.0, 1.0, 1.0, 1.0],
+        "neg_weights": [1.0, 1.0, 1.0, 1.0],
+		"layer_weight": 1.0,
+		"combine_element_wise": true,
+		"pool_mode": "final_state",
+		"model_type": "sample",
+		"share_cell_weights": true,
+		"loss_weights": [1, 1, 1, 1],
+        "link_levels": false,
+        "loss_mode": "cross-entropy"
+	}
+}

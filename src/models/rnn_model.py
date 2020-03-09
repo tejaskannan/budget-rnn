@@ -12,11 +12,11 @@ from models.base_model import Model
 from layers.basic import rnn_cell, mlp
 from layers.cells.cells import make_rnn_cell, MultiRNNCell
 from layers.rnn import dynamic_rnn, dropped_rnn
-from layers.output_layers import OutputType, compute_binary_classification_output, compute_regression_output
+from layers.output_layers import OutputType, compute_binary_classification_output, compute_regression_output, compute_f1_classification_output
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
-from utils.constants import SMALL_NUMBER, BIG_NUMBER
+from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY
 from utils.rnn_utils import *
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric
 
@@ -51,6 +51,10 @@ class RNNModel(Model):
     @property
     def accuracy_op_names(self) -> List[str]:
         return [get_accuracy_name(i) for i in range(self.num_outputs)]
+
+    @property
+    def f1_score_op_names(self) -> List[str]:
+        return [get_f1_score_name(i) for i in range(self.num_outputs)]
 
     @property
     def samples_per_seq(self) -> int:
@@ -297,6 +301,7 @@ class RNNModel(Model):
             gate_name = get_gates_name(i)
             state_name = get_states_name(i)
             accuracy_name = get_accuracy_name(i)
+            f1_score_name = get_f1_score_name(i)
 
             # Create the RNN Cell
             cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
@@ -332,7 +337,7 @@ class RNNModel(Model):
             # Get the final state
             last_index = tf.shape(inputs)[1] - 1
             final_output = rnn_outputs.read(index=last_index)
-            final_state = rnn_states.read(index=last_index)
+            final_state = tf.squeeze(rnn_states.read(index=last_index), axis=0)  # [B, D]
 
             # Save previous state for possible reuse at the next level
             prev_state = rnn_states.read(index=last_index)
@@ -348,15 +353,27 @@ class RNNModel(Model):
                          dropout_keep_rate=self._placeholders['dropout_keep_rate'],
                          name=output_layer_name)
 
+            # We give the model the ability to 'copy' the output from the previous level. This should encourage
+            # a more consistent output landscape.
+            if i > 0:
+                current = mlp(inputs=output, output_size=1, hidden_sizes=[], activations=['linear'], dropout_keep_rate=1.0, name=f'output-sharing-current-{i}')
+                prev = mlp(inputs=output, output_size=1, hidden_sizes=[], activations=['linear'], dropout_keep_rate=1.0, name=f'output-sharing-prev-{i}')
+                output_weight = tf.math.sigmoid(current + prev)
+                output = output * output_weight + outputs[-1] * (1.0 - output_weight)
+                print(output)
+
             if self.output_type == OutputType.CLASSIFICATION:
                 classification_output = compute_binary_classification_output(model_output=output,
                                                                              labels=self._placeholders['output'],
                                                                              false_pos_weight=self.hypers.model_params['pos_weights'][i],
-                                                                             false_neg_weight=self.hypers.model_params['neg_weights'][i])
-                self._ops[logits_name] = classification_output.logits,
+                                                                             false_neg_weight=self.hypers.model_params['neg_weights'][i],
+                                                                             mode=self.hypers.model_params['loss_mode'])
+
+                self._ops[logits_name] = classification_output.logits
                 self._ops[prediction_name] = classification_output.predictions
                 self._ops[loss_name] = classification_output.loss
                 self._ops[accuracy_name] = classification_output.accuracy
+                self._ops[f1_score_name] = classification_output.f1_score
             else:
                 regression_output = compute_regression_output(model_output=output, expected_otuput=self._placeholders['output'])
                 self._ops[prediction_name] = regression_output.predictions
@@ -369,9 +386,8 @@ class RNNModel(Model):
 
         combined_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), outputs), axis=1)
         self._ops[ALL_PREDICTIONS_NAME] = combined_outputs
-        use_previous_layers = self.model_type == RNNModelType.CASCADE 
 
-    def make_loss(self):
+    def make_loss(self):        
         losses: List[tf.Tensor] = []
 
         # The loss_op keys are ordered by the output level
