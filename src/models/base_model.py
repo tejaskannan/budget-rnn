@@ -360,7 +360,7 @@ class Model:
                 valid_f1_values = list(epoch_valid_f1.values())
                 if len(valid_f1_values) > 0:
                     valid_f1_agg = np.average(valid_f1_values)
-                
+ 
                 avg_valid_acc_so_far = valid_acc_agg / (i+1)
                 avg_valid_f1_so_far = valid_f1_agg / (i+1)
 

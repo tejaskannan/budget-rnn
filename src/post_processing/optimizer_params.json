@@ -1,0 +1,7 @@
+{
+    "population_size": 256,
+    "batch_size": 1024,
+    "mutation_rate": 0.1,
+    "selection_count": 64,
+    "iterations": 64
+}

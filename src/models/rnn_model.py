@@ -16,10 +16,11 @@ from layers.output_layers import OutputType, compute_binary_classification_outpu
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
-from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY
+from utils.misc import sigmoid
+from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, ONE_HALF
 from utils.rnn_utils import *
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric
-from utils.np_utils import thresholded_predictions, f1_score
+from utils.np_utils import thresholded_predictions
 
 
 class RNNModel(Model):
@@ -218,64 +219,66 @@ class RNNModel(Model):
 
     def predict_classification(self, test_batch_generator: Iterable[Any],
                                batch_size: int,
-                               max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, List[float]]]:
-        result = defaultdict(dict)
-        
+                               max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, float]]:
+        predictions_dict = defaultdict(list)
+        latencies_dict = defaultdict(list)
+        levels_dict = defaultdict(list)
+        labels: List[np.ndarray] = []
+
         for batch_num, batch in enumerate(test_batch_generator):
             feed_dict = self.batch_to_feed_dict(batch, is_train=False)
 
             # Execute predictions and time results
             latencies: List[float] = []
-            model_predictions: Dict[str, Any] = dict()
-
+            logits_list: List[np.ndarray] = []
+            level = 0
+    
             start = time.time()
             prediction_generator = self.anytime_generator(feed_dict, self.num_outputs)
-            for prediction_op, prediction in zip(self.prediction_ops, prediction_generator):
-                model_predictions[prediction_op] = np.squeeze(prediction)
+            for prediction_op, (prediction, logits) in zip(self.prediction_ops, prediction_generator):
+                predictions_dict[prediction_op].append(prediction)  # [B]
+                logits_list.append(logits)
                 elapsed = time.time() - start
+
                 latencies.append(elapsed)
+                latencies_dict[prediction_op].append(elapsed)
 
-            true_labels = np.squeeze(batch['output'])
+                levels_dict[prediction_op].append(level + 1)
+                level += 1
 
-            # Compute metrics for each individual level
-            for level, prediction_op in enumerate(self.prediction_ops):
-                prediction = model_predictions[prediction_op]
+            labels.append(np.vstack(batch['output']))
 
-                for metric_name in ClassificationMetric:
-                    if metric_name.name not in result[prediction_op]:
-                        result[prediction_op][metric_name.name] = []
- 
-                    metric_value = get_classification_metric(metric_name, prediction, true_labels, latencies[level], level + 1)
-                    result[prediction_op][metric_name.name].append(metric_value)
+            # Scheduled model
+            logits = np.concatenate(logits_list, axis=-1)
+            predicted_probs = sigmoid(logits)
+            thresholds = [ONE_HALF for _ in range(self.num_outputs)]
+            level_output = thresholded_predictions(predicted_probs, thresholds)
+            level_predictions = level_output.predictions
+            computed_levels = level_output.indices
+
+            scheduled_latencies = [latencies[x] for x in computed_levels]
+
+            predictions_dict['scheduled_model'].append(np.expand_dims(level_predictions, axis=-1))
+            latencies_dict['scheduled_model'].append(np.average(scheduled_latencies))
+            levels_dict['scheduled_model'].append(np.average(computed_levels + 1.0))
 
             # Compute metrics for the scheduled model
-            scheduled_predictions: List[float] = []
-            scheduled_latencies: List[float] = []
-            scheduled_levels: List[float] = []
-            for batch_index in range(batch_size):
-                true_label = batch['output'][batch_index][0][0]
-
-                for level, prediction_op in enumerate(self.prediction_ops):
-                    prediction = model_predictions[prediction_op][batch_index]
-
-                    # Prediction was zero, so short circuit the computation
-                    if abs(prediction) < SMALL_NUMBER or level == self.num_outputs - 1:
-                        scheduled_predictions.append(prediction)
-                        scheduled_latencies.append(latencies[level])
-                        scheduled_levels.append(level + 1)
-                        break
-
-            for metric_name in ClassificationMetric:
-                if metric_name.name not in result['scheduled_model']:
-                    result['scheduled_model'][metric_name.name] = []
-                
-                avg_latency = np.average(scheduled_latencies)
-                avg_levels = np.average(scheduled_levels)
-                metric_value = get_classification_metric(metric_name, np.array(scheduled_predictions), true_labels, avg_latency, avg_levels)
-                result['scheduled_model'][metric_name.name].append(metric_value)
-
             if max_num_batches is not None and batch_num >= max_num_batches:
                 break
+
+        # Stack all labels into a single array
+        labels = np.vstack(labels)
+
+        result = defaultdict(dict)
+        for model_name in predictions_dict.keys():
+ 
+            predictions = np.vstack(predictions_dict[model_name])
+            latency = float(np.average(latencies_dict[model_name][1:]))
+            levels = float(np.average(levels_dict[model_name]))
+            
+            for metric_name in ClassificationMetric:
+                metric_value = get_classification_metric(metric_name, predictions, labels, latency, levels)
+                result[model_name][metric_name.name] = metric_value
 
         return result
 
@@ -408,16 +411,19 @@ class RNNModel(Model):
         with self.sess.graph.as_default():
             # Initialize partial run settings
             prediction_ops = [self._ops[op_name] for op_name in self.prediction_ops]
+            logit_ops = [self._ops[get_logits_name(i)] for i in range(self.num_outputs)]
+            ops_to_run = prediction_ops + logit_ops
+
             placeholders = list(self._placeholders.values())
-            handle = self.sess.partial_run_setup(prediction_ops, placeholders)
+            handle = self.sess.partial_run_setup(ops_to_run, placeholders)
 
             result = None
             for level in range(max_num_levels):
                 prediction_op = prediction_ops[level]
-                op_name = self.prediction_ops[level]
+                logit_op = logit_ops[level]
 
                 # Filter feed dict to avoid feeding the same inputs multiple times
                 op_feed_dict = {key: value for key, value in feed_dict.items() if key.name.endswith(str(level))}
-                prediction = self.sess.partial_run(handle, prediction_op, feed_dict=op_feed_dict)
+                prediction, logits = self.sess.partial_run(handle, [prediction_op, logit_op], feed_dict=op_feed_dict)
 
-                yield prediction
+                yield prediction, logits

@@ -4,6 +4,7 @@ from collections import namedtuple, defaultdict
 from typing import DefaultDict, Dict, Union, List, Optional, Tuple
 
 from utils.constants import SMALL_NUMBER
+from utils.np_utils import precision, recall, f1_score
 
 
 class ClassificationMetric(Enum):
@@ -34,22 +35,11 @@ def get_classification_metric(metric_name: ClassificationMetric, model_output: n
     if metric_name == ClassificationMetric.ACCURACY:
         return float(np.average(1.0 - np.abs(model_output - expected_output)))
     elif metric_name == ClassificationMetric.RECALL:
-        true_positives = np.sum(model_output * expected_output)
-        false_negatives = np.sum((1.0 - model_output) * expected_output)
-        return float((true_positives) / (true_positives + false_negatives + SMALL_NUMBER))
+        return float(recall(model_output, expected_output))
     elif metric_name == ClassificationMetric.PRECISION:
-        true_positives = np.sum(model_output * expected_output)
-        false_positives = np.sum(model_output * (1.0 - expected_output))
-        return float((true_positives) / (true_positives + false_positives + SMALL_NUMBER))
+        return float(precision(model_output, expected_output))
     elif metric_name == ClassificationMetric.F1_SCORE:
-        true_positives = np.sum(model_output * expected_output)
-        false_positives = np.sum(model_output * (1.0 - expected_output))
-        false_negatives = np.sum((1.0 - model_output) * expected_output)
-
-        precision = true_positives / (true_positives + false_positives + SMALL_NUMBER)
-        recall = true_positives / (true_positives + false_negatives + SMALL_NUMBER)
-
-        return 2 * (precision * recall) / (precision + recall + SMALL_NUMBER)
+        return float(f1_score(model_output, expected_output))
     elif metric_name == ClassificationMetric.LATENCY:
         return latency
     elif metric_name == ClassificationMetric.LEVEL:
