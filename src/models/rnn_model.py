@@ -12,13 +12,14 @@ from models.base_model import Model
 from layers.basic import rnn_cell, mlp
 from layers.cells.cells import make_rnn_cell, MultiRNNCell
 from layers.rnn import dynamic_rnn, dropped_rnn
-from layers.output_layers import OutputType, compute_binary_classification_output, compute_regression_output, compute_f1_classification_output
+from layers.output_layers import OutputType, compute_binary_classification_output, compute_regression_output
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
 from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY
 from utils.rnn_utils import *
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric
+from utils.np_utils import thresholded_predictions, f1_score
 
 
 class RNNModel(Model):
@@ -243,7 +244,7 @@ class RNNModel(Model):
                 for metric_name in ClassificationMetric:
                     if metric_name.name not in result[prediction_op]:
                         result[prediction_op][metric_name.name] = []
-                    
+ 
                     metric_value = get_classification_metric(metric_name, prediction, true_labels, latencies[level], level + 1)
                     result[prediction_op][metric_name.name].append(metric_value)
 
@@ -339,9 +340,6 @@ class RNNModel(Model):
             final_output = rnn_outputs.read(index=last_index)
             final_state = tf.squeeze(rnn_states.read(index=last_index), axis=0)  # [B, D]
 
-            # Save previous state for possible reuse at the next level
-            prev_state = rnn_states.read(index=last_index)
-
             # [B, D]
             rnn_output = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
 
@@ -356,11 +354,10 @@ class RNNModel(Model):
             # We give the model the ability to 'copy' the output from the previous level. This should encourage
             # a more consistent output landscape.
             if i > 0:
-                current = mlp(inputs=output, output_size=1, hidden_sizes=[], activations=['linear'], dropout_keep_rate=1.0, name=f'output-sharing-current-{i}')
-                prev = mlp(inputs=output, output_size=1, hidden_sizes=[], activations=['linear'], dropout_keep_rate=1.0, name=f'output-sharing-prev-{i}')
+                current = mlp(inputs=final_state, output_size=1, hidden_sizes=[], activations=['linear'], dropout_keep_rate=1.0, name=f'output-sharing-current-{i}')
+                prev = mlp(inputs=tf.squeeze(prev_state, axis=0), output_size=1, hidden_sizes=[], activations=['linear'], dropout_keep_rate=1.0, name=f'output-sharing-prev-{i}')
                 output_weight = tf.math.sigmoid(current + prev)
                 output = output * output_weight + outputs[-1] * (1.0 - output_weight)
-                print(output)
 
             if self.output_type == OutputType.CLASSIFICATION:
                 classification_output = compute_binary_classification_output(model_output=output,
@@ -381,6 +378,9 @@ class RNNModel(Model):
 
             self._ops[gate_name] = rnn_gates.stack()  # [B, T, M, D]
             self._ops[state_name] = rnn_states.stack()  # [B, T, D]
+
+            # Save previous state for possible reuse at the next level
+            prev_state = rnn_states.read(index=last_index)
 
             outputs.append(output)
 

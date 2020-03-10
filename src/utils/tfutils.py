@@ -2,6 +2,8 @@ import tensorflow as tf
 from typing import Dict, Optional, List
 from dpu_utils.tfutils import get_activation
 
+from .constants import SMALL_NUMBER
+
 
 def get_optimizer(name: str, learning_rate: float, learning_rate_decay: float, global_step: tf.Variable, decay_steps: int = 100000, momentum: Optional[float] = None):
     momentum = momentum if momentum is not None else 0.0
@@ -67,3 +69,51 @@ def variables_for_loss_op(variables: List[tf.Variable], loss_op: str) -> List[tf
     """
     gradients = tf.gradients(loss_op, variables)
     return [v for g, v in zip(gradients, variables) if g is not None]
+
+
+def tf_precision(predictions: tf.Tensor, labels: tf.Tensor) -> tf.Tensor:
+    """
+    Computes precision of the given predictions.
+
+    Args:
+        predictions: A [B, 1] tensor of model predictions.
+        labels: A [B, 1] tensor of expected labels.
+    Returns:
+        A scalar tensor containing batch-wise precision.
+    """
+    true_positives = tf.reduce_sum(predictions * labels)
+    false_positives = tf.reduce_sum(predictions * (1.0 - labels))
+
+    return true_positives / (true_positives + false_positives + SMALL_NUMBER)
+
+
+def tf_recall(predictions: tf.Tensor, labels: tf.Tensor) -> tf.Tensor:
+    """
+    Computes recall of the given predictions.
+
+    Args:
+        predictions: A [B, 1] tensor of model predictions.
+        labels: A [B, 1] tensor of expected labels.
+    Returns:
+        A scalar tensor containing batch-wise recall.
+    """
+    true_positives = tf.reduce_sum(predictions * labels)
+    false_negatives = tf.reduce_sum((1.0 - predictions) * labels)
+
+    return true_positives / (true_positives + false_negatives + SMALL_NUMBER)
+
+
+def tf_f1_score(predictions: tf.Tensor, labels: tf.Tensor) -> tf.Tensor:
+    """
+    Computes the F1 score (harmonic mean of precision and recall) of the given predictions.
+
+    Args:
+        predictions: A [B, 1] tensor of model predictions.
+        labels: A [B, 1] tensor of expected labels.
+    Returns:
+        A scalar tensor containing the batch-wise F1 score.
+    """
+    precision = tf_precision(predictions, labels)
+    recall = tf_recall(predictions, labels)
+
+    return 2 * (precision * recall) / (precision + recall + SMALL_NUMBER)

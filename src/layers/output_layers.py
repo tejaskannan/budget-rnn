@@ -6,10 +6,11 @@ from typing import List
 from .basic import mlp
 from utils.loss_utils import binary_classification_loss, f1_score_loss
 from utils.constants import ONE_HALF, SMALL_NUMBER
+from utils.tfutils import tf_f1_score
 
 
 # Tuples to store output types
-ClassificationOutput = namedtuple('ClassificationOutput', ['logits', 'prediction_probs', 'predictions', 'loss', 'accuracy', 'f1_score', 'precision', 'recall'])
+ClassificationOutput = namedtuple('ClassificationOutput', ['logits', 'prediction_probs', 'predictions', 'loss', 'accuracy', 'f1_score'])
 RegressionOutput = namedtuple('RegressionOutput', ['predictions', 'loss'])
 
 
@@ -54,23 +55,15 @@ def compute_binary_classification_output(model_output: tf.Tensor, labels: tf.Ten
     else:
         raise ValueError(f'Unknown loss mode {mode}')
 
+    # Compute the batch-wise accuracy
     accuracy = tf.reduce_mean(1.0 - tf.abs(predictions - labels))
 
     # Compute F1 score (harmonic mean of precision and recall)
-    true_positives = tf.reduce_sum(predictions * labels)
-    false_positives = tf.reduce_sum(predictions * (1.0 - labels))
-    false_negatives = tf.reduce_sum((1.0 - predictions) * labels)
-
-    precision = true_positives / (true_positives + false_positives + SMALL_NUMBER)
-    recall = true_positives / (true_positives + false_negatives + SMALL_NUMBER)
-
-    f1_score = 2 * (precision * recall) / (precision + recall + SMALL_NUMBER)
+    f1_score = tf_f1_score(predictions, labels)
 
     return ClassificationOutput(logits=logits,
                                 prediction_probs=predicted_probs,
                                 predictions=predictions,
                                 loss=loss,
                                 accuracy=accuracy,
-                                f1_score=f1_score,
-                                precision=precision,
-                                recall=recall)
+                                f1_score=f1_score)
