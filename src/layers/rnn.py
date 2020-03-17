@@ -1,7 +1,12 @@
 import tensorflow as tf
 from typing import Optional, Tuple
+from collections import namedtuple
 
 from layers.cells.cells import MultiRNNCell
+from utils.tfutils import fuse_states, FusionLayer
+
+
+RnnOutput = namedtuple('RnnOutput', ['outputs', 'states', 'gates'])
 
 
 def dynamic_rnn(inputs: tf.Tensor,
@@ -9,7 +14,8 @@ def dynamic_rnn(inputs: tf.Tensor,
                 initial_state: Optional[tf.Tensor] = None,
                 previous_states: Optional[tf.TensorArray] = None,
                 skip_width: Optional[int] = None,
-                name: Optional[str] = None) -> Tuple[tf.TensorArray, tf.TensorArray, tf.TensorArray]:
+                name: Optional[str] = None,
+                fusion_mode: Optional[str] = None) -> RnnOutput:
     """
     Implementation of a recurrent neural network which allows for complex state passing.
 
@@ -20,6 +26,7 @@ def dynamic_rnn(inputs: tf.Tensor,
         previous_states: Optional array of states to feed integrate into the current layer
         skip_width: Optional width of skip connections
         name: Optional name of this RNN
+        fusion_mode: Optional fusion mode for combining states between levels
     Returns:
         A tuple of 3 tensor arrays
             (1) The outputs of each cell
@@ -34,12 +41,9 @@ def dynamic_rnn(inputs: tf.Tensor,
     outputs_array = tf.TensorArray(dtype=tf.float32, size=sequence_length, dynamic_size=False)
     gates_array = tf.TensorArray(dtype=tf.float32, size=sequence_length, dynamic_size=False)
 
+    fusion_layers: List[FusionLayer] = []
     if previous_states is not None:
         combine_layer_name = 'combine-states' if name is None else f'{name}-combine-states'
-
-        prev_state_transform_layers: List[tf.layers.Dense] = []
-        curr_state_transform_layers: List[tf.layers.Dense] = []
-        state_transform_bias_layers: List[tf.Variable] = []
 
         for i in range(rnn_layers):
             prev_state_transform = tf.layers.Dense(units=state_size,
@@ -56,40 +60,41 @@ def dynamic_rnn(inputs: tf.Tensor,
                                                trainable=True,
                                                name=combine_layer_name + f'-bias-{i}')
 
-            prev_state_transform_layers.append(prev_state_transform)
-            curr_state_transform_layers.append(curr_state_transform)
-            state_transform_bias_layers.append(state_transform_bias)
+            # Collect the fusion layer
+            layer = FusionLayer(prev=prev_state_transform,
+                                curr=curr_state_transform,
+                                bias=state_transform_bias)
+            fusion_layers.append(layer)
 
     # While loop step
     def step(index, state, outputs, states, gates):
-        step_inputs = tf.gather(inputs, indices=index, axis=1)  # B x D
+        step_inputs = tf.gather(inputs, indices=index, axis=1)  # [B, D]
 
         skip_inputs: Optional[tf.Tensor] = None
         if skip_width is not None:
             skip_inputs = tf.where(tf.math.less(index - skip_width, 0),
                                    x=state,
-                                   y=states.read(index=index - skip_width))  # B x D
+                                   y=states.read(index=index - skip_width))  # [B, D]
 
+        # Get states
         combined_state = state
-        if previous_states is not None:
-            prev_state = previous_states.read(index)
+        prev_state = previous_states.read(index) if previous_states is not None else None
 
-            # This sequence of operations mirrors a GRU update gate.
-            prev_transform = prev_state_transform(prev_state)
+        # Fuse together the states
+        combined_state: List[tf.Tensor] = []
+        for i in range(rnn_layers):
+            curr = state[i, :, :]
+            prev = prev_state[i, :, :] if prev_state is not None else None
+            fusion_layer = fusion_layers[i] if i < len(fusion_layers) else None
 
-            combined_state: List[tf.Tensor] = []
-            for i in range(rnn_layers):
-                curr = state[i, :, :]
-                curr_transform = curr_state_transform_layers[i](curr)
+            combined = fuse_states(curr_state=curr,
+                                   prev_state=prev,
+                                   fusion_layer=fusion_layer,
+                                   mode=fusion_mode)
 
-                prev = prev_state[i, :, :]
-                prev_transform = prev_state_transform_layers[i](prev)
+            combined_state.append(combined)
 
-                update_weight = tf.math.sigmoid(prev_transform + curr_transform + state_transform_bias_layers[i])
-
-                combined = update_weight * curr + (1.0 - update_weight) * prev
-                combined_state.append(combined)
-
+        # Convert a stacked state into a list of states
         if not isinstance(combined_state, list):
             combined_state = [combined_state[i, :, :] for i in range(rnn_layers)]
 
@@ -122,7 +127,8 @@ def dynamic_rnn(inputs: tf.Tensor,
                                                                    parallel_iterations=1,
                                                                    maximum_iterations=sequence_length,
                                                                    name='rnn-while-loop')
-    return final_outputs, final_states, final_gates
+
+    return RnnOutput(outputs=final_outputs, states=final_states, gates=final_gates)
 
 
 def dropped_rnn(inputs: tf.Tensor,

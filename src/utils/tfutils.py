@@ -1,8 +1,12 @@
 import tensorflow as tf
 from typing import Dict, Optional, List
+from collections import namedtuple
 from dpu_utils.tfutils import get_activation
 
 from .constants import SMALL_NUMBER
+
+
+FusionLayer = namedtuple('FusionLayer', ['prev', 'curr', 'bias'])
 
 
 def get_optimizer(name: str, learning_rate: float, learning_rate_decay: float, global_step: tf.Variable, decay_steps: int = 100000, momentum: Optional[float] = None):
@@ -36,6 +40,8 @@ def pool_rnn_outputs(outputs: tf.Tensor, final_state: tf.Tensor, pool_mode: str)
     Returns:
         A [B, D] tensor which represents an aggregation of the RNN outputs.
     """
+    pool_mode = pool_mode.lower()
+
     if pool_mode == 'sum':
         return tf.reduce_sum(outputs, axis=-2)
     elif pool_mode == 'max':
@@ -45,7 +51,7 @@ def pool_rnn_outputs(outputs: tf.Tensor, final_state: tf.Tensor, pool_mode: str)
     elif pool_mode == 'final_state':
         return final_state
     elif pool_mode == 'weighted_average':
-        # B x T x 1
+        # [B, T, 1]
         attention_layer = tf.layers.dense(inputs=outputs,
                                           units=1,
                                           activation=get_activation('leaky_relu'),
@@ -55,6 +61,40 @@ def pool_rnn_outputs(outputs: tf.Tensor, final_state: tf.Tensor, pool_mode: str)
         return tf.reduce_sum(outputs * normalized_attn_weights, axis=-2)  # [B, D]
     else:
         raise ValueError(f'Unknown pool mode {pool_mode}.')
+
+
+def fuse_states(curr_state: tf.Tensor, prev_state: Optional[tf.Tensor], fusion_layer: Optional[FusionLayer], mode: Optional[str]) -> tf.Tensor:
+    """
+    Combines the provided states using the specified strategy.
+
+    Args:
+        curr_state: A [B, D] tensor of the current state
+        prev_state: An optional [B, D] tensor of previous state
+        fusion_layer: Optional trainable variables for the fusion layer. Only use when mode = 'gate'
+        mode: The fusion strategy. If None is given, the strategy is an identity.
+    Returns:
+        A [B, D] tensor that represents the fused state
+    """
+    mode = mode.lower()
+
+    if mode is None or mode in ('identity', 'none') or prev_state is None:
+        return curr_state
+    elif mode == 'sum':
+        return curr_state + prev_state
+    elif mode in ('sum-tanh', 'sum_tanh'):
+        return tf.nn.tanh(curr_state + prev_state)
+    elif mode in ('avg', 'average'):
+        return (curr_state + prev_state) / 2.0
+    elif mode in ('max', 'max-pool', 'max_pool'):
+        concat = tf.concat([tf.expand_dims(curr_state, axis=-1), tf.expand_dims(prev_state, axis=-1)], axis=-1)  # [B, D, 2]
+        return tf.reduce_max(concat, axis=-1)  # [B, D]
+    elif mode in ('gate', 'gate_layer', 'gate-layer'):
+        curr_transform = fusion_layer.curr(curr_state)  # [B, D]
+        prev_transform = fusion_layer.prev(prev_state)  # [B, D]
+        update_weight = tf.math.sigmoid(prev_transform + curr_transform + fusion_layer.bias)
+        return update_weight * curr_state + (1.0 - update_weight) * prev_state
+    else:
+        raise ValueError(f'Unknown fusion mode: {mode}')
 
 
 def variables_for_loss_op(variables: List[tf.Variable], loss_op: str) -> List[tf.Variable]:

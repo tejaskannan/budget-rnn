@@ -11,7 +11,7 @@ from dpu_utils.utils import RichPath
 from models.base_model import Model
 from layers.basic import rnn_cell, mlp
 from layers.cells.cells import make_rnn_cell, MultiRNNCell
-from layers.rnn import dynamic_rnn, dropped_rnn
+from layers.rnn import dynamic_rnn, dropped_rnn, RnnOutput
 from layers.output_layers import OutputType, compute_binary_classification_output, compute_regression_output
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
@@ -329,12 +329,17 @@ class RNNModel(Model):
             if self.model_type == RNNModelType.SAMPLE and i > 0:
                 prev_states = states_list[i-1]
 
-            # Run RNN
-            rnn_outputs, rnn_states, rnn_gates = dynamic_rnn(cell=cell,
-                                                             inputs=inputs,
-                                                             previous_states=prev_states,
-                                                             initial_state=initial_state,
-                                                             name=rnn_level_name)
+            # Run RNN and collect outputs
+            rnn_out = dynamic_rnn(cell=cell,
+                                  inputs=inputs,
+                                  previous_states=prev_states,
+                                  initial_state=initial_state,
+                                  name=rnn_level_name,
+                                  fusion_mode=self.hypers.model_params.get('fusion_mode'))
+            rnn_outputs = rnn_out.outputs
+            rnn_states = rnn_out.states
+            rnn_gates = rnn_out.gates
+            
             # Save previous states
             states_list.append(rnn_states)
 
