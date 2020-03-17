@@ -75,7 +75,7 @@ def fuse_states(curr_state: tf.Tensor, prev_state: Optional[tf.Tensor], fusion_l
     Returns:
         A [B, D] tensor that represents the fused state
     """
-    mode = mode.lower()
+    mode = mode.lower() if mode is not None else None
 
     if mode is None or mode in ('identity', 'none') or prev_state is None:
         return curr_state

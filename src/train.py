@@ -73,6 +73,9 @@ if __name__ == '__main__':
         print(f'Started {data_folder}')
         print('====================')
 
+        # Use absolute path to avoid issues with relative referencing during later optimization phases
+        data_folder = os.path.abspath(data_folder)
+
         for trial in range(trials):
             print(f'Starting trial {trial+1}/{trials}')
 
