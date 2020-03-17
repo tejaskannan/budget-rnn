@@ -53,7 +53,7 @@ def compute_binary_classification_output(model_output: tf.Tensor, labels: tf.Ten
     elif mode == 'f1':
         loss = f1_score_loss(predicted_probs=predicted_probs, labels=labels)
     else:
-        raise ValueError(f'Unknown loss mode {mode}')
+        raise ValueError(f'Unknown loss mode {mode}. Expected one of [\'f1\', \'cross-entropy\'].')
 
     # Compute the batch-wise accuracy
     accuracy = tf.reduce_mean(1.0 - tf.abs(predictions - labels))

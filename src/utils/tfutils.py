@@ -84,7 +84,9 @@ def tf_precision(predictions: tf.Tensor, labels: tf.Tensor) -> tf.Tensor:
     true_positives = tf.reduce_sum(predictions * labels)
     false_positives = tf.reduce_sum(predictions * (1.0 - labels))
 
-    return true_positives / (true_positives + false_positives + SMALL_NUMBER)
+    return tf.where(tf.abs(true_positives + false_positives) < SMALL_NUMBER,
+                    x=1.0,
+                    y=true_positives / (true_positives + false_positives))
 
 
 def tf_recall(predictions: tf.Tensor, labels: tf.Tensor) -> tf.Tensor:
@@ -100,7 +102,9 @@ def tf_recall(predictions: tf.Tensor, labels: tf.Tensor) -> tf.Tensor:
     true_positives = tf.reduce_sum(predictions * labels)
     false_negatives = tf.reduce_sum((1.0 - predictions) * labels)
 
-    return true_positives / (true_positives + false_negatives + SMALL_NUMBER)
+    return tf.where(tf.abs(true_positives + false_negatives) < SMALL_NUMBER,
+                    x=1.0,
+                    y=true_positives / (true_positives + false_negatives))
 
 
 def tf_f1_score(predictions: tf.Tensor, labels: tf.Tensor) -> tf.Tensor:

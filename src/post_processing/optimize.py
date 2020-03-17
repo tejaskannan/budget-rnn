@@ -1,8 +1,9 @@
 import os
 import numpy as np
 from argparse import ArgumentParser
+from collections import namedtuple
 from dpu_utils.utils import RichPath
-from typing import Dict, Union, List
+from typing import Dict, Union, List, Optional
 
 from models.rnn_model import RNNModel
 from dataset.dataset import DataSeries
@@ -10,21 +11,38 @@ from dataset.rnn_sample_dataset import RNNSampleDataset
 from utils.hyperparameters import HyperParameters
 from utils.file_utils import extract_model_name
 from utils.rnn_utils import get_logits_name
-from utils.constants import HYPERS_PATH, TEST_LOG_PATH, TRAIN, VALID, TEST, METADATA_PATH, SMALL_NUMBER
+from utils.constants import HYPERS_PATH, TEST_LOG_PATH, TRAIN, VALID, TEST, METADATA_PATH, SMALL_NUMBER, BIG_NUMBER
 from utils.misc import sigmoid
 from utils.np_utils import thresholded_predictions, f1_score, precision, recall
 from post_processing.threshold_optimizer import ThresholdOptimizer
 
 
+EvaluationResult = namedtuple('EvaluationResult', ['accuracy', 'precision', 'recall', 'f1_score', 'avg_levels', 'thresholds'])
 
-def get_dataset(model_name: str, save_folder: RichPath) -> RNNSampleDataset:
+
+def print_eval_result(result: EvaluationResult):
+    print(f'Results for thresholds: {result.thresholds}')
+    print(f'Precision: {result.precision:.4f}')
+    print(f'Recall: {result.recall:.4f}')
+    print(f'F1 Score: {result.f1_score:.4f}')
+    print(f'Accuracy: {result.accuracy:.4f}')
+    print(f'Average Computed Levels: {result.avg_levels:.4f}')
+
+
+def get_dataset(model_name: str, save_folder: RichPath, dataset_folder: Optional[str]) -> RNNSampleDataset:
     metadata_file = save_folder.join(METADATA_PATH.format(model_name))
     metadata = metadata_file.read_by_file_suffix()
-    
-    # TODO: Fix this hack
-    train_folder = os.path.join('../', metadata['data_folders'][TRAIN.upper()].path)
-    valid_folder = os.path.join('../', metadata['data_folders'][VALID.upper()].path)
-    test_folder = os.path.join('../', metadata['data_folders'][TEST.upper()].path)
+
+    if dataset_folder is None:
+        # TODO: Fix this hack to infer the root data folder
+        train_folder = os.path.join('../', metadata['data_folders'][TRAIN.upper()].path)
+        valid_folder = os.path.join('../', metadata['data_folders'][VALID.upper()].path)
+        test_folder = os.path.join('../', metadata['data_folders'][TEST.upper()].path)
+    else:
+        assert os.path.exists(dataset_folder), f'The dataset folder {dataset_folder} does not exist!'
+        train_folder = os.path.join(dataset_folder, 'train')
+        valid_folder = os.path.join(dataset_folder, 'valid')
+        test_folder = os.path.join(dataset_folder, 'test')
 
     return RNNSampleDataset(train_folder, valid_folder, test_folder)
 
@@ -35,8 +53,8 @@ def get_model(model_name: str, hypers: HyperParameters, save_folder: RichPath) -
     return model
 
 
-def evaluate_thresholds(model: RNNModel, dataset: RNNSampleDataset, thresholds: List[float]):
-    test_dataset = dataset.minibatch_generator(DataSeries.TEST,
+def evaluate_thresholds(model: RNNModel, dataset: RNNSampleDataset, series: DataSeries, thresholds: List[float]) -> EvaluationResult:
+    test_dataset = dataset.minibatch_generator(series,
                                                metadata=model.metadata,
                                                batch_size=model.hypers.batch_size,
                                                should_shuffle=False,
@@ -63,9 +81,9 @@ def evaluate_thresholds(model: RNNModel, dataset: RNNSampleDataset, thresholds: 
 
         predictions_list.append(predictions)
         labels_list.append(labels)
-        levels_list.append(computed_levels)
+        levels_list.append(computed_levels + 1.0)
 
-        print(f'Completed testing batch {batch_num + 1}', end='\r')
+        print(f'Completed batch {batch_num + 1}', end='\r')
     print()
 
     avg_levels = np.average(np.vstack(levels_list))
@@ -76,14 +94,17 @@ def evaluate_thresholds(model: RNNModel, dataset: RNNSampleDataset, thresholds: 
     p = precision(predictions, labels)
     r = recall(predictions, labels)
     f1 = f1_score(predictions, labels)
+    accuracy = np.average(1.0 - np.abs(predictions - labels))
 
-    print(f'Results for thresholds: {thresholds}')
-    print(f'Precision: {p:.4f}')
-    print(f'Recall: {r:.4f}')
-    print(f'F1 Score: {f1:.4f}')
-    print(f'Average Computed Levels: {avg_levels:.4f}')
+    return EvaluationResult(precision=p,
+                            recall=r,
+                            f1_score=f1,
+                            accuracy=accuracy,
+                            avg_levels=avg_levels,
+                            thresholds=thresholds)
 
-def optimize_thresholds(optimizer_params: Dict[str, Union[float, int]], path: str):
+
+def optimize_thresholds(optimizer_params: Dict[str, Union[float, int]], path: str, dataset_folder: Optional[str]):
     save_folder, model_file = os.path.split(path)
 
     model_name = extract_model_name(model_file)
@@ -95,29 +116,49 @@ def optimize_thresholds(optimizer_params: Dict[str, Union[float, int]], path: st
     hypers_name = HYPERS_PATH.format(model_name)
     hypers = HyperParameters.create_from_file(save_folder.join(hypers_name))
 
-    dataset = get_dataset(model_name, save_folder)
+    dataset = get_dataset(model_name, save_folder, dataset_folder)
     model = get_model(model_name, hypers, save_folder)
 
-    optimizer = ThresholdOptimizer(population_size=optimizer_params['population_size'],
-                                   mutation_rate=optimizer_params['mutation_rate'],
-                                   batch_size=optimizer_params['batch_size'],
-                                   selection_count=optimizer_params['selection_count'],
-                                   iterations=optimizer_params['iterations'])
+    print('Starting optimization')
 
-    output = optimizer.optimize(model, dataset)
+    opt_outputs: List[OptimizerOutput] = []
+    for _ in range(optimizer_params['instances']):
+        optimizer = ThresholdOptimizer(population_size=optimizer_params['population_size'],
+                                       mutation_rate=optimizer_params['mutation_rate'],
+                                       batch_size=optimizer_params['batch_size'],
+                                       selection_count=optimizer_params['selection_count'],
+                                       iterations=optimizer_params['iterations'])
+        output = optimizer.optimize(model, dataset)
+        
+        opt_outputs.append(output)
+        print('==========')
 
-    print('Completed optimization. Starting evaluation.')
+    print('Completed optimization. Choosing the best model')
+    best_thresholds = None
+    best_f1_score = -BIG_NUMBER
+    for opt_output in opt_outputs:
+        result = evaluate_thresholds(model, dataset, DataSeries.VALID, opt_output.thresholds)
+        if result.f1_score > best_f1_score:
+            best_thresholds = result.thresholds
+            best_f1_score = result.f1_score
+
+    print('Completed selection. Starting evaluation.')
 
     baseline = [0.5 for _ in output.thresholds]
-    evaluate_thresholds(model, dataset, baseline)
+    result = evaluate_thresholds(model, dataset, DataSeries.TEST, baseline)
+    print_eval_result(result)
+
     print('===============')
-    evaluate_thresholds(model, dataset, output.thresholds)
+
+    result = evaluate_thresholds(model, dataset, DataSeries.TEST, best_thresholds)
+    print_eval_result(result)
 
 
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--model-path', type=str, required=True)
     parser.add_argument('--optimizer-params', type=str, required=True)
+    parser.add_argument('--dataset-folder', type=str)
     args = parser.parse_args()
 
     optimizer_params_file = RichPath.create(args.optimizer_params)
@@ -125,4 +166,4 @@ if __name__ == '__main__':
 
     optimizer_params = optimizer_params_file.read_by_file_suffix()
 
-    optimize_thresholds(optimizer_params, args.model_path)
+    optimize_thresholds(optimizer_params, args.model_path, args.dataset_folder)

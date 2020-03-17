@@ -13,6 +13,7 @@ from utils.np_utils import thresholded_predictions, f1_score
 
 OptimizerOutput = namedtuple('OptimizerOutput', ['thresholds', 'score'])
 
+LEVEL_WEIGHT = 0.1
 
 class ThresholdOptimizer:
     """
@@ -102,7 +103,7 @@ class ThresholdOptimizer:
         return OptimizerOutput(score=best_score, thresholds=best_thresholds)
 
     def _get_data_generator(self, dataset: RNNSampleDataset, metadata: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
-        return dataset.minibatch_generator(DataSeries.TRAIN,
+        return dataset.minibatch_generator(DataSeries.VALID,
                                            batch_size=self.batch_size,
                                            metadata=metadata,
                                            should_shuffle=True,
@@ -123,8 +124,13 @@ class ThresholdOptimizer:
         fitnesses: List[float] = []
         
         for individual in population:
-            predictions = thresholded_predictions(probabilities, individual).predictions
-            fitness = f1_score(predictions, labels)
+            output = thresholded_predictions(probabilities, individual)
+            predictions = output.predictions
+            levels = output.indices
+
+            num_levels = probabilities.shape[1]
+            level_penalty = LEVEL_WEIGHT * np.average((num_levels - levels) / num_levels)
+            fitness = f1_score(predictions, labels) + level_penalty
 
             fitnesses.append(fitness)
 

@@ -27,6 +27,7 @@ def model_test(path: str, max_num_batches: Optional[int]):
     metadata_file = save_folder.join(METADATA_PATH.format(model_name))
     metadata = metadata_file.read_by_file_suffix()
     train_folder = metadata['data_folders'][TRAIN.upper()]
+    print(train_folder)
     dataset_folder, _ = os.path.split(train_folder.path)
 
     test(model_name=model_name,
