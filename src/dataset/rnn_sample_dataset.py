@@ -10,38 +10,33 @@ class RNNSampleDataset(Dataset):
 
     def tensorize(self, sample: Dict[str, Any], metadata: Dict[str, Any]) -> Dict[str, np.ndarray]:
 
-        num_input_features = metadata['num_input_features']
+        input_shape = metadata['input_shape']
         sequence_length = len(sample['inputs'])
-
         inputs = np.array(sample['inputs'])
-        if metadata.get('shift_inputs', False):
-            first_input = np.expand_dims(inputs[0, :], axis=0)
-            shifted_input = inputs - first_input
-            input_sample = np.reshape(shifted_input, newshape=(-1, num_input_features))
-        else:
-            input_sample = np.reshape(inputs, newshape=(-1, num_input_features))
-
+        
         # Normalize inputs
-        normalized_input = metadata['input_scaler'].transform(input_sample)
+        normalized_input = inputs
+        input_scaler = metadata['input_scaler']
+        if input_scaler is not None:
+            # Since the standard scaler expects a 2D input, we reshape before normalizing
+            input_sample = np.reshape(inputs, newshape=(-1,) + input_shape)
+            normalized_input = input_scaler.transform(input_sample)
+            normalized_input = np.reshape(normalized_input, newshape=(-1, sequence_length) + input_shape)
 
         # Normalize outputs (Scaler expects a 2D input)
-        if not metadata['should_normalize_output']:
+        output_scaler = metadata['output_scaler']
+        if output_scaler is None:
             normalized_output = [sample['output']]
         elif not isinstance(sample['output'], list) and not isinstance(sample['output'], np.ndarray):
-            normalized_output = metadata['output_scaler'].transform([[sample['output']]])
+            normalized_output = output_scaler.transform([[sample['output']]])
         else:
-            normalized_output = metadata['output_scaler'].transform([sample['output']])
+            normalized_output = output_scaler.transform([sample['output']])
 
-        # Shape into batches
+        # Shape output into batch
         normalized_output = np.reshape(normalized_output, (-1, metadata['num_output_features']))
-        normalized_input = np.reshape(normalized_input, newshape=(-1, sequence_length, num_input_features))
 
-        if 'sample_id' in sample:
-            sample_id = sample['sample_id']
-        elif 'timestamp' in sample:
-            sample_id = sample['timestamp']
-        else:
-            sample_id = None
+        # Retrieve the sample id
+        sample_id = sample['sample_id']
 
         batch_dict = {
             'inputs': normalized_input,

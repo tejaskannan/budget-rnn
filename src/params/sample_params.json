@@ -1,5 +1,5 @@
 {
-	"batch_size": 50,
+	"batch_size": 25,
 	"dropout_keep_rate": 0.9,
 	"learning_rate": 0.0001,
 	"gradient_clip": 1,
@@ -24,6 +24,17 @@
 		"loss_weights": [1, 1, 1, 1],
         "link_levels": false,
         "loss_mode": "cross-entropy",
-        "fusion_mode": "gate"
+        "fusion_mode": "gate",
+        "normalize_inputs": false,
+        "use_conv_embedding": true,
+        "embedding_layer_params": {
+            "filter_width": 3,
+            "filter_height": 3,
+            "pool_size": 3,
+            "activation": "tanh",
+            "num_channels": 1,
+            "pool_stride": 2,
+            "filter_stride": 2
+        }
 	}
 }

@@ -13,6 +13,7 @@ from layers.basic import rnn_cell, mlp
 from layers.cells.cells import make_rnn_cell, MultiRNNCell
 from layers.rnn import dynamic_rnn, dropped_rnn, RnnOutput
 from layers.output_layers import OutputType, compute_binary_classification_output, compute_regression_output
+from layers.embedding_layer import embedding_layer
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
@@ -93,32 +94,38 @@ class RNNModel(Model):
                 output_samples.append(sample['output'])
 
         # Infer the number of input and output features
-        num_input_features = len(input_samples[0][0])
+        first_sample = np.array(input_samples[0])
+        input_shape = first_sample.shape[1:]  # Skip the sequence length
         seq_length = len(input_samples[0])
-        input_samples = np.reshape(input_samples, newshape=(-1, num_input_features))
 
-        input_scaler = StandardScaler()
-        input_scaler.fit(input_samples)
+        input_scaler = None
+        if self.hypers.model_params['normalize_inputs']:
+            assert len(input_shape) == 1
+            input_samples = np.reshape(input_samples, newshape=(-1, input_shape[0]))
+            input_scaler = StandardScaler()
+            input_scaler.fit(input_samples)
 
+        output_scaler = None
         num_output_features = len(output_samples[0])
-        output_scaler = StandardScaler()
-        output_scaler.fit(output_samples)
+        if self.output_type == OutputType.REGRESSION:
+            output_scaler = StandardScaler()
+            output_scaler.fit(output_samples)
 
         self.metadata['input_scaler'] = input_scaler
         self.metadata['output_scaler'] = output_scaler
-        self.metadata['num_input_features'] = num_input_features
+        self.metadata['input_shape'] = input_shape
         self.metadata['num_output_features'] = num_output_features
         self.metadata['seq_length'] = seq_length
-        self.metadata['should_normalize_output'] = self.output_type == OutputType.REGRESSION
 
     def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
         dropout = self.hypers.dropout_keep_rate if is_train else 1.0
         input_batch = np.array(batch['inputs'])
         output_batch = np.array(batch['output'])
 
-        input_batch = np.squeeze(input_batch, axis=1)
+        if input_batch.shape[1] == 1:
+            input_batch = np.squeeze(input_batch, axis=1)
 
-        num_input_features = self.metadata['num_input_features']
+        input_shape = self.metadata['input_shape']
         num_output_features = self.metadata['num_output_features']
 
         feed_dict = {
@@ -173,7 +180,7 @@ class RNNModel(Model):
         Create model placeholders.
         """
         # Extract parameters
-        num_input_features = self.metadata['num_input_features']
+        input_features_shape = self.metadata['input_shape']
         num_output_features = self.metadata['num_output_features']
         seq_length = self.metadata['seq_length']
         samples_per_seq = self.samples_per_seq
@@ -181,7 +188,7 @@ class RNNModel(Model):
 
         # Make input placeholders
         for i in range(num_sequences):
-            input_shape = [None, samples_per_seq, num_input_features]
+            input_shape = [None, samples_per_seq] + list(input_features_shape)
 
             # [B, S, D]
             self._placeholders[get_input_name(i)] = tf.placeholder(shape=input_shape,
@@ -307,16 +314,25 @@ class RNNModel(Model):
             accuracy_name = get_accuracy_name(i)
             f1_score_name = get_f1_score_name(i)
 
+            # Create the embedding layer
+            input_sequence = embedding_layer(inputs=self._placeholders[input_name],
+                                             units=self.hypers.model_params['state_size'],
+                                             use_conv=self.hypers.model_params['use_conv_embedding'],
+                                             params=self.hypers.model_params['embedding_layer_params'],
+                                             seq_length=self.samples_per_seq,
+                                             input_shape=self.metadata['input_shape'],
+                                             name_prefix=f'embedding-{i}')
+
             # Create the RNN Cell
             cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
-                                 input_units=self.metadata['num_input_features'],
+                                 input_units=self.hypers.model_params['state_size'],
                                  output_units=self.hypers.model_params['state_size'],
                                  activation=self.hypers.model_params['rnn_activation'],
                                  dropout_keep_rate=self._placeholders['dropout_keep_rate'],
                                  num_layers=self.hypers.model_params['rnn_layers'],
                                  name=cell_name)
 
-            inputs = self._placeholders[input_name]
+            inputs = input_sequence
             initial_state = cell.zero_state(batch_size=tf.shape(inputs)[0], dtype=tf.float32)
 
             # Set the initial state for chunked model types
