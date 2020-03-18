@@ -1,8 +1,7 @@
 import tensorflow as tf
 import numpy as np
 import re
-from os import listdir
-from dpu_utils.utils import RichPath
+import os
 from datetime import datetime
 from collections import defaultdict
 from typing import Optional, Iterable, Dict, Any, Union, List, DefaultDict
@@ -11,7 +10,7 @@ from dataset.dataset import Dataset, DataSeries
 from layers.output_layers import OutputType
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import get_optimizer, variables_for_loss_op
-from utils.file_utils import to_rich_path
+from utils.file_utils import read_by_file_suffix, save_by_file_suffix, make_dir
 from utils.constants import BIG_NUMBER, NAME_FMT, HYPERS_PATH, GLOBAL_STEP
 from utils.constants import METADATA_PATH, MODEL_PATH, TRAIN_LOG_PATH
 from utils.constants import LOSS, ACCURACY, OPTIMIZER_OP, F1_SCORE
@@ -19,9 +18,9 @@ from utils.constants import LOSS, ACCURACY, OPTIMIZER_OP, F1_SCORE
 
 class Model:
 
-    def __init__(self, hyper_parameters: HyperParameters, save_folder: Union[str, RichPath]):
+    def __init__(self, hyper_parameters: HyperParameters, save_folder: str):
         self.hypers = hyper_parameters
-        self.save_folder = to_rich_path(save_folder)
+        self.save_folder = save_folder
         self.metadata: Dict[str, Any] = dict()
 
         self._sess = tf.Session(graph=tf.Graph())
@@ -35,7 +34,7 @@ class Model:
         self._inference_ops: Dict[str, tf.Tensor] = dict()
 
         # Make the output folder
-        self.save_folder.make_as_dir()
+        make_dir(self.save_folder)
         self.name = 'model'  # Default name
 
     @property
@@ -45,7 +44,7 @@ class Model:
     @property
     def placeholders(self) -> Dict[str, tf.Tensor]:
         return self._placeholders
-    
+
     @property
     def optimizer_op_name(self) -> str:
         return OPTIMIZER_OP
@@ -189,7 +188,7 @@ class Model:
         """
         optimizer_ops = []
         trainable_vars = self.trainable_vars
-       
+
         # Compute gradients for each loss operation
         for loss_op in self.loss_op_names:
             gradients = tf.gradients(self._ops[loss_op], trainable_vars)
@@ -264,7 +263,7 @@ class Model:
                                                           metadata=self.metadata,
                                                           should_shuffle=True,
                                                           drop_incomplete_batches=drop_incomplete_batches)
-            
+
             epoch_train_loss: DefaultDict[str, float] = defaultdict(float)
             epoch_train_acc: DefaultDict[str, float] = defaultdict(float)
             epoch_train_f1: DefaultDict[str, float] = defaultdict(float)
@@ -272,7 +271,7 @@ class Model:
             for i, batch in enumerate(train_generator):
                 feed_dict = self.batch_to_feed_dict(batch, is_train=True)
                 ops_to_run = [self.optimizer_op_name, self.global_step_op_name] + self.loss_op_names
-                
+
                 if self.output_type == OutputType.CLASSIFICATION:
                     ops_to_run += self.accuracy_op_names + self.f1_score_op_names
 
@@ -319,7 +318,7 @@ class Model:
                                                           metadata=self.metadata,
                                                           should_shuffle=False,
                                                           drop_incomplete_batches=drop_incomplete_batches)
-            
+
             epoch_valid_loss: DefaultDict[str, float] = defaultdict(float)
             epoch_valid_acc: DefaultDict[str, float] = defaultdict(float)
             epoch_valid_f1: DefaultDict[str, float] = defaultdict(float)
@@ -330,7 +329,7 @@ class Model:
                 ops_to_run: List[str] = []
                 if self.output_type == OutputType.CLASSIFICATION:
                     ops_to_run += self.accuracy_op_names + self.f1_score_op_names
-        
+
                 ops_to_run += self.loss_op_names
                 valid_results = self.execute(feed_dict, ops_to_run)
 
@@ -360,7 +359,7 @@ class Model:
                 valid_f1_values = list(epoch_valid_f1.values())
                 if len(valid_f1_values) > 0:
                     valid_f1_agg = np.average(valid_f1_values)
- 
+
                 avg_valid_acc_so_far = valid_acc_agg / (i+1)
                 avg_valid_f1_so_far = valid_f1_agg / (i+1)
 
@@ -396,8 +395,8 @@ class Model:
 
         # Save training metrics
         metrics_dict = dict(train_losses=train_loss_dict, valid_losses=valid_loss_dict)
-        log_file = self.save_folder.join(TRAIN_LOG_PATH.format(name))
-        log_file.save_as_compressed_file(metrics_dict)
+        log_file = os.path.join(self.save_folder, TRAIN_LOG_PATH.format(name))
+        save_by_file_suffix(metrics_dict, log_file)
 
         return name
 
@@ -412,17 +411,17 @@ class Model:
                 are to be saved
         """
         # Save hyperparameters
-        params_path = self.save_folder.join(HYPERS_PATH.format(name))
-        params_path.save_as_compressed_file(self.hypers.__dict__())
+        params_path = os.path.join(self.save_folder, HYPERS_PATH.format(name))
+        save_by_file_suffix(self.hypers.__dict__(), params_path)
 
         # Save metadata
         data_folders_dict = {series.name: path for series, path in data_folders.items()}
-        metadata_path = self.save_folder.join(METADATA_PATH.format(name))
-        metadata_path.save_as_compressed_file(dict(metadata=self.metadata, data_folders=data_folders_dict))
+        metadata_path = os.path.join(self.save_folder, METADATA_PATH.format(name))
+        save_by_file_suffix(dict(metadata=self.metadata, data_folders=data_folders_dict), metadata_path)
 
         with self.sess.graph.as_default():
-            model_path = self.save_folder.join(MODEL_PATH.format(name))
-            
+            model_path = os.path.join(self.save_folder, MODEL_PATH.format(name))
+
             # Get all variable values
             trainable_vars = self.trainable_vars
             vars_to_save = {var.name: var for var in trainable_vars}
@@ -432,8 +431,8 @@ class Model:
             if loss_ops is not None:
                 # Load existing variables
                 saved_vars: Dict[str, np.ndarray] = dict()
-                if model_path.exists():
-                    saved_vars = model_path.read_by_file_suffix()
+                if os.path.exists(model_path):
+                    saved_vars = read_by_file_suffix(model_path)
 
                 # Get variables to save
                 for loss_op in loss_ops:
@@ -447,28 +446,28 @@ class Model:
                 vars_dict = saved_vars
 
             # Save results
-            model_path.save_as_compressed_file(vars_dict)
+            save_by_file_suffix(vars_dict, model_path)
 
     def restore(self, name: str, is_train: bool):
         """
         Restore model metadata, hyper-parameters, and trainable parameters.
         """
         # Restore hyperparameters
-        params_path = self.save_folder.join(HYPERS_PATH.format(name))
+        params_path = os.path.join(self.save_folder, HYPERS_PATH.format(name))
         self.hypers = HyperParameters.create_from_file(params_path)
 
         # Restore metadata
-        metadata_path = self.save_folder.join(METADATA_PATH.format(name))
-        train_metadata = metadata_path.read_by_file_suffix()
+        metadata_path = os.path.join(self.save_folder, METADATA_PATH.format(name))
+        train_metadata = read_by_file_suffix(metadata_path)
         self.metadata = train_metadata['metadata']
 
         # Build the model
         self.make(is_train=is_train)
-    
+
         # Restore the trainable parameters
         with self.sess.graph.as_default():
-            model_path = self.save_folder.join(MODEL_PATH.format(name))
-            vars_dict = model_path.read_by_file_suffix()
+            model_path = os.path.join(self.save_folder, MODEL_PATH.format(name))
+            vars_dict = read_by_file_suffix(model_path)
 
             # Collect all saved variables
             assign_ops = []
@@ -479,4 +478,3 @@ class Model:
 
             # Execute assignment
             self.sess.run(assign_ops)
-

@@ -6,7 +6,6 @@ import time
 from collections import namedtuple, defaultdict, OrderedDict
 from typing import List, Optional, Tuple, Dict, Any, Set, Union, DefaultDict, Iterable
 from sklearn.preprocessing import StandardScaler
-from dpu_utils.utils import RichPath
 
 from models.base_model import Model
 from layers.basic import rnn_cell, mlp
@@ -26,7 +25,7 @@ from utils.np_utils import thresholded_predictions
 
 class RNNModel(Model):
 
-    def __init__(self, hyper_parameters: HyperParameters, save_folder: Union[str, RichPath]):
+    def __init__(self, hyper_parameters: HyperParameters, save_folder: str):
         super().__init__(hyper_parameters, save_folder)
 
         model_type = self.hypers.model_params['model_type'].upper()
@@ -213,7 +212,6 @@ class RNNModel(Model):
     def predict(self, dataset: Dataset,
                 test_batch_size: Optional[int],
                 max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, List[float]]]:
-        
         test_batch_size = test_batch_size if test_batch_size is not None else self.hypers.batch_size
         test_batch_generator = dataset.minibatch_generator(series=DataSeries.TEST,
                                                            batch_size=test_batch_size,
@@ -241,7 +239,7 @@ class RNNModel(Model):
             latencies: List[float] = []
             logits_list: List[np.ndarray] = []
             level = 0
-    
+
             start = time.time()
             prediction_generator = self.anytime_generator(feed_dict, self.num_outputs)
             for prediction_op, (prediction, logits) in zip(self.prediction_ops, prediction_generator):
@@ -280,11 +278,11 @@ class RNNModel(Model):
 
         result = defaultdict(dict)
         for model_name in predictions_dict.keys():
- 
+
             predictions = np.vstack(predictions_dict[model_name])
             latency = float(np.average(latencies_dict[model_name][1:]))
             levels = float(np.average(levels_dict[model_name]))
-            
+
             for metric_name in ClassificationMetric:
                 metric_value = get_classification_metric(metric_name, predictions, labels, latency, levels)
                 result[model_name][metric_name.name] = metric_value
@@ -358,7 +356,7 @@ class RNNModel(Model):
             rnn_outputs = rnn_out.outputs
             rnn_states = rnn_out.states
             rnn_gates = rnn_out.gates
-            
+
             # Save previous states
             states_list.append(rnn_states)
 
@@ -414,7 +412,7 @@ class RNNModel(Model):
         combined_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), outputs), axis=1)
         self._ops[ALL_PREDICTIONS_NAME] = combined_outputs
 
-    def make_loss(self):        
+    def make_loss(self):
         losses: List[tf.Tensor] = []
 
         # The loss_op keys are ordered by the output level

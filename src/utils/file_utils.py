@@ -3,7 +3,9 @@ import gzip
 import json
 import codecs
 import pickle
+import os
 
+from collections import OrderedDict
 from dpu_utils.utils import RichPath
 from typing import Union, Optional, Iterable, Any
 
@@ -16,11 +18,18 @@ def to_rich_path(path: Union[str, RichPath]):
     return path
 
 
+def make_dir(path: str):
+    if not os.path.exists(path):
+        os.mkdir(path)
+
+
 def read_by_file_suffix(file_path: str) -> Any:
     if file_path.endswith('.jsonl.gz'):
         return read_jsonl_gz(file_path)
     elif file_path.endswith('.pkl.gz'):
         return read_pickle_gz(file_path)
+    elif file_path.endswith('.json'):
+        return read_json(file_path)
     else:
         raise ValueError(f'Cannot read file: {file_path}')
 
@@ -30,6 +39,8 @@ def save_by_file_suffix(data: Any, file_path: str):
         return save_jsonl_gz(data, file_path)
     elif file_path.endswith('.pkl.gz'):
         return save_pickle_gz(data, file_path)
+    elif file_path.endswith('.json'):
+        return save_json(data, file_path)
     else:
         raise ValueError(f'Cannot save into file: {file_path}')
 
@@ -45,7 +56,7 @@ def save_jsonl_gz(data: Iterable[Any], file_path: str) -> None:
 
 
 def read_jsonl_gz(file_path: str) -> Iterable[Any]:
-    assert file_path.endswith('.jsonl.gz'), 'Must provide a json lines file.'
+    assert file_path.endswith('.jsonl.gz'), 'Must provide a json lines gzip file.'
 
     reader = codecs.getreader('utf-8')
     with gzip.open(file_path) as f:
@@ -54,17 +65,29 @@ def read_jsonl_gz(file_path: str) -> Iterable[Any]:
 
 
 def save_pickle_gz(data: Any, file_path: str) -> None:
-    assert file_path.endswith('.pkl.gz'), 'Must provide a pickle file.'
+    assert file_path.endswith('.pkl.gz'), 'Must provide a pickle gzip file.'
 
     with gzip.GzipFile(file_path, 'wb') as f:
         pickle.dump(data, f)
 
 
 def read_pickle_gz(file_path: str) -> Any:
-    assert file_path.endswith('.pkl.gz'), 'Must provde a pickle file.'
+    assert file_path.endswith('.pkl.gz'), 'Must provde a pickle gzip file.'
 
     with gzip.open(file_path) as f:
         return pickle.load(f)
+
+
+def read_json(file_path: str) -> OrderedDict:
+    assert file_path.endswith('.json'), 'Must provide a json file.'
+    with open(file_path, 'r') as f:
+        return json.load(f, object_pairs_hook=OrderedDict)
+
+
+def save_json(data: Any, file_path: str):
+    assert file_path.endswith('.json'), 'Must provide a json file.'
+    with open(file_path, 'r') as f:
+        json.dump(data, f)
 
 
 def extract_model_name(model_file: str) -> Optional[str]:

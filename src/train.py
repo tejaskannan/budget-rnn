@@ -1,17 +1,17 @@
 import os.path
 from argparse import ArgumentParser
-from dpu_utils.utils import RichPath
 from datetime import datetime
 
 from utils.hyperparameters import HyperParameters
 from utils.constants import TRAIN, VALID, TEST
+from utils.file_utils import read_by_file_suffix, make_dir
 from models.rnn_model import RNNModel
 from dataset.rnn_sample_dataset import RNNSampleDataset
 from typing import Optional, Dict
 from test import test
 
 
-def train(data_folder: str, save_folder: RichPath, hypers: HyperParameters, max_epochs: Optional[int] = None) -> str:
+def train(data_folder: str, save_folder: str, hypers: HyperParameters, max_epochs: Optional[int] = None) -> str:
     model = RNNModel(hypers, save_folder=save_folder)
 
     # Create dataset
@@ -63,11 +63,13 @@ if __name__ == '__main__':
     num_models = trials * len(args.params_files)
 
     # Create save folder (if necessary)
-    base_save_folder = RichPath.create(args.save_folder)
-    base_save_folder.make_as_dir()
+    base_save_folder = args.save_folder
+    make_dir(base_save_folder)
+
+    # Create date-named folder for better organization
     current_day = datetime.now().strftime('%d_%m_%Y')
-    save_folder = base_save_folder.join(current_day)
-    save_folder.make_as_dir()
+    save_folder = os.path.join(base_save_folder, current_day)
+    make_dir(save_folder)
 
     for data_folder in args.data_folders:
         print(f'Started {data_folder}')

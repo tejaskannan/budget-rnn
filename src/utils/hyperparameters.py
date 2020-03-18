@@ -1,8 +1,8 @@
+import os.path
 from typing import Union, Dict, Any, List, Optional
-from dpu_utils.utils import RichPath
 from itertools import product
 
-from utils.file_utils import to_rich_path
+from utils.file_utils import read_by_file_suffix
 
 
 class HyperParameters:
@@ -42,12 +42,11 @@ class HyperParameters:
         return str(self.__dict__())
 
     @classmethod
-    def create_from_file(cls, params_file: Union[str, RichPath]):
+    def create_from_file(cls, params_file: str):
         """
         Reads the given hyper parameters from the serialized file.
         """
-        params_file = to_rich_path(params_file)
-        assert params_file.exists(), f'The parameters file {params_file} does not exist!'
+        assert os.path.exists(params_file), f'The parameters file {params_file} does not exist!'
 
-        parameters = params_file.read_by_file_suffix()
+        parameters = read_by_file_suffix(params_file)
         return HyperParameters(parameters)

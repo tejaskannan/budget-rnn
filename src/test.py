@@ -1,13 +1,12 @@
 import re
 import os
 from argparse import ArgumentParser
-from dpu_utils.utils import RichPath
 from typing import Optional
 
 from models.rnn_model import RNNModel
 from dataset.rnn_sample_dataset import RNNSampleDataset
 from utils.hyperparameters import HyperParameters
-from utils.file_utils import extract_model_name
+from utils.file_utils import extract_model_name, read_by_file_suffix, save_by_file_suffix
 from utils.constants import HYPERS_PATH, TEST_LOG_PATH, TRAIN, VALID, TEST, METADATA_PATH
 
 
@@ -17,17 +16,15 @@ def model_test(path: str, max_num_batches: Optional[int]):
     model_name = extract_model_name(model_file)
     assert model_name is not None, f'Could not extract name from file: {model_file}'
 
-    save_folder = RichPath.create(save_folder)
-
     # Extract hyperparameters
     hypers_name = HYPERS_PATH.format(model_name)
-    hypers = HyperParameters.create_from_file(save_folder.join(hypers_name))
+    hypers_path = os.path.join(save_folder, hypers_name)
+    hypers = HyperParameters.create_from_file(hypers_path)
 
     # Extract data folders
-    metadata_file = save_folder.join(METADATA_PATH.format(model_name))
-    metadata = metadata_file.read_by_file_suffix()
+    metadata_file = os.path.join(save_folder, METADATA_PATH.format(model_name))
+    metadata = read_by_file_suffix(metadata_file)
     train_folder = metadata['data_folders'][TRAIN.upper()]
-    print(train_folder)
     dataset_folder, _ = os.path.split(train_folder.path)
 
     test(model_name=model_name,
@@ -36,7 +33,8 @@ def model_test(path: str, max_num_batches: Optional[int]):
          hypers=hypers,
          max_num_batches=max_num_batches)
 
-def test(model_name: str, dataset_folder: str, save_folder: RichPath, hypers: HyperParameters, max_num_batches: Optional[int]):
+
+def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperParameters, max_num_batches: Optional[int]):
     # Create the dataset
     train_folder = os.path.join(dataset_folder, TRAIN)
     valid_folder = os.path.join(dataset_folder, VALID)
@@ -54,8 +52,8 @@ def test(model_name: str, dataset_folder: str, save_folder: RichPath, hypers: Hy
                                  test_batch_size=hypers.batch_size,
                                  max_num_batches=max_num_batches)
 
-    test_result_file = save_folder.join(TEST_LOG_PATH.format(model_name))
-    test_result_file.save_as_compressed_file([test_results])
+    test_result_file = os.path.join(save_folder, TEST_LOG_PATH.format(model_name))
+    save_by_file_suffix([test_results], test_result_file)
     print('Completed model testing.')
 
 

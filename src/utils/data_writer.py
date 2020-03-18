@@ -2,7 +2,8 @@ import numpy as np
 import os
 from argparse import ArgumentParser
 
-from .constants import SAMPLE_ID, DATA_FIELD_FORMAT
+from utils.constants import SAMPLE_ID, DATA_FIELD_FORMAT, INDEX_FILE
+from utils.file_utils import save_by_file_suffix
 
 
 def merge_npz_files(input_folder: str, output_folder: str, file_prefix: str, chunk_size: int):
@@ -18,6 +19,7 @@ def merge_npz_files(input_folder: str, output_folder: str, file_prefix: str, chu
 
     # Dictionary to hold elements
     elements: Dict[str, np.ndarray] = dict()
+    data_index: Dict[int, int] = dict()
 
     # Track index of output file
     file_index = 0
@@ -31,12 +33,19 @@ def merge_npz_files(input_folder: str, output_folder: str, file_prefix: str, chu
             field_name = DATA_FIELD_FORMAT.format(field, sample_id)
             elements[field_name] = sample[field]
 
+        # Add sample to lookup index
+        data_index[sample_id] = file_index
+
         # Save chunk
         if (sample_id + 1) % chunk_size == 0:
             output_file = os.path.join(output_folder, f'{file_prefix}{file_index:03}.npz')
             np.savez_compressed(output_file, **elements)
             elements = dict()
             file_index += 1
+
+    # Save the reverse index
+    index_file = os.path.join(output_folder, INDEX_FILE)
+    save_by_file_suffix(data_index, index_file)
 
     # Clean up any remaining elements
     if len(elements) > 0:
