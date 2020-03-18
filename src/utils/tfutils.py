@@ -1,7 +1,6 @@
 import tensorflow as tf
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Callable
 from collections import namedtuple
-from dpu_utils.tfutils import get_activation
 
 from .constants import SMALL_NUMBER
 
@@ -27,6 +26,32 @@ def get_optimizer(name: str, learning_rate: float, learning_rate_decay: float, g
         return tf.train.AdamOptimizer(learning_rate=scheduled_learning_rate)
     else:
         raise ValueError(f'Unknown optimizer {name}!')
+
+
+def get_activation(fn_name: Optional[str]) -> Optional[Callable[[tf.Tensor], tf.Tensor]]:
+    """
+    Returns the activation function with the given name.
+    """
+    if fn_name is None:
+        return None
+
+    fn_name = fn_name.lower()
+    if fn_name == 'tanh':
+        return tf.nn.tanh
+    elif fn_name == 'relu':
+        return tf.nn.relu
+    elif fn_name == 'sigmoid':
+        return tf.math.sigmoid
+    elif fn_name == 'leaky_relu':
+        return tf.nn.leaky_relu
+    elif fn_name == 'elu':
+        return tf.nn.elu
+    elif fn_name == 'crelu':
+        return tf.nn.crelu
+    elif fn_name == 'linear':
+        return None
+    else:
+        raise ValueError(f'Unknown activation name {fn_name}.')
 
 
 def pool_rnn_outputs(outputs: tf.Tensor, final_state: tf.Tensor, pool_mode: str):

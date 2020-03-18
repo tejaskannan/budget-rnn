@@ -1,7 +1,7 @@
 import tensorflow as tf
-from dpu_utils.tfutils import get_activation
 from typing import Optional, List, Union, Any
 
+from utils.tfutils import get_activation
 from utils.constants import BIG_NUMBER
 
 

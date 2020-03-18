@@ -1,6 +1,7 @@
 import tensorflow as tf
 from typing import Tuple, Dict, Optional, Any, List
-from dpu_utils.tfutils import get_activation
+
+from utils.tfutils import get_activation
 
 
 def make_rnn_cell(cell_type: str,
