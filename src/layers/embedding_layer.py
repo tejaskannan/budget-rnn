@@ -1,6 +1,7 @@
 import tensorflow as tf
 from typing import Dict, Any, List, Optional
-from dpu_utils.tfutils import get_activation
+
+from utils.tfutils import get_activation
 
 
 def embedding_layer(inputs: tf.Tensor,

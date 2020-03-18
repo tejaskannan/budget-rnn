@@ -2,14 +2,13 @@ import os
 import numpy as np
 from argparse import ArgumentParser
 from collections import namedtuple
-from dpu_utils.utils import RichPath
 from typing import Dict, Union, List, Optional
 
 from models.rnn_model import RNNModel
 from dataset.dataset import DataSeries
 from dataset.rnn_sample_dataset import RNNSampleDataset
 from utils.hyperparameters import HyperParameters
-from utils.file_utils import extract_model_name
+from utils.file_utils import extract_model_name, read_by_file_suffix, save_by_file_suffix
 from utils.rnn_utils import get_logits_name
 from utils.constants import HYPERS_PATH, TEST_LOG_PATH, TRAIN, VALID, TEST, METADATA_PATH, SMALL_NUMBER, BIG_NUMBER, OPTIMIZED_TEST_LOG_PATH
 from utils.misc import sigmoid
@@ -36,14 +35,14 @@ def result_to_dict(result: EvaluationResult):
     return {key.upper(): value for key, value in result._asdict().items()}
 
 
-def get_dataset(model_name: str, save_folder: RichPath, dataset_folder: Optional[str]) -> RNNSampleDataset:
-    metadata_file = save_folder.join(METADATA_PATH.format(model_name))
-    metadata = metadata_file.read_by_file_suffix()
+def get_dataset(model_name: str, save_folder: str, dataset_folder: Optional[str]) -> RNNSampleDataset:
+    metadata_file = os.path.join(save_folder, METADATA_PATH.format(model_name))
+    metadata = read_by_file_suffix(metadata_file)
 
     if dataset_folder is None:
-        train_folder = metadata['data_folders'][TRAIN.upper()].path
-        valid_folder = metadata['data_folders'][VALID.upper()].path
-        test_folder = metadata['data_folders'][TEST.upper()].path
+        train_folder = metadata['data_folders'][TRAIN.upper()]
+        valid_folder = metadata['data_folders'][VALID.upper()]
+        test_folder = metadata['data_folders'][TEST.upper()]
     else:
         assert os.path.exists(dataset_folder), f'The dataset folder {dataset_folder} does not exist!'
         train_folder = os.path.join(dataset_folder, TRAIN)
@@ -53,7 +52,7 @@ def get_dataset(model_name: str, save_folder: RichPath, dataset_folder: Optional
     return RNNSampleDataset(train_folder, valid_folder, test_folder)
 
 
-def get_model(model_name: str, hypers: HyperParameters, save_folder: RichPath) -> RNNModel:
+def get_model(model_name: str, hypers: HyperParameters, save_folder: str) -> RNNModel:
     model = RNNModel(hypers, save_folder)
     model.restore(name=model_name, is_train=False)
     return model
@@ -126,19 +125,17 @@ def optimize_thresholds(optimizer_params: Dict[str, Union[float, int]], path: st
     model_name = extract_model_name(model_file)
     assert model_name is not None, f'Could not extract name from file: {model_file}'
 
-    save_folder = RichPath.create(save_folder)
-
     # Extract hyperparameters
-    hypers_name = HYPERS_PATH.format(model_name)
-    hypers = HyperParameters.create_from_file(save_folder.join(hypers_name))
+    hypers_path = os.path.join(save_folder, HYPERS_PATH.format(model_name))
+    hypers = HyperParameters.create_from_file(hypers_path)
 
     dataset = get_dataset(model_name, save_folder, dataset_folder)
     model = get_model(model_name, hypers, save_folder)
 
     # Get test log
-    test_log_path = save_folder.join(TEST_LOG_PATH.format(model_name))
-    assert test_log_path.exists(), f'Must perform model testing before post processing'
-    test_log = list(test_log_path.read_by_file_suffix())[0]
+    test_log_path = os.path.join(save_folder, TEST_LOG_PATH.format(model_name))
+    assert os.path.exists(test_log_path), f'Must perform model testing before post processing'
+    test_log = list(read_by_file_suffix(test_log_path))[0]
 
     print('Starting optimization')
 
@@ -189,8 +186,8 @@ def optimize_thresholds(optimizer_params: Dict[str, Union[float, int]], path: st
 
     # Save new results
     test_log['scheduled_genetic'] = result_to_dict(result)
-    optimized_test_log_path = save_folder.join(OPTIMIZED_TEST_LOG_PATH.format(model_name))
-    optimized_test_log_path.save_as_compressed_file([test_log])
+    optimized_test_log_path = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format(model_name))
+    save_by_file_suffix([test_log], optimized_test_log_path)
 
 
 if __name__ == '__main__':
@@ -200,9 +197,9 @@ if __name__ == '__main__':
     parser.add_argument('--dataset-folder', type=str)
     args = parser.parse_args()
 
-    optimizer_params_file = RichPath.create(args.optimizer_params)
-    assert optimizer_params_file.exists(), f'The file {optimizer_params_file} does not exist'
+    optimizer_params_file = args.optimizer_params
+    assert os.path.exists(optimizer_params_file), f'The file {optimizer_params_file} does not exist'
 
-    optimizer_params = optimizer_params_file.read_by_file_suffix()
+    optimizer_params = read_by_file_suffix(optimizer_params_file)
 
     optimize_thresholds(optimizer_params, args.model_path, args.dataset_folder)
