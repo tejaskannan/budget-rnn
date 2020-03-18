@@ -3,7 +3,7 @@
 	"dropout_keep_rate": 0.9,
 	"learning_rate": 0.0001,
 	"gradient_clip": 1,
-	"epochs": 20,
+	"epochs": 40,
 	"patience": 10,
 	"model_params": {
 		"state_size": 8,
@@ -28,8 +28,8 @@
         "normalize_inputs": false,
         "use_conv_embedding": true,
         "embedding_layer_params": {
-            "filter_widths": [3, 3, 3],
-            "filter_heights": [3, 3, 3],
+            "filter_widths": [5, 3, 3],
+            "filter_heights": [5, 3, 3],
             "conv_activation": "relu",
             "dense_activation": "tanh",
             "filter_channels": [1, 1, 1],
