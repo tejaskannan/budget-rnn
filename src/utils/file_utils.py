@@ -6,21 +6,25 @@ import pickle
 import os
 
 from collections import OrderedDict
-from dpu_utils.utils import RichPath
 from typing import Union, Optional, Iterable, Any
 
 from .constants import MODEL_NAME_REGEX
 
 
-def to_rich_path(path: Union[str, RichPath]):
-    if isinstance(path, str):
-        return RichPath.create(path)
-    return path
-
-
 def make_dir(path: str):
     if not os.path.exists(path):
         os.mkdir(path)
+
+
+def iterate_files(folder: str, pattern: Optional[str] = None) -> Iterable[str]:
+    # Set pattern to match any string if None
+    if pattern is None:
+        pattern = r'.'
+
+    for file_name in os.listdir(folder):
+        match = re.match(pattern, file_name)
+        if match is not None:
+            yield os.path.join(folder, file_name)
 
 
 def read_by_file_suffix(file_path: str) -> Any:

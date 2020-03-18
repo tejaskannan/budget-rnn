@@ -55,6 +55,7 @@ class ThresholdOptimizer:
         """
         Runs the genetic algorithm optimization.
         """
+        # Create data iterator to compute fitness
         data_generator = self._get_data_generator(dataset, model.metadata)
 
         # Initialize the population
@@ -107,7 +108,7 @@ class ThresholdOptimizer:
                                            batch_size=self.batch_size,
                                            metadata=metadata,
                                            should_shuffle=True,
-                                           drop_incomplete_batches=True)
+                                           drop_incomplete_batches=False)
 
     def _init_population(self, num_features: int) -> List[np.ndarray]:
         population = []

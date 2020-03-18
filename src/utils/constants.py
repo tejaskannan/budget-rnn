@@ -12,7 +12,9 @@ GLOBAL_STEP = 'global_step'
 # Data format constants
 SAMPLE_ID = 'sample_id'
 DATA_FIELD_FORMAT = '{0}-{1}'
-DATA_FIELDS = ['inputs', 'output']
+INPUTS = 'inputs'
+OUTPUT = 'output'
+DATA_FIELDS = [INPUTS, OUTPUT]
 INDEX_FILE = 'index.pkl.gz'
 
 # Data folder names

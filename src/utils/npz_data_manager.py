@@ -4,7 +4,7 @@ import os
 from typing import Iterable, List, Any, Dict
 
 from .constants import DATA_FIELD_FORMAT, INDEX_FILE
-from .file_utils import read_by_file_suffix
+from .file_utils import read_by_file_suffix, iterate_files
 
 
 class NpzDataManager:
@@ -44,13 +44,13 @@ class NpzDataManager:
         if self.is_loaded:
             return
 
-        data_files = [os.path.join(self.folder, file_name) for file_name in os.listdir(self.folder) if file_name.endswith('.npz')]
+        data_files = list(sorted(iterate_files(self.folder, pattern=r'.*\.npz')))
 
         if len(data_files) == 0:
             print('WARNING: No data files found.')
             return
 
-        self._arrays = [np.load(data_file, mmap_mode='r') for data_file in sorted(data_files)]
+        self._arrays = [np.load(data_file, mmap_mode='r') for data_file in data_files]
         self._array_lengths = [int(len(arr) / len(self._fields)) for arr in self._arrays]
         self._length = sum(self._array_lengths)
         self._ids = list(range(self._length))

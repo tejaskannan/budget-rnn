@@ -1,12 +1,10 @@
 import numpy as np
 import re
-from dpu_utils.utils import RichPath
 from enum import Enum, auto
 from typing import Union, Dict, Any, DefaultDict, List, Generator, Iterable
 from collections import defaultdict
 from more_itertools import ichunked
 
-from utils.file_utils import to_rich_path
 from utils.npz_data_manager import NpzDataManager
 from utils.constants import SAMPLE_ID, DATA_FIELDS
 
@@ -22,24 +20,22 @@ DEFAULT_BATCH_SIZE = 100
 
 class Dataset:
 
-    def __init__(self, train_folder: Union[str, RichPath],
-                       valid_folder: Union[str, RichPath],
-                       test_folder: Union[str, RichPath]):
+    def __init__(self, train_folder: str, valid_folder: str, test_folder: str):
         self.data_folders = {
-                DataSeries.TRAIN: to_rich_path(train_folder),
-                DataSeries.VALID: to_rich_path(valid_folder),
-                DataSeries.TEST: to_rich_path(test_folder)
+                DataSeries.TRAIN: train_folder,
+                DataSeries.VALID: valid_folder,
+                DataSeries.TEST: test_folder
         }
 
         # Extract the name from the given folder
-        match = re.match('^.+/(.+)/.+/.+$', self.data_folders[DataSeries.TRAIN].path)
+        match = re.match('^.+/(.+)/.+/.+$', self.data_folders[DataSeries.TRAIN])
         self.dataset_name = match.group(1).replace('_', '-')
 
         # Create data managers for each partition
         self.dataset = {
-            DataSeries.TRAIN: NpzDataManager(self.data_folders[DataSeries.TRAIN].path, SAMPLE_ID, DATA_FIELDS),
-            DataSeries.VALID: NpzDataManager(self.data_folders[DataSeries.VALID].path, SAMPLE_ID, DATA_FIELDS),
-            DataSeries.TEST: NpzDataManager(self.data_folders[DataSeries.TEST].path, SAMPLE_ID, DATA_FIELDS)
+            DataSeries.TRAIN: NpzDataManager(self.data_folders[DataSeries.TRAIN], SAMPLE_ID, DATA_FIELDS),
+            DataSeries.VALID: NpzDataManager(self.data_folders[DataSeries.VALID], SAMPLE_ID, DATA_FIELDS),
+            DataSeries.TEST: NpzDataManager(self.data_folders[DataSeries.TEST], SAMPLE_ID, DATA_FIELDS)
         }
 
     def tensorize(self, sample: Dict[str, Any], metadata: Dict[str, Any]) -> Dict[str, np.ndarray]:
