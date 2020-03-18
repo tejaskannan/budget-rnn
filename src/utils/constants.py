@@ -9,6 +9,12 @@ OPTIMIZER_OP = 'optimizer_op'
 F1_SCORE = 'f1_score'
 GLOBAL_STEP = 'global_step'
 
+# Data format constants
+SAMPLE_ID = 'sample_id'
+DATA_FIELD_FORMAT = '{0}-{1}'
+DATA_FIELDS = ['inputs', 'output']
+INDEX_FILE = 'index.pkl.gz'
+
 # Data folder names
 TRAIN = 'train'
 VALID = 'valid'

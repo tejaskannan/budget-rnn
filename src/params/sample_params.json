@@ -1,9 +1,9 @@
 {
-	"batch_size": 25,
+	"batch_size": 16,
 	"dropout_keep_rate": 0.9,
 	"learning_rate": 0.0001,
 	"gradient_clip": 1,
-	"epochs": 25,
+	"epochs": 20,
 	"patience": 10,
 	"model_params": {
 		"state_size": 8,
@@ -28,13 +28,12 @@
         "normalize_inputs": false,
         "use_conv_embedding": true,
         "embedding_layer_params": {
-            "filter_width": 3,
-            "filter_height": 3,
-            "pool_size": 3,
-            "activation": "tanh",
-            "num_channels": 1,
-            "pool_stride": 2,
-            "filter_stride": 2
+            "filter_widths": [3, 3, 3],
+            "filter_heights": [3, 3, 3],
+            "conv_activation": "relu",
+            "dense_activation": "tanh",
+            "filter_channels": [1, 1, 1],
+            "filter_strides": [1, 2, 2]
         }
 	}
 }

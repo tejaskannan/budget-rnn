@@ -2,17 +2,22 @@ import numpy as np
 import re
 from dpu_utils.utils import RichPath
 from enum import Enum, auto
-from typing import Union, Dict, Any, DefaultDict, List, Generator
+from typing import Union, Dict, Any, DefaultDict, List, Generator, Iterable
 from collections import defaultdict
 from more_itertools import ichunked
 
 from utils.file_utils import to_rich_path
+from utils.npz_data_manager import NpzDataManager
+from utils.constants import SAMPLE_ID, DATA_FIELDS
 
 
 class DataSeries(Enum):
     TRAIN = auto()
     VALID = auto()
     TEST = auto()
+
+
+DEFAULT_BATCH_SIZE = 100
 
 
 class Dataset:
@@ -26,14 +31,15 @@ class Dataset:
                 DataSeries.TEST: to_rich_path(test_folder)
         }
 
+        # Extract the name from the given folder
         match = re.match('^.+/(.+)/.+/.+$', self.data_folders[DataSeries.TRAIN].path)
         self.dataset_name = match.group(1).replace('_', '-')
 
-        # Load the dataset partitions
+        # Create data managers for each partition
         self.dataset = {
-            DataSeries.TRAIN: self.load_series(self.data_folders[DataSeries.TRAIN]),
-            DataSeries.VALID: self.load_series(self.data_folders[DataSeries.VALID]),
-            DataSeries.TEST: self.load_series(self.data_folders[DataSeries.TEST])
+            DataSeries.TRAIN: NpzDataManager(self.data_folders[DataSeries.TRAIN].path, SAMPLE_ID, DATA_FIELDS),
+            DataSeries.VALID: NpzDataManager(self.data_folders[DataSeries.VALID].path, SAMPLE_ID, DATA_FIELDS),
+            DataSeries.TEST: NpzDataManager(self.data_folders[DataSeries.TEST].path, SAMPLE_ID, DATA_FIELDS)
         }
 
     def tensorize(self, sample: Dict[str, Any], metadata: Dict[str, Any]) -> Dict[str, np.ndarray]:
@@ -51,23 +57,15 @@ class Dataset:
         """
         return raw_sample
 
-    def load_series(self, data_folder: RichPath) -> List[Dict[str, Any]]:
+    def iterate_series(self, series: DataSeries) -> Iterable[Dict[str, Any]]:
         """
-        Loads data from the given series into memory. Only accepts data files
-        which are stored as compressed .jsonl.gz files.
-
-        Args:
-            data_folder: The folder to load data from (TRAIN, VALID or TEST)
-        Returns:
-            A list of loaded data samples.
+        Returns an iterator over all samples in the given series
         """
-        samples: List[Dict[str, Any]] = []
-        for data_file in data_folder.iterate_filtered_files_in_dir('*.jsonl.gz'):
-            for raw_sample in data_file.read_by_file_suffix():
-                samples.append(self.process_raw_sample(raw_sample))
+        data_series = self.dataset[series]
+        if not data_series.is_loaded:
+            data_series.load()
 
-        return samples
-
+        return data_series.iterate(should_shuffle=False, batch_size=DEFAULT_BATCH_SIZE)
 
     def minibatch_generator(self, series: DataSeries,
                                   batch_size: int,
@@ -90,11 +88,15 @@ class Dataset:
         """
         data_series = self.dataset[series]
 
-        # Shuffle the dataset if specified. Note that this shuffling mutates the original dataset.
-        if should_shuffle:
-            np.random.shuffle(data_series)
+        # Load dataset if needed
+        if not data_series.is_loaded:
+            data_series.load()
 
-        for minibatch in ichunked(data_series, batch_size):
+        # Create iterator over the data
+        data_iterator = data_series.iterate(should_shuffle=should_shuffle, batch_size=batch_size)
+
+        # Generate minibatches
+        for minibatch in ichunked(data_iterator, batch_size):
             # Turn minibatch into a feed dict
             feed_dict: DefaultDict[str, List[Any]] = defaultdict(list)
             num_samples = 0

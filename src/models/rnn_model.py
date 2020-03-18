@@ -83,12 +83,14 @@ class RNNModel(Model):
         output_samples: List[List[float]] = []
 
         # Fetch training samples to prepare for normalization
-        for sample in dataset.dataset[DataSeries.TRAIN]:
+        for sample in dataset.iterate_series(series=DataSeries.TRAIN):
             input_sample = np.array(sample['inputs'])
             input_samples.append(input_sample)
 
             if not isinstance(sample['output'], list) and \
                     not isinstance(sample['output'], np.ndarray):
+                output_samples.append([sample['output']])
+            elif isinstance(sample['output'], np.ndarray) and len(sample['output'].shape) == 0:
                 output_samples.append([sample['output']])
             else:
                 output_samples.append(sample['output'])
@@ -317,6 +319,7 @@ class RNNModel(Model):
             # Create the embedding layer
             input_sequence = embedding_layer(inputs=self._placeholders[input_name],
                                              units=self.hypers.model_params['state_size'],
+                                             dropout_keep_rate=self._placeholders['dropout_keep_rate'],
                                              use_conv=self.hypers.model_params['use_conv_embedding'],
                                              params=self.hypers.model_params['embedding_layer_params'],
                                              seq_length=self.samples_per_seq,
