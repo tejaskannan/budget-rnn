@@ -11,8 +11,7 @@ from utils.hyperparameters import HyperParameters
 from utils.file_utils import extract_model_name, read_by_file_suffix, save_by_file_suffix
 from utils.rnn_utils import get_logits_name
 from utils.constants import HYPERS_PATH, TEST_LOG_PATH, TRAIN, VALID, TEST, METADATA_PATH, SMALL_NUMBER, BIG_NUMBER, OPTIMIZED_TEST_LOG_PATH
-from utils.misc import sigmoid
-from utils.np_utils import thresholded_predictions, f1_score, precision, recall
+from utils.np_utils import thresholded_predictions, f1_score, precision, recall, sigmoid
 from utils.testing_utils import ClassificationMetric
 from utils.rnn_utils import get_prediction_name
 from post_processing.threshold_optimizer import ThresholdOptimizer
@@ -144,7 +143,7 @@ def optimize_thresholds(optimizer_params: Dict[str, Union[float, int]], path: st
         optimizer = ThresholdOptimizer(population_size=optimizer_params['population_size'],
                                        mutation_rate=optimizer_params['mutation_rate'],
                                        batch_size=optimizer_params['batch_size'],
-                                       selection_count=optimizer_params['selection_count'],
+                                       crossover_rate=optimizer_params['crossover_rate'],
                                        iterations=optimizer_params['iterations'])
         output = optimizer.optimize(model, dataset)
         

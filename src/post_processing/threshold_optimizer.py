@@ -6,29 +6,29 @@ from dataset.dataset import DataSeries
 from dataset.rnn_sample_dataset import RNNSampleDataset
 from models.rnn_model import RNNModel
 from utils.rnn_utils import get_logits_name
-from utils.misc import softmax, sigmoid
 from utils.constants import SMALL_NUMBER
-from utils.np_utils import thresholded_predictions, f1_score
+from utils.np_utils import thresholded_predictions, f1_score, softmax, sigmoid, linear_normalize
 
 
 OptimizerOutput = namedtuple('OptimizerOutput', ['thresholds', 'score'])
 
 LEVEL_WEIGHT = 0.1
 
+
 class ThresholdOptimizer:
     """
     Optimizes probability thresholds using a genetic algorithm.
     """
 
-    def __init__(self, population_size: int, mutation_rate: float, batch_size: int, selection_count: int, iterations: int):
-        assert population_size > selection_count, f'Must have a larger population than selection count.'
+    def __init__(self, population_size: int, crossover_rate: float, mutation_rate: float, batch_size: int, iterations: int):
         assert mutation_rate <= 1.0 and mutation_rate >= 0.0, f'Mutation rate must be in [0, 1]'
         assert iterations > 0, f'Must have a positive number of iterations'
+        assert crossover_rate <= 1.0 and crossover_rate >= 0.0, f'Crossover rate must be in [0, 1]'
 
+        self._crossover_rate = crossover_rate
         self._population_size = population_size
         self._mutation_rate = mutation_rate
         self._batch_size = batch_size
-        self._selection_count = selection_count
         self._iterations = iterations
 
     @property
@@ -44,8 +44,8 @@ class ThresholdOptimizer:
         return self._batch_size
 
     @property
-    def selection_count(self) -> int:
-        return self._selection_count
+    def crossover_rate(self) -> float:
+        return self._crossover_rate
 
     @property
     def iterations(self) -> int:
@@ -87,9 +87,12 @@ class ThresholdOptimizer:
                     best_score = fitness[best_individual]
                     best_thresholds = population[best_individual]
 
-                selected_pop, selected_fitness = self._selection(population, fitness)
-                population = self._crossover(selected_pop, selected_fitness)
+                population = self._selection(population, fitness)
                 population = self._mutation(population)
+
+            if self._has_converged(population):
+                print(f'Converged in {batch_num + 1} iterations. Best score so far: {best_score:.3f}.', end='\r')
+                break
 
             try:
                 batch = next(data_generator)
@@ -113,13 +116,16 @@ class ThresholdOptimizer:
     def _init_population(self, num_features: int) -> List[np.ndarray]:
         population = []
         for _ in range(self.population_size - 1):
-            init = np.sort(np.random.uniform(low=0.0, high=1.0, size=(num_features, )))
-            population.append(init)
+            init = np.random.uniform(low=0.0, high=1.0, size=(num_features, ))
+            population.append(np.sort(init))
 
         # Always initialize with an all-0.5 distribution
         population.append(np.full(shape=(num_features,), fill_value=0.5))
 
         return population
+
+    def _has_converged(self, population: List[np.ndarray]) -> bool:
+        return np.isclose(np.array(population), population[0]).all()
 
     def _compute_fitness(self, population: List[np.ndarray], probabilities: np.ndarray, labels: np.ndarray) -> List[float]:
         fitnesses: List[float] = []
@@ -139,65 +145,57 @@ class ThresholdOptimizer:
 
     def _selection(self, population: List[np.ndarray], fitness: List[float]) -> Tuple[List[np.ndarray], List[float]]:
         """
-        Roulette wheel fitness selection
+        Stochastic universal sampling using a linear ranking fitness technique
         """
-        normalized_fitness = softmax(fitness)
+        population_size = len(population)
+ 
+        # Select next population using roulette wheel selection
+        next_indices = self._sample(fitness)
+        next_population = [np.copy(population[i]) for i in next_indices]
 
-        selected_pop, selected_fitness = [], []
-        for i in range(self.selection_count):
+        # Perform crossover
+        crossover_population: List[np.ndarray] = []
+        for i in range(0, len(next_population) - 1, 2):
+            first_parent = next_population[i]
+            second_parent = next_population[i+1]
+            
             r = np.random.uniform(low=0.0, high=1.0)
+            if r < self.crossover_rate:
+                crossover_point = np.random.randint(low=0, high=len(first_parent) - 1)
 
-            score_sum = 0.0
-            index = 0
-            for fit_score in normalized_fitness:
-                score_sum += fit_score
-                if r < score_sum:
-                    break
-                index += 1    
+                temp = np.copy(first_parent[crossover_point:])
+                first_parent[crossover_point:] = second_parent[crossover_point:]
+                second_parent[crossover_point:] = temp
 
-            selected_pop.append(population[index])
-            selected_fitness.append(population[index])
+            crossover_population.append(np.copy(first_parent))
+            crossover_population.append(np.copy(second_parent))
 
+        # Pad population if needed
+        for i in range(0, len(population) - len(crossover_population)):
+            rand_individual = np.random.randint(low=0, high=len(population))
+            crossover_population.append(np.copy(population[rand_individual]))
 
-        return selected_pop, selected_fitness
+        return crossover_population
 
-    def _crossover(self, population: List[np.ndarray], fitness: List[float]) -> List[np.ndarray]:
-        normalized_fitness = np.array(fitness) / np.sum(fitness)
-        num_features = len(population[0])
-
-        iterations = int((self.population_size - self.selection_count) / 2)
-
-        for _ in range(iterations):
-            indices = np.random.randint(low=0, high=len(population), size=(2,))
-
-            # Choose random parents
-            first_parent = population[indices[0]]
-            second_parent = population[indices[1]]
-
-            # Perform crossover
-            crossover_point = np.random.randint(low=0, high=num_features)
-            temp = first_parent[crossover_point:]
-            first_parent[crossover_point:] = second_parent[crossover_point:]
-            second_parent[crossover_point:] = temp
-
-            # Sort results
-            first_parent = np.sort(first_parent)
-            second_parent = np.sort(second_parent)
-
-            population.append(first_parent)
-            population.append(second_parent)
-
-        return population
+    def _sample(self, fitness: List[float]) -> List[int]:
+        normalized_fitness = softmax(fitness)
+        indices = np.random.choice(a=list(range(len(fitness))),
+                                   size=len(fitness),
+                                   replace=True,
+                                   p=normalized_fitness)
+        return indices
 
     def _mutation(self, population: List[np.ndarray]) -> List[np.ndarray]:
         for i in range(len(population)):
 
-            individual = np.array(population[i], copy=True)
+            individual = np.copy(population[i])
 
             for j in range(len(individual)):
                 r = np.random.uniform(low=0.0, high=1.0)
                 if r < self.mutation_rate:
-                    individual[j] = np.random.uniform(low=0.0, high=1.0)
+                    lower = individual[j-1] if j > 0 else 0.0
+                    upper = individual[j+1] if j < len(individual) - 1 else 1.0
+                    individual[j] = np.random.uniform(low=lower, high=upper)
 
             population[i] = np.sort(individual)
 

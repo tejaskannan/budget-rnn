@@ -1,11 +1,41 @@
 import numpy as np
-from typing import List, Union
+from typing import List, Union, Any, Dict, Optional
 from collections import namedtuple
 
 from .constants import SMALL_NUMBER, BIG_NUMBER
 
 
 ThresholdedOutput = namedtuple('ThresholdedOutput', ['predictions', 'indices'])
+
+
+def pad_array(arr: np.array, new_size: int, value: Any, axis: int) -> np.array:
+    pad_width = new_size - arr.shape[axis]
+    if pad_width <= 0 :
+        return arr
+
+    widths = [(0, 0) for _ in range(len(arr.shape))]
+    widths[axis] = (0, pad_width)
+    return np.pad(arr, widths, mode='constant', constant_values=value)
+
+
+def softmax(arr: np.ndarray) -> np.ndarray:
+    exp_array = np.exp(arr)
+    return exp_array / np.sum(exp_array)
+
+
+def sigmoid(arr: np.ndarray) -> np.ndarray:
+    return 1.0 / (1.0 + np.exp(-arr))
+
+
+def linear_normalize(arr: np.ndarray) -> np.ndarray:
+    arr_sum = np.sum(arr)
+    arr_sum = arr_sum if abs(arr_sum) > SMALL_NUMBER else SMALL_NUMBER
+    return arr / arr_sum
+
+
+def l2_normalize(arr: np.ndarray) -> np.ndarray:
+    l2_norm = np.linalg.norm(arr, ord=2)
+    return arr / (l2_norm + SMALL_NUMBER)
 
 
 def precision(predictions: np.ndarray, labels: np.ndarray) -> float:

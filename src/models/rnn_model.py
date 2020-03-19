@@ -16,11 +16,10 @@ from layers.embedding_layer import embedding_layer
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
-from utils.misc import sigmoid
 from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, ONE_HALF
 from utils.rnn_utils import *
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric
-from utils.np_utils import thresholded_predictions
+from utils.np_utils import thresholded_predictions, sigmoid
 
 
 class RNNModel(Model):
