@@ -151,18 +151,21 @@ def optimize_thresholds(optimizer_params: Dict[str, Union[float, int]], path: st
         print('==========')
 
     print('Completed optimization. Choosing the best model...')
-    best_thresholds = None
-    best_f1_score = -BIG_NUMBER
-    for opt_output in opt_outputs:
-        result = evaluate_thresholds(model=model,
-                                     thresholds=opt_output.thresholds,
-                                     dataset=dataset,
-                                     series=DataSeries.VALID,
-                                     test_log=test_log)
+    if len(opt_outputs) == 1:
+        best_thresholds = opt_outputs[0].thresholds
+    else:
+        best_thresholds = None
+        best_f1_score = -BIG_NUMBER
+        for opt_output in opt_outputs:
+            result = evaluate_thresholds(model=model,
+                                         thresholds=opt_output.thresholds,
+                                         dataset=dataset,
+                                         series=DataSeries.VALID,
+                                         test_log=test_log)
 
-        if result.f1_score > best_f1_score:
-            best_thresholds = result.thresholds
-            best_f1_score = result.f1_score
+            if result.f1_score > best_f1_score:
+                best_thresholds = result.thresholds
+                best_f1_score = result.f1_score
 
     print('Completed selection. Starting evaluation....')
 

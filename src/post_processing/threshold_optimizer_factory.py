@@ -11,6 +11,8 @@ def get_optimizer(name: str, iterations: int, batch_size: int, **kwargs) -> Thre
                                 mutation_rate=kwargs['mutation_rate'],
                                 batch_size=batch_size,
                                 crossover_rate=kwargs['crossover_rate'],
+                                crossover_type=kwargs['crossover_type'],
+                                steady_state_count=kwargs['steady_state_count'],
                                 iterations=iterations)
     elif name in ('simulated_anneal', 'simulated-anneal', 'sim_anneal', 'sim-anneal'):
         return SimAnnealOptimizer(instances=kwargs['instances'],

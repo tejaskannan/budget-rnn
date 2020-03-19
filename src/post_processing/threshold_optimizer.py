@@ -11,7 +11,7 @@ from utils.np_utils import thresholded_predictions, f1_score, softmax, sigmoid, 
 
 
 OptimizerOutput = namedtuple('OptimizerOutput', ['thresholds', 'score'])
-LEVEL_WEIGHT = 0.1
+LEVEL_WEIGHT = 0.01
 
 
 class ThresholdOptimizer:
@@ -110,8 +110,8 @@ class ThresholdOptimizer:
             levels = output.indices
 
             num_levels = probabilities.shape[1]
-            level_penalty = LEVEL_WEIGHT * np.average((num_levels - levels) / num_levels)
-            fitness = f1_score(predictions, labels) + level_penalty
+            level_penalty = LEVEL_WEIGHT * np.average(levels / num_levels)
+            fitness = f1_score(predictions, labels) - level_penalty
 
             fitnesses.append(fitness)
 
