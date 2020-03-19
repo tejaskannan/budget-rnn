@@ -1,0 +1,13 @@
+{
+    "name": "simulated_anneal",
+    "batch_size": 256,
+    "iterations": 64,
+    "instances": 1,
+    "opt_params": {
+        "instances": 16,
+        "num_candidates": 16,
+        "epsilon": 0.25,
+        "anneal": 0.95,
+        "move_norm": 0.1
+    }
+}

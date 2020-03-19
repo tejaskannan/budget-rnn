@@ -38,6 +38,18 @@ def l2_normalize(arr: np.ndarray) -> np.ndarray:
     return arr / (l2_norm + SMALL_NUMBER)
 
 
+def clip_by_norm(arr: np.ndarray, clip: float) -> np.ndarray:
+    assert clip > 0, 'The clip value must be positive'
+    norm = np.linalg.norm(arr, ord=2)
+
+    # Don't clip arrays that already satisfy the constraint
+    if norm < clip:
+        return arr
+
+    factor = clip / norm
+    return arr * factor
+
+
 def precision(predictions: np.ndarray, labels: np.ndarray) -> float:
     assert predictions.shape == labels.shape, f'Predictions array must have same shape {predictions.shape} as the labels array {labels.shape}.'
 

@@ -1,8 +1,11 @@
 {
-    "population_size": 256,
-    "batch_size": 1024,
-    "mutation_rate": 0.1,
-    "selection_count": 64,
-    "iterations": 16,
-    "instances": 1
+    "name": "genetic",
+    "batch_size": 256,
+    "iterations": 64,
+    "instances": 1,
+    "opt_params": {
+        "population_size": 128,
+        "mutation_rate": 0.1,
+        "crossover_rate": 0.9
+    }
 }

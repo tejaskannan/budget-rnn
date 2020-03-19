@@ -14,7 +14,8 @@ from utils.constants import HYPERS_PATH, TEST_LOG_PATH, TRAIN, VALID, TEST, META
 from utils.np_utils import thresholded_predictions, f1_score, precision, recall, sigmoid
 from utils.testing_utils import ClassificationMetric
 from utils.rnn_utils import get_prediction_name
-from post_processing.threshold_optimizer import ThresholdOptimizer
+
+from post_processing.threshold_optimizer_factory import get_optimizer
 
 
 EvaluationResult = namedtuple('EvaluationResult', ['accuracy', 'precision', 'recall', 'f1_score', 'level', 'thresholds', 'latency'])
@@ -140,11 +141,10 @@ def optimize_thresholds(optimizer_params: Dict[str, Union[float, int]], path: st
 
     opt_outputs: List[OptimizerOutput] = []
     for _ in range(optimizer_params['instances']):
-        optimizer = ThresholdOptimizer(population_size=optimizer_params['population_size'],
-                                       mutation_rate=optimizer_params['mutation_rate'],
-                                       batch_size=optimizer_params['batch_size'],
-                                       crossover_rate=optimizer_params['crossover_rate'],
-                                       iterations=optimizer_params['iterations'])
+        optimizer = get_optimizer(name=optimizer_params['name'],
+                                  iterations=optimizer_params['iterations'],
+                                  batch_size=optimizer_params['batch_size'],
+                                  **optimizer_params['opt_params'])
         output = optimizer.optimize(model, dataset)
         
         opt_outputs.append(output)
