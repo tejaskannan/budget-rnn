@@ -25,7 +25,7 @@ def model_test(path: str, max_num_batches: Optional[int]):
     metadata_file = os.path.join(save_folder, METADATA_PATH.format(model_name))
     metadata = read_by_file_suffix(metadata_file)
     train_folder = metadata['data_folders'][TRAIN.upper()]
-    dataset_folder, _ = os.path.split(train_folder.path)
+    dataset_folder, _ = os.path.split(train_folder)
 
     test(model_name=model_name,
          dataset_folder=dataset_folder,
@@ -49,7 +49,7 @@ def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperPa
     # Test the model
     print('Starting model testing...')
     test_results = model.predict(dataset=dataset,
-                                 test_batch_size=hypers.batch_size,
+                                 test_batch_size=64,
                                  max_num_batches=max_num_batches)
 
     test_result_file = os.path.join(save_folder, TEST_LOG_PATH.format(model_name))

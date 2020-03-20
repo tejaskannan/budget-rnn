@@ -11,6 +11,7 @@ class CrossoverType(Enum):
     TWO_POINT = auto()
     DIFFERENTIAL = auto()
     WEIGHTED_AVG = auto()
+    MASKED_WEIGHTED_AVG = auto()
 
 
 class GeneticOptimizer(ThresholdOptimizer):
@@ -163,6 +164,26 @@ class GeneticOptimizer(ThresholdOptimizer):
             # Clip all values into [0, 1]
             first_parent = np.clip(next_first_parent, a_min=0.0, a_max=1.0)
             second_parent = np.clip(next_second_parent, a_min=0.0, a_max=1.0)
+        elif self.crossover_type == CrossoverType.MASKED_WEIGHTED_AVG:
+            weights = np.random.uniform(low=0.0, high=1.0, size=(2, first_parent.shape[0]))
+
+            num_nonzero = np.random.randint(low=0, high=first_parent.shape[0], size=(2, ))
+            first_nonzero_indices = np.random.randint(low=0, high=first_parent.shape[0], size=(num_nonzero[0], ))
+            second_nonzero_indices = np.random.randint(low=0, high=first_parent.shape[0], size=(num_nonzero[1], ))
+
+            mask = np.zeros_like(weights)
+            mask[0, first_nonzero_indices] = 1
+            mask[1, second_nonzero_indices] = 1
+
+            # Apply random mask
+            weights = weights * mask
+
+            # Update via a weighed average
+            next_first_parent = weights[0] * second_parent + (1.0 - weights[0]) * first_parent
+            next_second_parent = weights[1] * first_parent + (1.0 - weights[1]) * second_parent
+
+            # Clip all values into [0, 1]
+            first_parent = np.clip(next_first_parent, a_min=0.0, a_max=1.0)
+            second_parent = np.clip(next_second_parent, a_min=0.0, a_max=1.0)
  
         return np.sort(first_parent), np.sort(second_parent)
-
