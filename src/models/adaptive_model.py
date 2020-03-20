@@ -31,7 +31,6 @@ class AdaptiveModel(Model):
         self.model_type = RNNModelType[model_type]
 
         self.name = model_type
-        self.__output_type = OutputType[self.hypers.model_params['output_type'].upper()]
 
     @property
     def sample_frac(self) -> float:
@@ -61,14 +60,6 @@ class AdaptiveModel(Model):
     def samples_per_seq(self) -> int:
         seq_length = self.metadata['seq_length']
         return int(seq_length * self.sample_frac)
-
-    @property
-    def output_type(self) -> OutputType:
-        return self.__output_type
-
-    @property
-    def output_name(self) -> str:
-        return 'output'
 
     @property
     def loss_op_names(self) -> List[str]:
@@ -200,28 +191,13 @@ class AdaptiveModel(Model):
         # [B, K]
         self._placeholders[OUTPUT] = tf.placeholder(shape=[None, num_output_features],
                                                     dtype=tf.float32,
-                                                    name=self.output_name)
+                                                    name=OUTPUT)
         self._placeholders['dropout_keep_rate'] = tf.placeholder(shape=[],
                                                                  dtype=tf.float32,
                                                                  name='dropout-keep-rate')
         self._placeholders['loss_weights'] = tf.placeholder(shape=[self.num_outputs],
                                                             dtype=tf.float32,
                                                             name='loss-weights')
-
-    def predict(self, dataset: Dataset,
-                test_batch_size: Optional[int],
-                max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, List[float]]]:
-        test_batch_size = test_batch_size if test_batch_size is not None else self.hypers.batch_size
-        test_batch_generator = dataset.minibatch_generator(series=DataSeries.TEST,
-                                                           batch_size=test_batch_size,
-                                                           metadata=self.metadata,
-                                                           should_shuffle=False,
-                                                           drop_incomplete_batches=True)
-
-        if self.output_type == OutputType.CLASSIFICATION:
-            return self.predict_classification(test_batch_generator, test_batch_size, max_num_batches)
-        else:  # Regression
-            return self.predict_regression(test_batch_generator, test_batch_size, max_num_batches)
 
     def predict_classification(self, test_batch_generator: Iterable[Any],
                                batch_size: int,

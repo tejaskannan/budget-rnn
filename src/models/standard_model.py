@@ -3,7 +3,8 @@ import numpy as np
 import time
 from sklearn.preprocessing import StandardScaler
 from enum import Enum, auto
-from typing import Optional, Dict, List, Any
+from collections import defaultdict
+from typing import Optional, Dict, List, Any, DefaultDict, Iterable
 
 from layers.basic import mlp, pool_sequence
 from layers.output_layers import OutputType, compute_binary_classification_output, compute_regression_output
@@ -32,15 +33,10 @@ class StandardModel(Model):
         self._model_type = StandardModelType[model_type]
 
         self.name = model_type
-        self._output_type = OutputType[self.hypers.model_params['output_type'].upper()]
 
     @property
     def model_type(self) -> StandardModelType:
         return self._model_type
-
-    @property
-    def output_type(self) -> OutputType:
-        return self._output_type
 
     @property
     def prediction_ops(self) -> List[str]:
@@ -225,8 +221,6 @@ class StandardModel(Model):
             final_state_bw = get_rnn_state(bw_state)
             final_state = tf.concat([final_state_fw, final_state_bw], axis=-1)
 
-            print(final_state)
-
             aggregated = pool_rnn_outputs(transformed, final_state, pool_mode=self.hypers.model_params['pool_mode'])
         else:
             raise ValueError(f'Unknown transformation type: {self.model_type}')
@@ -257,4 +251,33 @@ class StandardModel(Model):
             self._ops[LOSS] = regression_output.loss
 
     def make_loss(self):
-        pass  # Loss made during model creation already
+        pass  # Loss made during model creation
+
+    def predict_classification(self, test_batch_generator: Iterable[Any],
+                               batch_size: int,
+                               max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, float]]:
+        predictions_list: List[np.ndarray] = []
+        labels_list: List[np.ndarray] = []
+        latencies: List[float] = []
+
+        for batch_num, batch in enumerate(test_batch_generator):
+            feed_dict = self.batch_to_feed_dict(batch, is_train=False)
+
+            start = time.time()
+            prediction = self.sess.run(self._ops[PREDICTION], feed_dict=feed_dict)
+            elapsed = time.time() - start
+
+            labels_list.append(np.vstack(batch[OUTPUT]))
+            predictions_list.append(prediction)
+            latencies.append(elapsed)
+
+        predictions = np.vstack(predictions_list)
+        labels = np.vstack(labels_list)
+        avg_latency = np.average(latencies[1:])  # Skip first due to outliers in caching
+
+        result: DefaultDict[str, Dict[str, float]] = defaultdict(dict)
+        for metric_name in ClassificationMetric:
+            metric_value = get_classification_metric(metric_name, predictions, labels, avg_latency, 1)
+            result['model'][metric_name.name] = metric_value
+
+        return result

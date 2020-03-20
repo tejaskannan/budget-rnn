@@ -31,6 +31,9 @@ class Model:
         self._global_step = None
         self._is_made = False
 
+        # Get the model output type
+        self._output_type = OutputType[self.hypers.model_params['output_type'].upper()] 
+
         # Dictionary with inference operations
         self._inference_ops: Dict[str, tf.Tensor] = dict()
 
@@ -80,7 +83,7 @@ class Model:
 
     @property
     def output_type(self) -> OutputType:
-        return OutputType.REGRESSION
+        return self._output_type
 
     def load_metadata(self, dataset: Dataset):
         """
@@ -108,17 +111,40 @@ class Model:
         """
         pass
 
-    def predict(self, samples: List[Dict[str, Any]], dataset: Dataset) -> Dict[Any, Any]:
+    def predict(self, dataset: Dataset,
+                test_batch_size: Optional[int],
+                max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, float]]:
         """
         Execute the model to produce a prediction for the given input sample.
 
         Args:
-            samples: Input samples to predict outputs for.
             dataset: Dataset object used to create input tensors.
+            test_batch_size: Batch size to use during testing
+            max_num_batches: Maximum number of batches to perform testing on
         Returns:
             The predicted output produced by the model.
         """
-        pass
+        test_batch_size = test_batch_size if test_batch_size is not None else self.hypers.batch_size
+        test_batch_generator = dataset.minibatch_generator(series=DataSeries.TEST,
+                                                           batch_size=test_batch_size,
+                                                           metadata=self.metadata,
+                                                           should_shuffle=False,
+                                                           drop_incomplete_batches=True)
+
+        if self.output_type == OutputType.CLASSIFICATION:
+            return self.predict_classification(test_batch_generator, test_batch_size, max_num_batches)
+        else:  # Regression
+            return self.predict_regression(test_batch_generator, test_batch_size, max_num_batches)
+
+    def predict_classification(self, test_batch_generator: Iterable[Any],
+                               batch_size: int,
+                               max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, float]]:
+        raise NotImplementedError()
+
+    def predict_regression(self, test_batch_generator: Iterable[Any],
+                           batch_size: int,
+                           max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, float]]:
+        raise NotImplementedError()
 
     def batch_to_feed_dict(self, batch: Dict[str, np.ndarray], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
         """
