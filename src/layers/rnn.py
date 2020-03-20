@@ -42,7 +42,7 @@ def dynamic_rnn(inputs: tf.Tensor,
     gates_array = tf.TensorArray(dtype=tf.float32, size=sequence_length, dynamic_size=False)
 
     fusion_layers: List[FusionLayer] = []
-    if previous_states is not None:
+    if previous_states is not None and fusion_mode.lower() == 'gate':
         combine_layer_name = 'combine-states' if name is None else f'{name}-combine-states'
 
         for i in range(rnn_layers):
