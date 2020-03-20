@@ -16,7 +16,7 @@ from layers.embedding_layer import embedding_layer
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
-from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, ONE_HALF
+from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, ONE_HALF, OUTPUT, INPUTS
 from utils.rnn_utils import *
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric
 from utils.np_utils import thresholded_predictions, sigmoid
@@ -82,16 +82,16 @@ class RNNModel(Model):
 
         # Fetch training samples to prepare for normalization
         for sample in dataset.iterate_series(series=DataSeries.TRAIN):
-            input_sample = np.array(sample['inputs'])
+            input_sample = np.array(sample[INPUTS])
             input_samples.append(input_sample)
 
-            if not isinstance(sample['output'], list) and \
-                    not isinstance(sample['output'], np.ndarray):
-                output_samples.append([sample['output']])
-            elif isinstance(sample['output'], np.ndarray) and len(sample['output'].shape) == 0:
-                output_samples.append([sample['output']])
+            if not isinstance(sample[OUTPUT], list) and \
+                    not isinstance(sample[OUTPUT], np.ndarray):
+                output_samples.append([sample[OUTPUT]])
+            elif isinstance(sample[OUTPUT], np.ndarray) and len(sample[OUTPUT].shape) == 0:
+                output_samples.append([sample[OUTPUT]])
             else:
-                output_samples.append(sample['output'])
+                output_samples.append(sample[OUTPUT])
 
         # Infer the number of input and output features
         first_sample = np.array(input_samples[0])
@@ -129,7 +129,7 @@ class RNNModel(Model):
         num_output_features = self.metadata['num_output_features']
 
         feed_dict = {
-            self._placeholders['output']: output_batch.reshape(-1, num_output_features),
+            self._placeholders[OUTPUT]: output_batch.reshape(-1, num_output_features),
             self._placeholders['dropout_keep_rate']: dropout
         }
 
@@ -252,7 +252,7 @@ class RNNModel(Model):
                 levels_dict[prediction_op].append(level + 1)
                 level += 1
 
-            labels.append(np.vstack(batch['output']))
+            labels.append(np.vstack(batch[OUTPUT]))
 
             # Scheduled model
             logits = np.concatenate(logits_list, axis=-1)
@@ -385,7 +385,7 @@ class RNNModel(Model):
 
             if self.output_type == OutputType.CLASSIFICATION:
                 classification_output = compute_binary_classification_output(model_output=output,
-                                                                             labels=self._placeholders['output'],
+                                                                             labels=self._placeholders[OUTPUT],
                                                                              false_pos_weight=self.hypers.model_params['pos_weights'][i],
                                                                              false_neg_weight=self.hypers.model_params['neg_weights'][i],
                                                                              mode=self.hypers.model_params['loss_mode'])

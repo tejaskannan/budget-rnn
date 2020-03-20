@@ -4,7 +4,7 @@ import re
 import os
 from datetime import datetime
 from collections import defaultdict
-from typing import Optional, Iterable, Dict, Any, Union, List, DefaultDict
+from typing import Optional, Iterable, Dict, Any, Union, List, DefaultDict, Set
 
 from dataset.dataset import Dataset, DataSeries
 from layers.output_layers import OutputType
@@ -14,6 +14,7 @@ from utils.file_utils import read_by_file_suffix, save_by_file_suffix, make_dir
 from utils.constants import BIG_NUMBER, NAME_FMT, HYPERS_PATH, GLOBAL_STEP
 from utils.constants import METADATA_PATH, MODEL_PATH, TRAIN_LOG_PATH
 from utils.constants import LOSS, ACCURACY, OPTIMIZER_OP, F1_SCORE
+from utils.constants import TRAIN, VALID
 
 
 class Model:
@@ -250,9 +251,12 @@ class Model:
 
         print(f'Created model with {self.count_parameters()} trainable parameters.')
 
-        train_loss_dict: DefaultDict[str, List[float]] = defaultdict(list)
-        valid_loss_dict: DefaultDict[str, List[float]] = defaultdict(list)
-        best_valid_loss_dict: DefaultDict[str, float] = defaultdict(lambda: BIG_NUMBER)
+        loss_dict: DefaultDict[str, List[float]] = defaultdict(list)
+        acc_dict: DefaultDict[str, List[float]] = defaultdict(list)
+        
+        # Initialize dictionary to hold metrics to measure improvement
+        init_metric_value = BIG_NUMBER if self.output_type == OutputType.REGRESSION else -BIG_NUMBER
+        best_valid_metric_dict: DefaultDict[str, float] = defaultdict(lambda: init_metric_value)
 
         num_not_improved = 0
         for epoch in range(self.hypers.epochs):
@@ -266,14 +270,14 @@ class Model:
 
             epoch_train_loss: DefaultDict[str, float] = defaultdict(float)
             epoch_train_acc: DefaultDict[str, float] = defaultdict(float)
-            epoch_train_f1: DefaultDict[str, float] = defaultdict(float)
 
-            for i, batch in enumerate(train_generator):
+            train_batch_counter = 1
+            for batch in train_generator:
                 feed_dict = self.batch_to_feed_dict(batch, is_train=True)
                 ops_to_run = [self.optimizer_op_name, self.global_step_op_name] + self.loss_op_names
 
                 if self.output_type == OutputType.CLASSIFICATION:
-                    ops_to_run += self.accuracy_op_names + self.f1_score_op_names
+                    ops_to_run += self.accuracy_op_names
 
                 train_results = self.execute(feed_dict, ops_to_run)
 
@@ -281,38 +285,31 @@ class Model:
                 for loss_op_name in self.loss_op_names:
                     avg_batch_loss = np.average(train_results[loss_op_name])
                     batch_loss += avg_batch_loss
-                    train_loss_dict[loss_op_name].append(avg_batch_loss)
                     epoch_train_loss[loss_op_name] += avg_batch_loss
 
                 train_loss_agg = np.average(list(epoch_train_loss.values()))
-                avg_train_loss_so_far = train_loss_agg / (i+1)
+                avg_train_loss_so_far = train_loss_agg / train_batch_counter
 
                 for acc_op_name in self.accuracy_op_names:
-                    epoch_train_acc[acc_op_name] += train_results[acc_op_name]
+                    epoch_train_acc[acc_op_name] += train_results.get(acc_op_name, 0.0)
 
-                for f1_op_name in self.f1_score_op_names:
-                    epoch_train_f1[f1_op_name] += train_results[f1_op_name]
-
-                train_acc_agg, train_f1_agg = 0.0, 0.0
-
+                train_acc_agg = 0.0
                 train_acc_values = list(epoch_train_acc.values())
                 if len(train_acc_values) > 0:
                     train_acc_agg = np.average(train_acc_values)
 
-                train_f1_values = list(epoch_train_f1.values())
-                if len(train_f1_values) > 0:
-                    train_f1_agg = np.average(train_f1_values)
-
-                avg_train_acc_so_far = train_acc_agg / (i+1)
-                avg_train_f1_so_far = train_f1_agg / (i+1)
+                avg_train_acc_so_far = train_acc_agg / train_batch_counter
 
                 if self.output_type == OutputType.CLASSIFICATION:
-                    print(f'Train Batch {i}. Avg loss so far: {avg_train_loss_so_far:.4f}, Avg accuracy so far: {avg_train_acc_so_far:.4f}, Avg F1 Score so far: {avg_train_f1_so_far:.4f}', end='\r')
+                    print(f'Train Batch {train_batch_counter}. Avg loss so far: {avg_train_loss_so_far:.4f}, Avg accuracy so far: {avg_train_acc_so_far:.4f}', end='\r')
                 else:
-                    print(f'Train Batch {i}. Avg loss so far: {avg_train_loss_so_far:.4f}', end='\r')
+                    print(f'Train Batch {train_batch_counter}. Avg loss so far: {avg_train_loss_so_far:.4f}', end='\r')
+
+                train_batch_counter += 1
 
             print()
 
+            # Perform validation
             valid_generator = dataset.minibatch_generator(DataSeries.VALID,
                                                           batch_size=self.hypers.batch_size,
                                                           metadata=self.metadata,
@@ -321,14 +318,14 @@ class Model:
 
             epoch_valid_loss: DefaultDict[str, float] = defaultdict(float)
             epoch_valid_acc: DefaultDict[str, float] = defaultdict(float)
-            epoch_valid_f1: DefaultDict[str, float] = defaultdict(float)
 
-            for i, batch in enumerate(valid_generator):
+            valid_batch_counter = 1
+            for batch in valid_generator:
                 feed_dict = self.batch_to_feed_dict(batch, is_train=False)
 
                 ops_to_run: List[str] = []
                 if self.output_type == OutputType.CLASSIFICATION:
-                    ops_to_run += self.accuracy_op_names + self.f1_score_op_names
+                    ops_to_run += self.accuracy_op_names
 
                 ops_to_run += self.loss_op_names
                 valid_results = self.execute(feed_dict, ops_to_run)
@@ -337,49 +334,71 @@ class Model:
                 for loss_op_name in self.loss_op_names:
                     avg_batch_loss = np.average(valid_results[loss_op_name])
                     batch_loss += avg_batch_loss
-                    valid_loss_dict[loss_op_name].append(avg_batch_loss)
                     epoch_valid_loss[loss_op_name] += avg_batch_loss
 
                 valid_loss_agg = np.average(list(epoch_valid_loss.values()))
-                avg_valid_loss_so_far = valid_loss_agg / (i+1)
+                avg_valid_loss_so_far = valid_loss_agg / valid_batch_counter
 
-                # Compute accuracy and F1 Scores
+                # Compute accuracy
                 for acc_op_name in self.accuracy_op_names:
-                    epoch_valid_acc[acc_op_name] += valid_results[acc_op_name]
+                    epoch_valid_acc[acc_op_name] += valid_results.get(acc_op_name, 0.0)
 
-                for f1_op_name in self.f1_score_op_names:
-                    epoch_valid_f1[f1_op_name] += valid_results[f1_op_name]
-
-                valid_acc_agg, valid_f1_agg = 0.0, 0.0
-
+                valid_acc_agg = 0.0
                 valid_acc_values = list(epoch_valid_acc.values())
                 if len(valid_acc_values) > 0:
                     valid_acc_agg = np.average(valid_acc_values)
 
-                valid_f1_values = list(epoch_valid_f1.values())
-                if len(valid_f1_values) > 0:
-                    valid_f1_agg = np.average(valid_f1_values)
-
-                avg_valid_acc_so_far = valid_acc_agg / (i+1)
-                avg_valid_f1_so_far = valid_f1_agg / (i+1)
+                avg_valid_acc_so_far = valid_acc_agg / valid_batch_counter
 
                 if self.output_type == OutputType.CLASSIFICATION:
-                    print(f'Valid Batch {i}. Avg loss so far: {avg_valid_loss_so_far:.4f}, Avg accuracy so far: {avg_valid_acc_so_far:.4f}, Avg F1 Score so far: {avg_valid_f1_so_far:.4f}', end='\r')
+                    print(f'Valid Batch {valid_batch_counter}. Avg loss so far: {avg_valid_loss_so_far:.4f}, Avg accuracy so far: {avg_valid_acc_so_far:.4f}', end='\r')
                 else:
-                    print(f'Valid Batch {i}. Avg loss so far: {avg_valid_loss_so_far:.4f}', end='\r')
+                    print(f'Valid Batch {valid_batch_counter}. Avg loss so far: {avg_valid_loss_so_far:.4f}', end='\r')
+
+                valid_batch_counter += 1
 
             print()
 
-            # Collect operations to save
+            # Log train and validation metrics for each epoch
+            loss_dict[TRAIN].append(np.average(list(epoch_train_loss.values())) / train_batch_counter)
+            loss_dict[VALID].append(np.average(list(epoch_valid_loss.values())) / valid_batch_counter)
+            acc_dict[TRAIN].append(np.average(list(epoch_train_acc.values())) / train_batch_counter)
+            acc_dict[VALID].append(np.average(list(epoch_valid_acc.values())) / valid_batch_counter)
+
+            # Create dictionary to map accuracy operations to loss operations
+            accuracy_loss_dict: Dict[str, str] = dict()
+            assert len(self.accuracy_op_names) == len(self.loss_op_names) or len(self.loss_op_names) == 1, f'Misaligned accuracy and loss operations.'
+            if len(self.loss_op_names):
+                accuracy_loss_dict = {acc_op: self.loss_op_names[0] for acc_op in self.accuracy_op_names}
+            else:
+                accuracy_loss_dict = {acc_op: loss_op for acc_op, loss_op in zip(self.accuracy_op_names, self.loss_op_names)}
+
+            # Collect loss operation to save
+            metric_ops = self.loss_op_names if self.output_type == OutputType.REGRESSION else self.accuracy_op_names
             has_improved = False
-            loss_ops_to_save: List[str] = []
-            for loss_op_name, valid_loss in epoch_valid_loss.items():
-                if valid_loss < best_valid_loss_dict[loss_op_name]:
-                    loss_ops_to_save.append(loss_op_name)
-                    best_valid_loss_dict[loss_op_name] = valid_loss
-                    has_improved = True
+            loss_ops_to_save: Set[str] = set()
+            for op_name in metric_ops:
+                # For regression tasks, we want to minimize loss
+                if self.output_type == OutputType.REGRESSION:
+                    valid_loss = epoch_valid_loss[op_name]
+                    if valid_loss < best_valid_metric_dict[op_name]:
+                        loss_ops_to_save.add(op_name)
+                        best_valid_metric_dict[op_name] = valid_loss
+                        has_improved = True
+
+                # For classification tasks, we want to maximize accuracy
+                if self.output_type == OutputType.CLASSIFICATION:
+                    valid_acc = epoch_valid_acc[op_name]
+                    if valid_acc > best_valid_metric_dict[op_name]:
+                        # Save the corresponding loss operation
+                        loss_op_name = accuracy_loss_dict[op_name]
+                        loss_ops_to_save.add(loss_op_name)
+
+                        best_valid_metric_dict[op_name] = valid_acc
+                        has_improved = True
 
             # Save model if necessary
+            loss_ops_to_save = list(sorted(loss_ops_to_save))
             if len(loss_ops_to_save) > 0:
                 print('Saving model for operations: {0}'.format(','.join(loss_ops_to_save)))
                 self.save(name=name, data_folders=dataset.data_folders, loss_ops=loss_ops_to_save)
@@ -394,7 +413,7 @@ class Model:
                 break
 
         # Save training metrics
-        metrics_dict = dict(train_losses=train_loss_dict, valid_losses=valid_loss_dict)
+        metrics_dict = dict(loss=loss_dict, accuracy=acc_dict)
         log_file = os.path.join(self.save_folder, TRAIN_LOG_PATH.format(name))
         save_by_file_suffix(metrics_dict, log_file)
 
