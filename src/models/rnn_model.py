@@ -16,7 +16,7 @@ from layers.embedding_layer import embedding_layer
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
-from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, ONE_HALF, OUTPUT, INPUTS
+from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS
 from utils.rnn_utils import *
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric
 from utils.np_utils import thresholded_predictions, sigmoid
@@ -337,7 +337,7 @@ class RNNModel(Model):
 
             # Set the initial state for chunked model types
             if prev_state is not None:
-                if self.model_type == RNNModelType.CASCADE or (self.model_type == RNNModelType.SAMPLE and self.hypers.model_params['link_levels']):
+                if self.model_type == RNNModelType.CASCADE or self.hypers.model_params['link_levels']:
                     initial_state = prev_state
 
             # Set previous states for the Sample model type
@@ -374,14 +374,6 @@ class RNNModel(Model):
                          activations=self.hypers.model_params['output_hidden_activation'],
                          dropout_keep_rate=self._placeholders['dropout_keep_rate'],
                          name=output_layer_name)
-
-            # We give the model the ability to 'copy' the output from the previous level. This should encourage
-            # a more consistent output landscape.
-            if i > 0:
-                current = mlp(inputs=final_state, output_size=1, hidden_sizes=[], activations=['linear'], dropout_keep_rate=1.0, name=f'output-sharing-current-{i}')
-                prev = mlp(inputs=tf.squeeze(prev_state, axis=0), output_size=1, hidden_sizes=[], activations=['linear'], dropout_keep_rate=1.0, name=f'output-sharing-prev-{i}')
-                output_weight = tf.math.sigmoid(current + prev)
-                output = output * output_weight + outputs[-1] * (1.0 - output_weight)
 
             if self.output_type == OutputType.CLASSIFICATION:
                 classification_output = compute_binary_classification_output(model_output=output,
@@ -422,7 +414,7 @@ class RNNModel(Model):
         losses = tf.stack(losses)  # [N], N is the number of sequences
         weighted_losses = tf.reduce_sum(losses * self._placeholders['loss_weights'], axis=-1)  # Scalar
 
-        self._ops['loss'] = weighted_losses
+        self._ops[LOSS] = weighted_losses
 
     def anytime_generator(self, feed_dict: Dict[tf.Tensor, List[Any]],
                           max_num_levels: int) -> Optional[Iterable[np.ndarray]]:
