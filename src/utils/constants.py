@@ -7,7 +7,9 @@ LOSS = 'loss'
 ACCURACY = 'accuracy'
 OPTIMIZER_OP = 'optimizer_op'
 F1_SCORE = 'f1_score'
+LOGITS = 'logits'
 GLOBAL_STEP = 'global_step'
+PREDICTION = 'prediction'
 
 # Data format constants
 SAMPLE_ID = 'sample_id'

@@ -5,20 +5,31 @@ from utils.tfutils import get_activation
 from utils.constants import BIG_NUMBER
 
 
-def pool_sequence(embeddings: tf.Tensor, mask: tf.Tensor, pool_mode: str) -> tf.Tensor:
+def pool_sequence(embeddings: tf.Tensor, pool_mode: str) -> tf.Tensor:
     """
     Args:
-        embeddings: A B x T x K tensor
-        seq_lengths: A B x T
+        embeddings: A [B, T, K] tensor
+        pool_mode: Pooling strategy
+    Returns:
+        A [B, K] tensor containing the pooled vectors for each sequence
     """
     pool_mode = pool_mode.lower()
     if pool_mode == 'sum':
-        masked_embeddings = embeddings * tf.cast(tf.expand_dims(mask), dtype=embeddings.dtype)
-        return tf.reduce_sum(masked_embeddings, axis=-2)
+        return tf.reduce_sum(embeddings, axis=-2)
+    elif pool_mode == 'average':
+        return tf.reduce_mean(embeddings, axis=-2)
     elif pool_mode == 'max':
-        inverted_mask = -BIG_NUMBER * (1.0 - tf.cast(tf.expand_dims(mask), dtype=embeddings.dtype))
-        masked_embeddings = embeddings + inverted_mask
-        return tf.reduce_max(masked_embeddings)
+        return tf.reduce_max(embeddings, axis=-2)
+    elif pool_mode=='attention':
+        attention_weights = tf.layers.dense(inputs=embeddings,
+                                            units=1,
+                                            activation=tf.nn.leaky_relu,
+                                            use_bias=True,
+                                            kernel_initializer=tf.glorot_uniform_initializer(),
+                                            name='attention-layer')
+        normalized_weights = tf.nn.softmax(attention_weights, axis=-2)  # [B, T, 1]
+        weighted_vectors = embeddings * normalized_weights  # [B, T, K]
+        return tf.reduce_sum(weighted_vectors, axis=-2)  # [B, K]
     else:
         raise ValueError(f'Unknown pool mode {pool_mode}!')
 

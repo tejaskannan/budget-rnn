@@ -5,14 +5,14 @@ from datetime import datetime
 from utils.hyperparameters import HyperParameters
 from utils.constants import TRAIN, VALID, TEST
 from utils.file_utils import read_by_file_suffix, make_dir
-from models.rnn_model import RNNModel
+from models.model_factory import get_model
 from dataset.rnn_sample_dataset import RNNSampleDataset
 from typing import Optional, Dict
 from test import test
 
 
 def train(data_folder: str, save_folder: str, hypers: HyperParameters, max_epochs: Optional[int] = None) -> str:
-    model = RNNModel(hypers, save_folder=save_folder)
+    model = get_model(hypers, save_folder=save_folder)
 
     # Create dataset
     train_folder = os.path.join(data_folder, TRAIN)

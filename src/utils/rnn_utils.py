@@ -1,19 +1,16 @@
 from enum import Enum, auto
 
+from utils.constants import LOGITS, ACCURACY, PREDICTION, F1_SCORE , LOSS
+
 
 RNN_CELL_NAME = 'rnn-cell'
 RNN_LEVEL_NAME = 'rnn-level'
 INPUT_NAME = 'input'
 OUTPUT_LAYER_NAME = 'output-level'
-LOSS_NAME = 'loss'
 GATES_NAME = 'gates'
 STATES_NAME = 'states'
 ALL_PREDICTIONS_NAME = 'predictions'
-PREDICTION_NAME = 'prediction'
 PREDICTION_PROB_NAME = 'prediction_probs'
-LOGITS_NAME = 'logits'
-ACCURACY_NAME = 'accuracy'
-F1_SCORE_NAME = 'f1_score'
 
 
 class RNNModelType(Enum):
@@ -42,19 +39,19 @@ def get_output_layer_name(level_index: int) -> str:
 
 
 def get_loss_name(level_index: int) -> str:
-    return f'{LOSS_NAME}_{level_index}'
+    return f'{LOSS}_{level_index}'
 
 
 def get_prediction_name(level_index: int) -> str:
-    return f'{PREDICTION_NAME}_{level_index}'
+    return f'{PREDICTION}_{level_index}'
 
 
 def get_logits_name(level_index: int) -> str:
-    return f'{LOGITS_NAME}_{level_index}'
+    return f'{LOGITS}_{level_index}'
 
 
 def get_accuracy_name(level_index: int) -> str:
-    return f'{ACCURACY_NAME}_{level_index}'
+    return f'{ACCURACY}_{level_index}'
 
 
 def get_prediction_prob_name(level_index: int) -> str:
@@ -70,4 +67,4 @@ def get_states_name(level_index: int) -> str:
 
 
 def get_f1_score_name(level_index: int) -> str:
-    return f'{F1_SCORE_NAME}_{level_index}'
+    return f'{F1_SCORE}_{level_index}'

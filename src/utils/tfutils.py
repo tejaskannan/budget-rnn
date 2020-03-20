@@ -1,5 +1,5 @@
 import tensorflow as tf
-from typing import Dict, Optional, List, Callable
+from typing import Dict, Optional, List, Callable, Union, Tuple
 from collections import namedtuple
 
 from .constants import SMALL_NUMBER
@@ -186,3 +186,51 @@ def tf_f1_score(predictions: tf.Tensor, labels: tf.Tensor) -> tf.Tensor:
     recall = tf_recall(predictions, labels)
 
     return 2 * (precision * recall) / (precision + recall + SMALL_NUMBER)
+
+
+def tf_rnn_cell(cell_type: str, num_units: int, activation: str, layers: int, dropout_keep_rate: tf.Tensor, name_prefix: Optional[str]) -> tf.nn.rnn_cell.MultiRNNCell:
+
+    def make_cell(cell_type: str, num_units: int, activation: str, name: str):
+        if cell_type == 'vanilla':
+            return tf.nn.rnn_cell.BasicRNNCell(num_units=num_units,
+                                            activation=get_activation(activation),
+                                            name=name)
+        elif cell_type == 'gru':
+            return tf.nn.rnn_cell.GRUCell(num_units=num_units,
+                                       activation=get_activation(activation),
+                                       kernel_initializer=tf.glorot_uniform_initializer(),
+                                       name=name)
+        elif cell_type == 'lstm':
+            return tf.nn.rnn_cell.LSTMCell(num_units=num_units,
+                                        activation=get_activation(activation),
+                                        initializer=tf.glorot_uniform_initializer(),
+                                        name=name)
+        raise ValueError(f'Unknown cell type: {cell_type}')
+
+    cell_type = cell_type.lower()
+    cells: List[tf.rnn_cell.RNNCell] = []
+    name_prefix = f'{name_prefix}-cell' if name_prefix is not None else 'cell'
+    for i in range(layers):
+        name = f'{name_prefix}-{i}'
+        cell = make_cell(cell_type, num_units, activation, name)
+        cell = tf.nn.rnn_cell.DropoutWrapper(cell=cell,
+                                             input_keep_prob=dropout_keep_rate,
+                                             state_keep_prob=dropout_keep_rate,
+                                             output_keep_prob=dropout_keep_rate)
+        cells.append(cell)
+
+    return tf.nn.rnn_cell.MultiRNNCell(cells)
+
+def get_rnn_state(state: Union[tf.Tensor, tf.nn.rnn_cell.LSTMStateTuple, Tuple[tf.Tensor, ...], Tuple[tf.nn.rnn_cell.LSTMStateTuple, ...]]) -> tf.Tensor:
+    if isinstance(state, tf.nn.rnn_cell.LSTMStateTuple):
+        return state.c
+    if isinstance(state, tuple):
+        states: List[tf.Tensor] = []
+        for st in state:
+            if isinstance(st, tf.nn.rnn_cell.LSTMStateTuple):
+                states.append(st.c)
+            else:
+                states.append(st)
+        return tf.concat(states, axis=-1)
+    else:
+        return state

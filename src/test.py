@@ -3,7 +3,7 @@ import os
 from argparse import ArgumentParser
 from typing import Optional
 
-from models.rnn_model import RNNModel
+from models.model_factory import get_model
 from dataset.rnn_sample_dataset import RNNSampleDataset
 from utils.hyperparameters import HyperParameters
 from utils.file_utils import extract_model_name, read_by_file_suffix, save_by_file_suffix
@@ -41,7 +41,7 @@ def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperPa
     test_folder = os.path.join(dataset_folder, TEST)
     dataset = RNNSampleDataset(train_folder, valid_folder, test_folder)
 
-    model = RNNModel(hyper_parameters=hypers, save_folder=save_folder)
+    model = get_model(hypers, save_folder=save_folder)
 
     # Build model and restore trainable parameters
     model.restore(name=model_name, is_train=False)

@@ -22,7 +22,7 @@ from utils.testing_utils import ClassificationMetric, RegressionMetric, get_clas
 from utils.np_utils import thresholded_predictions, sigmoid
 
 
-class RNNModel(Model):
+class AdaptiveModel(Model):
 
     def __init__(self, hyper_parameters: HyperParameters, save_folder: str):
         super().__init__(hyper_parameters, save_folder)
@@ -74,7 +74,7 @@ class RNNModel(Model):
     def loss_op_names(self) -> List[str]:
         if self.model_type == RNNModelType.VANILLA and not self.hypers.model_params['share_cell_weights']:
             return [get_loss_name(i) for i in range(self.num_outputs)]
-        return ['loss']
+        return [LOSS]
 
     def load_metadata(self, dataset: Dataset):
         input_samples: List[List[float]] = []
@@ -198,9 +198,9 @@ class RNNModel(Model):
                 samples_per_seq += self.samples_per_seq
 
         # [B, K]
-        self._placeholders[self.output_name] = tf.placeholder(shape=[None, num_output_features],
-                                                              dtype=tf.float32,
-                                                              name=self.output_name)
+        self._placeholders[OUTPUT] = tf.placeholder(shape=[None, num_output_features],
+                                                    dtype=tf.float32,
+                                                    name=self.output_name)
         self._placeholders['dropout_keep_rate'] = tf.placeholder(shape=[],
                                                                  dtype=tf.float32,
                                                                  name='dropout-keep-rate')
