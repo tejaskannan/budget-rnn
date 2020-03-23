@@ -3,7 +3,7 @@
 	"dropout_keep_rate": 0.9,
 	"learning_rate": 0.0001,
 	"gradient_clip": 1,
-	"epochs": 2,
+	"epochs": 50,
 	"patience": 10,
     "model": "adaptive",
 	"model_params": {
@@ -25,7 +25,7 @@
 		"loss_weights": [1, 1, 1, 1],
         "link_levels": false,
         "loss_mode": "cross-entropy",
-        "fusion_mode": "sum",
+        "fusion_mode": "gate",
         "normalize_inputs": true,
         "use_conv_embedding": false,
         "embedding_layer_params": {
