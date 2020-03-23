@@ -18,7 +18,7 @@ from utils.rnn_utils import get_prediction_name
 from post_processing.threshold_optimizer_factory import get_optimizer
 
 
-EvaluationResult = namedtuple('EvaluationResult', ['accuracy', 'precision', 'recall', 'f1_score', 'level', 'thresholds', 'latency'])
+EvaluationResult = namedtuple('EvaluationResult', ['accuracy', 'precision', 'recall', 'f1_score', 'level', 'thresholds', 'latency', 'all_latency'])
 
 
 def print_eval_result(result: EvaluationResult):
@@ -116,6 +116,7 @@ def evaluate_thresholds(model: AdaptiveModel,
                             accuracy=accuracy,
                             level=avg_levels,
                             latency=avg_latency,
+                            all_latency=latencies,
                             thresholds=list(thresholds))
 
 

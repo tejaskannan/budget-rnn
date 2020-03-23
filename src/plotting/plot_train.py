@@ -4,6 +4,7 @@ from argparse import ArgumentParser
 from typing import List, Optional
 
 from utils.file_utils import read_by_file_suffix
+from plotting_constants import STYLE
 
 NAME_FORMAT = '{0} {1} {2}'
 
@@ -12,7 +13,7 @@ def plot_train_logs(train_log_files: List[str], labels: List[str], metric: str, 
     # Fetch training logs
     train_logs = list(map(read_by_file_suffix, train_log_files))
 
-    with plt.style.context('ggplot'):
+    with plt.style.context(STYLE):
 
         fig, ax = plt.subplots()
 

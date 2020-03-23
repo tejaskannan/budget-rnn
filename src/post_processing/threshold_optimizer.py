@@ -6,7 +6,7 @@ from dataset.dataset import DataSeries
 from dataset.rnn_sample_dataset import RNNSampleDataset
 from models.adaptive_model import AdaptiveModel
 from utils.rnn_utils import get_logits_name
-from utils.constants import SMALL_NUMBER
+from utils.constants import SMALL_NUMBER, OUTPUT
 from utils.np_utils import thresholded_predictions, f1_score, softmax, sigmoid, linear_normalize
 
 
@@ -56,21 +56,20 @@ class ThresholdOptimizer:
             # Concatenate logits into a 2D array (logit_ops is already ordered by level)
             logits_concat = np.concatenate([logits[op] for op in logit_ops], axis=-1)
             probabilities = sigmoid(logits_concat)
-            labels = np.squeeze(np.vstack(batch['output']), axis=-1)
+            labels = np.squeeze(np.vstack(batch[OUTPUT]), axis=-1)
 
             fitness = self.evaluate(state, probabilities, labels)
 
             # Avoid cases in which all labels are zero (both true positive and false negative rates will be zero)
             if any([abs(x) > SMALL_NUMBER for x in labels]):
                 best_index = np.argmax(fitness)
-                if fitness[best_index] > best_score:
-                    best_score = fitness[best_index]
-                    best_thresholds = state[best_index]
+                best_score = fitness[best_index]
+                best_thresholds = state[best_index]
 
                 state = self.update(state, fitness, probabilities, labels)
 
             if self.has_converged(state):
-                print(f'Converged in {batch_num + 1} iterations. Best score so far: {best_score:.3f}.', end='\r')
+                print(f'Converged in {batch_num + 1} iterations. Score so far: {best_score:.3f}.', end='\r')
                 break
 
             try:
@@ -79,7 +78,7 @@ class ThresholdOptimizer:
                 data_generator = self._get_data_generator(dataset, model.metadata)
                 batch = next(data_generator)
 
-            print(f'Completed {batch_num + 1} / {self.iterations} iterations. Best score so far: {best_score:.3f}.', end='\r')
+            print(f'Completed {batch_num + 1} / {self.iterations} iterations. Score so far: {best_score:.3f}.', end='\r')
 
         print()
 

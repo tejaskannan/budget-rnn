@@ -19,6 +19,11 @@ OUTPUT = 'output'
 DATA_FIELDS = [INPUTS, OUTPUT]
 INDEX_FILE = 'index.pkl.gz'
 
+# Model type names
+MODEL = 'model'
+SCHEDULED_MODEL = 'scheduled_model'
+SCHEDULED_GENETIC = 'scheduled_genetic'
+
 # Data folder names
 TRAIN = 'train'
 VALID = 'valid'

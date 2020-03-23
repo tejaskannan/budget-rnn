@@ -2,16 +2,25 @@ import matplotlib.pyplot as plt
 import re
 import os.path
 from argparse import ArgumentParser
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple, DefaultDict
+from random import random
+from collections import defaultdict, namedtuple
 
 from utils.file_utils import read_by_file_suffix, make_dir
+from utils.constants import MODEL, SCHEDULED_MODEL, SCHEDULED_GENETIC
+from utils.testing_utils import ClassificationMetric
+from plotting_constants import STYLE
 
 
-MODEL_TYPE_REGEX = re.compile(r'.*model-test-log-([^-]+)-.*')
-MODEL = 'model'
-SCHEDULED_MODEL = 'scheduled_model'
-LATENCY = 'LATENCY'
-MARKER_SIZE = 5
+MODEL_TYPE_REGEX = re.compile(r'.*model-.*test-log-([^-]+)-.*')
+MARKER_SIZE = 7
+Y_OFFSET = 0.02
+X_OFFSET = 0.0002
+LATENCY_FACTOR = 1000.0
+
+plt.rc({'font.size': 8})
+
+MetricPair = namedtuple('MetricPair', ['latency', 'metric'])
 
 
 def get_model_type(test_log_file: str) -> str:
@@ -19,29 +28,48 @@ def get_model_type(test_log_file: str) -> str:
     return match.group(1)
 
 
-def fetch_logs(test_log_files: List[str]) -> Dict[str, Dict[str, Any]]:
-    result: Dict[str, List[float]] = dict()
+def get_metric_value(model_result: Dict[str, Any], metric: str) -> MetricPair:
+    latency = model_result[ClassificationMetric.LATENCY.name] * LATENCY_FACTOR
+    metric_value = model_result[metric.upper()]
+    return MetricPair(latency=latency, metric=metric_value)
+
+
+def fetch_logs(test_log_files: List[str], metric: str) -> DefaultDict[str, List[MetricPair]]:
+    result: DefaultDict[str, List[Tuple[float, float]]] = defaultdict(list)
+
     for test_log_file in test_log_files:
         test_log = list(read_by_file_suffix(test_log_file))[0]
-        model_type = get_model_type(test_log_file)
+        model_type = get_model_type(test_log_file).capitalize()
 
-        model_results = test_log.get(MODEL, test_log.get(SCHEDULED_MODEL))
-        assert model_results is not None, f'Could not retrieve results for {model_type}'
+        if MODEL in test_log:
+            result[model_type].append(get_metric_value(test_log[MODEL], metric))
 
-        result[model_type] = model_results
+        if SCHEDULED_MODEL in test_log:
+            result[f'{model_type} Scheduled'].append(get_metric_value(test_log[SCHEDULED_MODEL], metric))
+
+        if SCHEDULED_GENETIC in test_log:
+            result[f'{model_type} Optimized'].append(get_metric_value(test_log[SCHEDULED_GENETIC], metric))
+
+        # Compile all other predictions into one series
+        for series in sorted(filter(lambda k: k.startswith('prediction'), test_log.keys())):
+            result[model_type].append(get_metric_value(test_log[series], metric))
 
     return result
 
 
-def plot_tradeoff(model_results: Dict[str, Dict[str, Any]], metric: str, output_folder: Optional[str]):
-    with plt.style.context('ggplot'):
+def plot_tradeoff(model_results: Dict[str, List[MetricPair]], metric: str, output_folder: Optional[str]):
+    with plt.style.context(STYLE):
         fig, ax = plt.subplots()
 
-        for series, result_dict in sorted(model_results.items()):
-            latency = result_dict[LATENCY] * 1000.0
-            metric_value = result_dict[metric.upper()]
+        for series, result_list in sorted(model_results.items()):
+            latencies = [pair.latency for pair in result_list]
+            metric_values = [pair.metric for pair in result_list]
 
-            ax.plot(metric_value, latency, marker='o', markersize=MARKER_SIZE, label=series)
+            ax.plot(metric_values, latencies, marker='o', markersize=MARKER_SIZE, label=series)
+            
+            # Include data labels
+            #for metric_value, latency in zip(metric_values, latencies):
+            #    ax.annotate(f'{metric_value:.4f}', (metric_value, latency), (metric_value - X_OFFSET, latency + Y_OFFSET))
 
         # Formatting for the Metric Name
         metric_tokens = [t.capitalize() for t in metric.split('_')]
@@ -50,7 +78,7 @@ def plot_tradeoff(model_results: Dict[str, Dict[str, Any]], metric: str, output_
         ax.set_title('Tradeoff Curve for {0} vs Latency'.format(metric_label))
         ax.set_xlabel(metric_label)
         ax.set_ylabel('Latency (ms)')
-        ax.legend()
+        ax.legend(fontsize=10)
 
         if output_folder is None:
             plt.show()
@@ -67,9 +95,7 @@ if __name__ == '__main__':
     parser.add_argument('--output-folder', type=str)
     args = parser.parse_args()
 
-    # Fetch model_results
-    model_results = fetch_logs(args.test_logs)
-
     # Create plots
     for metric in args.metrics:
+        model_results = fetch_logs(args.test_logs, metric)
         plot_tradeoff(model_results, metric, args.output_folder)

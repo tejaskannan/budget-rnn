@@ -75,8 +75,6 @@ class GeneticOptimizer(ThresholdOptimizer):
         next_indices = self._sample(fitness, count=population_size - self.steady_state_count)
         next_population = [np.copy(population[i]) for i in next_indices]
 
-        # print('Before crossover: {0}'.format(next_population))
-
         # Perform crossover
         crossover_population: List[np.ndarray] = []
         for i in range(0, len(next_population), 2):
