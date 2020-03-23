@@ -70,6 +70,14 @@ class NpzDataManager:
         assert self._is_loaded, 'Must load the data before shuffling'
         np.random.shuffle(self._ids)
 
+    def close(self):
+        if not self.is_loaded:
+            return
+
+        self._is_loaded = False
+        for arr in self._arrays:
+            arr.close()
+
     def _get_array_index(self, sample_id: int) -> int:
         length_sum = 0
         for index, length in enumerate(self._array_lengths):

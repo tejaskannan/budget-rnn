@@ -106,3 +106,7 @@ class Dataset:
                 continue
 
             yield feed_dict
+
+    def close(self):
+        for data_series in self.dataset.values():
+            data_series.close()

@@ -113,7 +113,7 @@ class Model:
 
     def predict(self, dataset: Dataset,
                 test_batch_size: Optional[int],
-                max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, float]]:
+                max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, Any]]:
         """
         Execute the model to produce a prediction for the given input sample.
 
@@ -124,6 +124,10 @@ class Model:
         Returns:
             The predicted output produced by the model.
         """
+        # Turn of parallelism to get more realistic latency readings
+        tf.config.threading.set_inter_op_parallelism_threads(1)
+        tf.config.threading.set_intra_op_parallelism_threads(1)
+
         test_batch_size = test_batch_size if test_batch_size is not None else self.hypers.batch_size
         test_batch_generator = dataset.minibatch_generator(series=DataSeries.TEST,
                                                            batch_size=test_batch_size,

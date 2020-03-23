@@ -201,7 +201,7 @@ class AdaptiveModel(Model):
 
     def predict_classification(self, test_batch_generator: Iterable[Any],
                                batch_size: int,
-                               max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, float]]:
+                               max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, Any]]:
         predictions_dict = defaultdict(list)
         latencies_dict = defaultdict(list)
         levels_dict = defaultdict(list)
@@ -261,6 +261,8 @@ class AdaptiveModel(Model):
             for metric_name in ClassificationMetric:
                 metric_value = get_classification_metric(metric_name, predictions, labels, latency, levels)
                 result[model_name][metric_name.name] = metric_value
+
+            result[model_name]['ALL_LATENCY'] = latencies_dict[model_name][1:]
 
         return result
 

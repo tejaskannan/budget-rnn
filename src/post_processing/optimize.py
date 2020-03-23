@@ -4,7 +4,7 @@ from argparse import ArgumentParser
 from collections import namedtuple
 from typing import Dict, Union, List, Optional
 
-from models.rnn_model import RNNModel
+from models.adaptive_model import AdaptiveModel
 from dataset.dataset import DataSeries
 from dataset.rnn_sample_dataset import RNNSampleDataset
 from utils.hyperparameters import HyperParameters
@@ -52,13 +52,13 @@ def get_dataset(model_name: str, save_folder: str, dataset_folder: Optional[str]
     return RNNSampleDataset(train_folder, valid_folder, test_folder)
 
 
-def get_model(model_name: str, hypers: HyperParameters, save_folder: str) -> RNNModel:
-    model = RNNModel(hypers, save_folder)
+def get_model(model_name: str, hypers: HyperParameters, save_folder: str) -> AdaptiveModel:
+    model = AdaptiveModel(hypers, save_folder)
     model.restore(name=model_name, is_train=False)
     return model
 
 
-def evaluate_thresholds(model: RNNModel,
+def evaluate_thresholds(model: AdaptiveModel,
                         thresholds: List[float],
                         dataset: RNNSampleDataset,
                         series: DataSeries,

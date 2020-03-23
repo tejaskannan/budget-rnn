@@ -4,7 +4,7 @@ from typing import List, Dict, Iterable, Any
 
 from dataset.dataset import DataSeries
 from dataset.rnn_sample_dataset import RNNSampleDataset
-from models.rnn_model import RNNModel
+from models.adaptive_model import AdaptiveModel
 from utils.rnn_utils import get_logits_name
 from utils.constants import SMALL_NUMBER
 from utils.np_utils import thresholded_predictions, f1_score, softmax, sigmoid, linear_normalize
@@ -31,7 +31,7 @@ class ThresholdOptimizer:
     def iterations(self) -> int:
         return self._iterations
 
-    def optimize(self, model: RNNModel, dataset: RNNSampleDataset) -> OptimizerOutput:
+    def optimize(self, model: AdaptiveModel, dataset: RNNSampleDataset) -> OptimizerOutput:
         """
         Runs the genetic algorithm optimization.
         """

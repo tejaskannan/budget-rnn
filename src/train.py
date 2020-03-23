@@ -25,6 +25,10 @@ def train(data_folder: str, save_folder: str, hypers: HyperParameters, max_epoch
 
     # Train the model
     train_label = model.train(dataset=dataset)
+
+    # Close the dataset files
+    dataset.close()
+
     return train_label
 
 
@@ -95,5 +99,6 @@ if __name__ == '__main__':
                      dataset_folder=data_folder,
                      save_folder=save_folder,
                      hypers=hypers,
-                     max_num_batches=None)
+                     max_num_batches=None,
+                     batch_size=None)
                 print('====================')

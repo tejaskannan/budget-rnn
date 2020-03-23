@@ -10,7 +10,7 @@ from utils.file_utils import extract_model_name, read_by_file_suffix, save_by_fi
 from utils.constants import HYPERS_PATH, TEST_LOG_PATH, TRAIN, VALID, TEST, METADATA_PATH
 
 
-def model_test(path: str, max_num_batches: Optional[int]):
+def model_test(path: str, batch_size: Optional[int], max_num_batches: Optional[int], dataset_folder: Optional[str]):
     save_folder, model_file = os.path.split(path)
 
     model_name = extract_model_name(model_file)
@@ -22,19 +22,23 @@ def model_test(path: str, max_num_batches: Optional[int]):
     hypers = HyperParameters.create_from_file(hypers_path)
 
     # Extract data folders
-    metadata_file = os.path.join(save_folder, METADATA_PATH.format(model_name))
-    metadata = read_by_file_suffix(metadata_file)
-    train_folder = metadata['data_folders'][TRAIN.upper()]
-    dataset_folder, _ = os.path.split(train_folder)
+    if dataset_folder is None:
+        metadata_file = os.path.join(save_folder, METADATA_PATH.format(model_name))
+        metadata = read_by_file_suffix(metadata_file)
+        train_folder = metadata['data_folders'][TRAIN.upper()]
+        dataset_folder, _ = os.path.split(train_folder)
+
+    assert os.path.exists(dataset_folder), f'The folder {dataset_folder} does not exist!'
 
     test(model_name=model_name,
          dataset_folder=dataset_folder,
          save_folder=save_folder,
          hypers=hypers,
+         batch_size=batch_size,
          max_num_batches=max_num_batches)
 
 
-def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperParameters, max_num_batches: Optional[int]):
+def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperParameters, batch_size: Optional[int], max_num_batches: Optional[int]):
     # Create the dataset
     train_folder = os.path.join(dataset_folder, TRAIN)
     valid_folder = os.path.join(dataset_folder, VALID)
@@ -49,8 +53,11 @@ def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperPa
     # Test the model
     print('Starting model testing...')
     test_results = model.predict(dataset=dataset,
-                                 test_batch_size=64,
+                                 test_batch_size=batch_size,
                                  max_num_batches=max_num_batches)
+
+    # Close the dataset
+    dataset.close()
 
     test_result_file = os.path.join(save_folder, TEST_LOG_PATH.format(model_name))
     save_by_file_suffix([test_results], test_result_file)
@@ -60,7 +67,9 @@ def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperPa
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--model-path', type=str, required=True)
+    parser.add_argument('--batch-size', type=int)
     parser.add_argument('--max-num-batches', type=int)
+    parser.add_argument('--dataset-folder', type=str)
     args = parser.parse_args()
 
-    model_test(args.model_path, args.max_num_batches)
+    model_test(args.model_path, batch_size=args.batch_size, max_num_batches=args.max_num_batches, dataset_folder=args.dataset_folder)

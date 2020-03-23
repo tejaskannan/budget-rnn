@@ -255,7 +255,7 @@ class StandardModel(Model):
 
     def predict_classification(self, test_batch_generator: Iterable[Any],
                                batch_size: int,
-                               max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, float]]:
+                               max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, Any]]:
         predictions_list: List[np.ndarray] = []
         labels_list: List[np.ndarray] = []
         latencies: List[float] = []
@@ -279,5 +279,7 @@ class StandardModel(Model):
         for metric_name in ClassificationMetric:
             metric_value = get_classification_metric(metric_name, predictions, labels, avg_latency, 1)
             result['model'][metric_name.name] = metric_value
+
+        result['model']['ALL_LATENCY'] = latencies[1:]
 
         return result
