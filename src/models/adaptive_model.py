@@ -57,6 +57,10 @@ class AdaptiveModel(Model):
         return [get_f1_score_name(i) for i in range(self.num_outputs)]
 
     @property
+    def logit_op_names(self) -> List[str]:
+        return [get_logits_name(i) for i in range(self.num_outputs)]
+
+    @property
     def samples_per_seq(self) -> int:
         seq_length = self.metadata['seq_length']
         return int(seq_length * self.sample_frac)
@@ -199,6 +203,47 @@ class AdaptiveModel(Model):
                                                             dtype=tf.float32,
                                                             name='loss-weights')
 
+    def compute_flops(self, level: int) -> int:
+        """
+        Computes the total floating point operations for the given prediction level
+        """
+        if level < 0:
+            return 0
+
+        total_flops = 0
+
+        rm = tf.RunMetadata()
+        with self.sess.graph.as_default():
+            cell = get_cell_level_name(level, self.hypers.model_params['share_cell_weights'])
+            output = get_output_layer_name(level)
+            rnn = get_rnn_level_name(level)
+            embedding = f'embedding-{level}'
+            combine_states = f'{rnn}-combine-states'
+
+            rnn_operations = list(map(lambda t: '.*{0}.*'.format(t), [cell, rnn, combine_states]))
+            single_operations = list(map(lambda t: '.*{0}.*'.format(t), [output, embedding]))
+
+            print(combine_states)
+
+            # Compute FLOPS from RNN operations
+            rnn_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
+                                .with_node_names(show_name_regexes=rnn_operations) \
+                                .order_by('flops').build()
+            flops = tf.profiler.profile(self.sess.graph, options=rnn_options)
+
+            flops_factor = level + 1 if self.model_type == RNNModelType.VANILLA else 1
+            total_flops += flops.total_float_ops * flops_factor * self.samples_per_seq
+
+            # Compute FLOPS from all other operations
+            single_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
+                                .with_node_names(show_name_regexes=single_operations) \
+                                .order_by('flops').build()
+            flops = tf.profiler.profile(self.sess.graph, options=single_options)
+            total_flops += flops.total_float_ops
+
+        return total_flops + self.compute_flops(level - 1)
+
+
     def predict_classification(self, test_batch_generator: Iterable[Any],
                                batch_size: int,
                                max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, Any]]:
@@ -206,6 +251,11 @@ class AdaptiveModel(Model):
         latencies_dict = defaultdict(list)
         levels_dict = defaultdict(list)
         labels: List[np.ndarray] = []
+
+        print('Freezing variables...')
+        self.freeze(self.prediction_ops + self.logit_op_names)
+        print(self.compute_flops(1))
+        print('Completed freezing.')
 
         for batch_num, batch in enumerate(test_batch_generator):
             feed_dict = self.batch_to_feed_dict(batch, is_train=False)

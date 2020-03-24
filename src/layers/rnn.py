@@ -123,12 +123,13 @@ def dynamic_rnn(inputs: tf.Tensor,
     if isinstance(initial_state, list):
         initial_state = tf.stack(initial_state)
 
+    while_loop_name = f'{name}-while-loop' if name is not None else 'rnn-while-loop'
     _, _, final_outputs, final_states, final_gates = tf.while_loop(cond=cond,
                                                                    body=step,
                                                                    loop_vars=[i, initial_state, outputs_array, states_array, gates_array],
                                                                    parallel_iterations=1,
                                                                    maximum_iterations=sequence_length,
-                                                                   name='rnn-while-loop')
+                                                                   name=while_loop_name)
 
     return RnnOutput(outputs=final_outputs, states=final_states, gates=final_gates)
 

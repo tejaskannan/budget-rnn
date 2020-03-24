@@ -259,6 +259,28 @@ class Model:
             op_results = self._sess.run(ops_to_run, feed_dict=feed_dict)
             return op_results
 
+    def freeze(self, outputs: List[str]):
+        """
+        Freezes the Tensorflow computation graph by converting all variables to constants.
+
+        Args:
+            outputs: List of high-level operations representing the model outputs
+        """
+        # We need to convert the high-level output names to the corresponding Tensorflow nodes
+        # This operation is done by (1) getting output variables and (2) finding the nodes
+        # for which these variables are the outputs
+        output_names = [self.ops[op].name for op in outputs]
+
+        output_nodes: List[str] = []
+        for op in self.sess.graph.get_operations():
+            for output_name in map(lambda t: t.name, op.outputs):
+                if output_name in output_names:
+                    output_nodes.append(op.name) 
+
+        # Freeze the corresponding graph
+        with self.sess.graph.as_default():
+            tf.graph_util.convert_variables_to_constants(self.sess, self.sess.graph.as_graph_def(), output_nodes)
+
     def train(self, dataset: Dataset, drop_incomplete_batches: bool = False) -> str:
         """
         Trains the model on the given dataset.
