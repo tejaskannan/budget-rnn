@@ -129,6 +129,12 @@ class StandardModel(Model):
 
     def make_model(self, is_train: bool):
         with tf.variable_scope('model', reuse=tf.AUTO_REUSE):
+
+            # Turn off parallelism during testing
+            if not is_train:
+                tf.config.threading.set_inter_op_parallelism_threads(1)
+                tf.config.threading.set_intra_op_parallelism_threads(1)
+
             self._make_model(is_train)
 
     def _make_model(self, is_train: bool):

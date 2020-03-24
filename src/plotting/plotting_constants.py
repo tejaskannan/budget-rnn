@@ -1,1 +1,4 @@
 STYLE = 'fast'
+LINEWIDTH = 2
+MARKER_SIZE = 5
+

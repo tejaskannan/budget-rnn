@@ -98,6 +98,7 @@ def dynamic_rnn(inputs: tf.Tensor,
         if not isinstance(combined_state, list):
             combined_state = [combined_state[i, :, :] for i in range(rnn_layers)]
 
+        # Apply RNN Cell
         output, state, gates_tuple = cell(step_inputs, combined_state, skip_input=skip_inputs)
 
         # Save outputs
@@ -113,6 +114,7 @@ def dynamic_rnn(inputs: tf.Tensor,
     def cond(index, _1, _2, _3, _4):
         return index < sequence_length
 
+    # Index to track iteration number
     i = tf.constant(0, dtype=tf.int32)
 
     if initial_state is None:

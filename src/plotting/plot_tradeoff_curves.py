@@ -9,13 +9,10 @@ from collections import defaultdict, namedtuple
 from utils.file_utils import read_by_file_suffix, make_dir
 from utils.constants import MODEL, SCHEDULED_MODEL, SCHEDULED_GENETIC
 from utils.testing_utils import ClassificationMetric
-from plotting_constants import STYLE
+from plotting_constants import STYLE, MARKER_SIZE
 
 
 MODEL_TYPE_REGEX = re.compile(r'.*model-.*test-log-([^-]+)-.*')
-MARKER_SIZE = 7
-Y_OFFSET = 0.02
-X_OFFSET = 0.0002
 LATENCY_FACTOR = 1000.0
 
 plt.rc({'font.size': 8})
@@ -78,7 +75,7 @@ def plot_tradeoff(model_results: Dict[str, List[MetricPair]], metric: str, outpu
         ax.set_title('Tradeoff Curve for {0} vs Latency'.format(metric_label))
         ax.set_xlabel(metric_label)
         ax.set_ylabel('Latency (ms)')
-        ax.legend(fontsize=10)
+        ax.legend()
 
         if output_folder is None:
             plt.show()

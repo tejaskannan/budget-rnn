@@ -4,7 +4,7 @@ from argparse import ArgumentParser
 from typing import List, Optional
 
 from utils.file_utils import read_by_file_suffix
-from plotting_constants import STYLE
+from plotting_constants import STYLE, LINEWIDTH
 
 NAME_FORMAT = '{0} {1} {2}'
 
@@ -24,9 +24,11 @@ def plot_train_logs(train_log_files: List[str], labels: List[str], metric: str, 
 
                 epochs = list(range(len(values)))
                 series_label = NAME_FORMAT.format(label.capitalize(), series.capitalize(), metric.capitalize())
-                ax.plot(epochs, values, linewidth=3, label=series_label)
+                ax.plot(epochs, values, linewidth=LINEWIDTH, label=series_label)
 
-        ax.set_xticks(epochs)
+                num_epochs = len(values)
+
+        ax.set_xticks(list(range(0, num_epochs, 5)))
         ax.set_xlabel('Epoch')
         ax.set_ylabel(series.capitalize())
         ax.set_title('Average {0} per Epoch'.format(metric.capitalize()))

@@ -144,7 +144,7 @@ class AdaptiveModel(Model):
         # This operation is included to prevent bugs as we intuitively want to increase
         # accuracy with larger samples.
         loss_weights = list(sorted(loss_weights))
-        feed_dict[self._placeholders['loss_weights']] = loss_weights / (np.sum(loss_weights) + 1e-7)  # Normalize the loss weights
+        feed_dict[self._placeholders['loss_weights']] = loss_weights / (np.sum(loss_weights) + SMALL_NUMBER)  # Normalize the loss weights
 
         seq_indexes: List[int] = []
         for i in range(num_sequences):
@@ -220,6 +220,7 @@ class AdaptiveModel(Model):
             for prediction_op, (prediction, logits) in zip(self.prediction_ops, prediction_generator):
                 predictions_dict[prediction_op].append(prediction)  # [B]
                 logits_list.append(logits)
+ 
                 elapsed = time.time() - start
 
                 latencies.append(elapsed)
@@ -227,6 +228,8 @@ class AdaptiveModel(Model):
 
                 levels_dict[prediction_op].append(level + 1)
                 level += 1
+
+                start = time.time()
 
             labels.append(np.vstack(batch[OUTPUT]))
 
@@ -268,6 +271,11 @@ class AdaptiveModel(Model):
 
     def make_model(self, is_train: bool):
         with tf.variable_scope('model', reuse=tf.AUTO_REUSE):
+            
+            if not is_train:
+                tf.config.threading.set_inter_op_parallelism_threads(1)
+                tf.config.threading.set_intra_op_parallelism_threads(1)
+
             self.make_rnn_model(is_train)
 
     def make_rnn_model(self, is_train: bool):
@@ -397,24 +405,19 @@ class AdaptiveModel(Model):
     def anytime_generator(self, feed_dict: Dict[tf.Tensor, List[Any]],
                           max_num_levels: int) -> Optional[Iterable[np.ndarray]]:
         """
-        Anytime Inference in a generator-like fashion using Tensorflow's partial run API
+        Anytime Inference in a generator-like fashion
         """
         with self.sess.graph.as_default():
-            # Initialize partial run settings
-            prediction_ops = [self._ops[op_name] for op_name in self.prediction_ops]
-            logit_ops = [self._ops[get_logits_name(i)] for i in range(self.num_outputs)]
-            ops_to_run = prediction_ops + logit_ops
+            num_levels = max(self.num_outputs, max_num_levels) if max_num_levels is not None else self.num_outputs
 
-            placeholders = list(self._placeholders.values())
-            handle = self.sess.partial_run_setup(ops_to_run, placeholders)
+            for level in range(num_levels):
+                prediction_ops = [get_prediction_name(i) for i in range(level + 1)]
+                logit_ops = [get_logits_name(i) for i in range(level + 1)]
 
-            result = None
-            for level in range(max_num_levels):
-                prediction_op = prediction_ops[level]
-                logit_op = logit_ops[level]
+                ops_to_run = prediction_ops + logit_ops
+                output_dict = self.execute(feed_dict, ops_to_run)
 
-                # Filter feed dict to avoid feeding the same inputs multiple times
-                op_feed_dict = {key: value for key, value in feed_dict.items() if key.name.endswith(str(level))}
-                prediction, logits = self.sess.partial_run(handle, [prediction_op, logit_op], feed_dict=op_feed_dict)
+                prediction_name = get_prediction_name(level)
+                logits_name = get_logits_name(level)
 
-                yield prediction, logits
+                yield output_dict[prediction_name], output_dict[logits_name]

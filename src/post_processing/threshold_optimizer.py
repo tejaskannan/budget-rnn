@@ -11,7 +11,7 @@ from utils.np_utils import thresholded_predictions, f1_score, softmax, sigmoid, 
 
 
 OptimizerOutput = namedtuple('OptimizerOutput', ['thresholds', 'score'])
-LEVEL_WEIGHT = 0.01
+LEVEL_WEIGHT = 0.05
 
 
 class ThresholdOptimizer:
