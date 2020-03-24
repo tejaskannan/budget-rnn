@@ -12,7 +12,7 @@ from layers.embedding_layer import embedding_layer
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs, get_activation, tf_rnn_cell, get_rnn_state
-from utils.constants import ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS, PREDICTION, F1_SCORE, LOGITS
+from utils.constants import ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS, PREDICTION, F1_SCORE, LOGITS, NODE_REGEX_FORMAT
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric
 from .base_model import Model
 
@@ -49,6 +49,10 @@ class StandardModel(Model):
     @property
     def loss_op_names(self) -> List[str]:
         return [LOSS]
+
+    @property
+    def output_ops(self) -> List[str]:
+        return self.prediction_ops
 
     def load_metadata(self, dataset: Dataset):
         input_samples: List[List[float]] = []
@@ -110,31 +114,31 @@ class StandardModel(Model):
 
         return feed_dict
 
-    def make_placeholders(self):
+    def make_placeholders(self, is_frozen: bool = False):
         input_features_shape = self.metadata['input_shape']
         num_output_features = self.metadata['num_output_features']
         seq_length = self.metadata['seq_length']
 
         input_shape = (None, seq_length) + input_features_shape
-        self._placeholders[INPUTS] = tf.placeholder(shape=input_shape,
-                                                    dtype=tf.float32,
-                                                    name=INPUTS)
 
-        self._placeholders[OUTPUT] = tf.placeholder(shape=[None, num_output_features],
-                                                    dtype=tf.float32,
-                                                    name=OUTPUT)
-        self._placeholders['dropout_keep_rate'] = tf.placeholder(shape=[],
-                                                                 dtype=tf.float32,
-                                                                 name='dropout-keep-rate')
+        if not is_frozen:
+            self._placeholders[INPUTS] = tf.placeholder(shape=input_shape,
+                                                        dtype=tf.float32,
+                                                        name=INPUTS)
+
+            self._placeholders[OUTPUT] = tf.placeholder(shape=(None, num_output_features),
+                                                        dtype=tf.float32,
+                                                        name=OUTPUT)
+            self._placeholders['dropout_keep_rate'] = tf.placeholder(shape=(),
+                                                                     dtype=tf.float32,
+                                                                     name='dropout-keep-rate')
+        else:
+            self._placeholders[INPUTS] = tf.ones(shape=(1,) + input_shape[1:], dtype=tf.float32, name=INPUTS)
+            self._placeholders[OUTPUT] = tf.ones(shape=(1, num_output_features), dtype=tf.float32, name=OUTPUT)
+            self._placeholders['dropout_keep_rate'] = tf.ones(shape=(), dtype=tf.float32, name='dropout-keep-rate')
 
     def make_model(self, is_train: bool):
         with tf.variable_scope('model', reuse=tf.AUTO_REUSE):
-
-            # Turn off parallelism during testing
-            if not is_train:
-                tf.config.threading.set_inter_op_parallelism_threads(1)
-                tf.config.threading.set_intra_op_parallelism_threads(1)
-
             self._make_model(is_train)
 
     def _make_model(self, is_train: bool):
@@ -259,9 +263,44 @@ class StandardModel(Model):
     def make_loss(self):
         pass  # Loss made during model creation
 
+    def compute_flops(self, level: int) -> int:
+        """
+        Returns the total number of floating point operations to produce the final output.
+        """
+        total_flops = 0
+
+        with self.sess.graph.as_default():
+
+            # Get FLOPS for operations that are applied to each sequence element
+            seq_operations = ['transform-layer', 'rnn', 'birnn']
+            seq_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), seq_operations))
+
+            seq_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
+                                        .with_node_names(show_name_regexes=seq_operations) \
+                                        .order_by('flops').build()
+            flops = tf.profiler.profile(self.sess.graph, options=seq_options)
+
+            if self.model_type == StandardModelType.NBOW:
+                total_flops += flops.total_float_ops
+            else:
+                total_flops += flops.total_float_ops * self.metadata['seq_length']
+
+            # Get FLOPS for operations that are applied to the entire sequence. We include the embedding layer
+            # here because it has a well-defined sequence length so Tensorflow will automatically account for 
+            # the multiplier
+            single_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), ['output-layer', 'transform-layer']))
+            single_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
+                                            .with_node_names(show_name_regexes=single_operations) \
+                                            .order_by('flops').build()
+            flops = tf.profiler.profile(self.sess.graph, options=single_options)
+            total_flops += flops.total_float_ops
+
+        return total_flops
+
     def predict_classification(self, test_batch_generator: Iterable[Any],
                                batch_size: int,
-                               max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, Any]]:
+                               max_num_batches: Optional[int],
+                               flops_dict: Dict[str, int]) -> DefaultDict[str, Dict[str, Any]]:
         predictions_list: List[np.ndarray] = []
         labels_list: List[np.ndarray] = []
         latencies: List[float] = []
@@ -280,10 +319,11 @@ class StandardModel(Model):
         predictions = np.vstack(predictions_list)
         labels = np.vstack(labels_list)
         avg_latency = np.average(latencies[1:])  # Skip first due to outliers in caching
+        flops = flops_dict[self.output_ops[0]]
 
         result: DefaultDict[str, Dict[str, float]] = defaultdict(dict)
         for metric_name in ClassificationMetric:
-            metric_value = get_classification_metric(metric_name, predictions, labels, avg_latency, 1)
+            metric_value = get_classification_metric(metric_name, predictions, labels, avg_latency, 1, flops)
             result['model'][metric_name.name] = metric_value
 
         result['model']['ALL_LATENCY'] = latencies[1:]

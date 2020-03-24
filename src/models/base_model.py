@@ -66,6 +66,10 @@ class Model:
         return [F1_SCORE]
 
     @property
+    def output_ops(self) -> List[str]:
+        raise NotImplementedError()
+
+    @property
     def global_step_op_name(self) -> str:
         return GLOBAL_STEP
 
@@ -111,9 +115,16 @@ class Model:
         """
         pass
 
+    def compute_flops(self, level: int) -> int:
+        """
+        Computes the number of FLOPS required for the given output level.
+        """
+        pass
+
     def predict(self, dataset: Dataset,
                 test_batch_size: Optional[int],
-                max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, Any]]:
+                max_num_batches: Optional[int],
+                flops_dict: Optional[Dict[str, int]]) -> DefaultDict[str, Dict[str, Any]]:
         """
         Execute the model to produce a prediction for the given input sample.
 
@@ -121,13 +132,10 @@ class Model:
             dataset: Dataset object used to create input tensors.
             test_batch_size: Batch size to use during testing
             max_num_batches: Maximum number of batches to perform testing on
+            flops_dict: Dictionary of FLOPS for each output operation
         Returns:
             The predicted output produced by the model.
         """
-        # Turn of parallelism to get more realistic latency readings
-        tf.config.threading.set_inter_op_parallelism_threads(1)
-        tf.config.threading.set_intra_op_parallelism_threads(1)
-
         test_batch_size = test_batch_size if test_batch_size is not None else self.hypers.batch_size
         test_batch_generator = dataset.minibatch_generator(series=DataSeries.TEST,
                                                            batch_size=test_batch_size,
@@ -136,18 +144,20 @@ class Model:
                                                            drop_incomplete_batches=True)
 
         if self.output_type == OutputType.CLASSIFICATION:
-            return self.predict_classification(test_batch_generator, test_batch_size, max_num_batches)
+            return self.predict_classification(test_batch_generator, test_batch_size, max_num_batches, flops_dict)
         else:  # Regression
-            return self.predict_regression(test_batch_generator, test_batch_size, max_num_batches)
+            return self.predict_regression(test_batch_generator, test_batch_size, max_num_batches, flops_dict)
 
     def predict_classification(self, test_batch_generator: Iterable[Any],
                                batch_size: int,
-                               max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, float]]:
+                               max_num_batches: Optional[int],
+                               flops_dict: Optional[Dict[str, int]]) -> DefaultDict[str, Dict[str, float]]:
         raise NotImplementedError()
 
     def predict_regression(self, test_batch_generator: Iterable[Any],
                            batch_size: int,
-                           max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, float]]:
+                           max_num_batches: Optional[int],
+                           flops_dict: Optional[Dict[str, int]])-> DefaultDict[str, Dict[str, float]]:
         raise NotImplementedError()
 
     def batch_to_feed_dict(self, batch: Dict[str, np.ndarray], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
@@ -179,18 +189,25 @@ class Model:
             num_parameters += np.prod(var.shape)
         return int(num_parameters)
 
-    def make(self, is_train: bool):
+    def make(self, is_train: bool, is_frozen: bool):
         """
         Creates model and optimizer op.
 
         Args:
             is_train: Whether the model is built for training or just for inference.
+            is_frozen: Whether the mode ls built with frozen inputs.
         """
         if self.is_made:
             return  # Prevent building twice
 
         with self._sess.graph.as_default():
-            self.make_placeholders()
+            # Turn off parallelism and logging during testing
+            if not is_train:
+                tf.config.threading.set_inter_op_parallelism_threads(1)
+                tf.config.threading.set_intra_op_parallelism_threads(1)
+                tf.logging.set_verbosity(tf.logging.WARN)
+            
+            self.make_placeholders(is_frozen=is_frozen)
             self.make_model(is_train=is_train)
 
             self._global_step = tf.Variable(0, trainable=False)
@@ -298,7 +315,7 @@ class Model:
         name = NAME_FMT.format(self.name, dataset.dataset_name, current_date)
 
         # Make Model and Initialize variables
-        self.make(is_train=True)
+        self.make(is_train=True, is_frozen=False)
         self.init()
 
         print(f'Created model with {self.count_parameters()} trainable parameters.')
@@ -519,7 +536,7 @@ class Model:
             # Save results
             save_by_file_suffix(vars_dict, model_path)
 
-    def restore(self, name: str, is_train: bool):
+    def restore(self, name: str, is_train: bool, is_frozen: bool):
         """
         Restore model metadata, hyper-parameters, and trainable parameters.
         """
@@ -533,7 +550,7 @@ class Model:
         self.metadata = train_metadata['metadata']
 
         # Build the model
-        self.make(is_train=is_train)
+        self.make(is_train=is_train, is_frozen=is_frozen)
 
         # Restore the trainable parameters
         with self.sess.graph.as_default():
@@ -549,3 +566,6 @@ class Model:
 
             # Execute assignment
             self.sess.run(assign_ops)
+
+        if is_frozen:
+            self.freeze(self.output_ops)

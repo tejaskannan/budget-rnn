@@ -17,6 +17,7 @@ from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
 from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS
+from utils.constants import NODE_REGEX_FORMAT
 from utils.rnn_utils import *
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric
 from utils.np_utils import thresholded_predictions, sigmoid
@@ -59,6 +60,10 @@ class AdaptiveModel(Model):
     @property
     def logit_op_names(self) -> List[str]:
         return [get_logits_name(i) for i in range(self.num_outputs)]
+
+    @property
+    def output_ops(self) -> List[str]:
+        return self.prediction_ops
 
     @property
     def samples_per_seq(self) -> int:
@@ -170,7 +175,7 @@ class AdaptiveModel(Model):
 
         return feed_dict
 
-    def make_placeholders(self):
+    def make_placeholders(self, is_frozen: bool = False):
         """
         Create model placeholders.
         """
@@ -186,22 +191,33 @@ class AdaptiveModel(Model):
             input_shape = [None, samples_per_seq] + list(input_features_shape)
 
             # [B, S, D]
-            self._placeholders[get_input_name(i)] = tf.placeholder(shape=input_shape,
-                                                                   dtype=tf.float32,
-                                                                   name=get_input_name(i))
+            if not is_frozen:
+                self._placeholders[get_input_name(i)] = tf.placeholder(shape=input_shape,
+                                                                       dtype=tf.float32,
+                                                                       name=get_input_name(i))
+            else:
+                self._placeholders[get_input_name(i)] = tf.ones(shape=[1] + input_shape[1:],
+                                                                dtype=tf.float32,
+                                                                name=get_input_name(i))
+
             if self.model_type == RNNModelType.VANILLA:
                 samples_per_seq += self.samples_per_seq
 
-        # [B, K]
-        self._placeholders[OUTPUT] = tf.placeholder(shape=[None, num_output_features],
-                                                    dtype=tf.float32,
-                                                    name=OUTPUT)
-        self._placeholders['dropout_keep_rate'] = tf.placeholder(shape=[],
-                                                                 dtype=tf.float32,
-                                                                 name='dropout-keep-rate')
-        self._placeholders['loss_weights'] = tf.placeholder(shape=[self.num_outputs],
-                                                            dtype=tf.float32,
-                                                            name='loss-weights')
+        if not is_frozen:
+            # [B, K]
+            self._placeholders[OUTPUT] = tf.placeholder(shape=[None, num_output_features],
+                                                        dtype=tf.float32,
+                                                        name=OUTPUT)
+            self._placeholders['dropout_keep_rate'] = tf.placeholder(shape=[],
+                                                                    dtype=tf.float32,
+                                                                    name='dropout-keep-rate')
+            self._placeholders['loss_weights'] = tf.placeholder(shape=[self.num_outputs],
+                                                                dtype=tf.float32,
+                                                                name='loss-weights')
+        else:
+            self._placeholders[OUTPUT] = tf.ones(shape=[1, num_output_features], dtype=tf.float32, name=OUTPUT)
+            self._placeholders['dropout_keep_rate'] = tf.ones(shape=[], dtype=tf.float32, name='dropout-keep-rate')
+            self._placeholders['loss_weights'] = tf.ones(shape=[self.num_outputs], dtype=tf.float32, name='loss-weights')
 
     def compute_flops(self, level: int) -> int:
         """
@@ -220,10 +236,8 @@ class AdaptiveModel(Model):
             embedding = f'embedding-{level}'
             combine_states = f'{rnn}-combine-states'
 
-            rnn_operations = list(map(lambda t: '.*{0}.*'.format(t), [cell, rnn, combine_states]))
-            single_operations = list(map(lambda t: '.*{0}.*'.format(t), [output, embedding]))
-
-            print(combine_states)
+            rnn_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), [cell, rnn, combine_states]))
+            single_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), [output, embedding]))
 
             # Compute FLOPS from RNN operations
             rnn_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
@@ -234,28 +248,25 @@ class AdaptiveModel(Model):
             flops_factor = level + 1 if self.model_type == RNNModelType.VANILLA else 1
             total_flops += flops.total_float_ops * flops_factor * self.samples_per_seq
 
-            # Compute FLOPS from all other operations
+            # Compute FLOPS from all other operations. Note that the embedding layer has a well-defined input length,
+            # so Tensorflow already accounts for the repeated application of this transformation.
             single_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
                                 .with_node_names(show_name_regexes=single_operations) \
                                 .order_by('flops').build()
             flops = tf.profiler.profile(self.sess.graph, options=single_options)
             total_flops += flops.total_float_ops
 
-        return total_flops + self.compute_flops(level - 1)
+        return total_flops
 
 
     def predict_classification(self, test_batch_generator: Iterable[Any],
                                batch_size: int,
-                               max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, Any]]:
+                               max_num_batches: Optional[int],
+                               flops_dict: Optional[Dict[str, int]]) -> DefaultDict[str, Dict[str, Any]]:
         predictions_dict = defaultdict(list)
         latencies_dict = defaultdict(list)
         levels_dict = defaultdict(list)
         labels: List[np.ndarray] = []
-
-        print('Freezing variables...')
-        self.freeze(self.prediction_ops + self.logit_op_names)
-        print(self.compute_flops(1))
-        print('Completed freezing.')
 
         for batch_num, batch in enumerate(test_batch_generator):
             feed_dict = self.batch_to_feed_dict(batch, is_train=False)
@@ -292,10 +303,12 @@ class AdaptiveModel(Model):
             computed_levels = level_output.indices
 
             scheduled_latencies = [latencies[x] for x in computed_levels]
+            scheduled_flops = [flops_dict[get_prediction_name(x)] for x in computed_levels]
 
             predictions_dict['scheduled_model'].append(np.expand_dims(level_predictions, axis=-1))
             latencies_dict['scheduled_model'].append(np.average(scheduled_latencies))
             levels_dict['scheduled_model'].append(np.average(computed_levels + 1.0))
+            flops_dict['scheduled_model'] = np.average(scheduled_flops)
 
             # Compute metrics for the scheduled model
             if max_num_batches is not None and batch_num >= max_num_batches:
@@ -310,9 +323,10 @@ class AdaptiveModel(Model):
             predictions = np.vstack(predictions_dict[model_name])
             latency = float(np.average(latencies_dict[model_name][1:]))
             levels = float(np.average(levels_dict[model_name]))
+            flops = flops_dict[model_name]
 
             for metric_name in ClassificationMetric:
-                metric_value = get_classification_metric(metric_name, predictions, labels, latency, levels)
+                metric_value = get_classification_metric(metric_name, predictions, labels, latency, levels, flops)
                 result[model_name][metric_name.name] = metric_value
 
             result[model_name]['ALL_LATENCY'] = latencies_dict[model_name][1:]
@@ -321,11 +335,6 @@ class AdaptiveModel(Model):
 
     def make_model(self, is_train: bool):
         with tf.variable_scope('model', reuse=tf.AUTO_REUSE):
-            
-            if not is_train:
-                tf.config.threading.set_inter_op_parallelism_threads(1)
-                tf.config.threading.set_intra_op_parallelism_threads(1)
-
             self.make_rnn_model(is_train)
 
     def make_rnn_model(self, is_train: bool):

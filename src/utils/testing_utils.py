@@ -14,12 +14,14 @@ class ClassificationMetric(Enum):
     LATENCY = auto()
     F1_SCORE = auto()
     LEVEL = auto()
+    FLOPS = auto()
 
 
 class RegressionMetric(Enum):
     MSE = auto()
     LATENCY = auto()
     LEVEL = auto()
+    FLOPS = auto()
 
 
 SummaryMetrics = namedtuple('SummaryMetrics', ['mean', 'geom_mean', 'std', 'geom_std', 'median', 'first_quartile', 'third_quartile', 'minimum', 'maximum'])
@@ -31,7 +33,7 @@ HIGH_SATURATION = 0.9
 LOW_SATURATION = 0.1
 
 
-def get_classification_metric(metric_name: ClassificationMetric, model_output: np.ndarray, expected_output: np.ndarray, latency: float, level: int) -> float:
+def get_classification_metric(metric_name: ClassificationMetric, model_output: np.ndarray, expected_output: np.ndarray, latency: float, level: int, flops: Union[int, float]) -> float:
     if metric_name == ClassificationMetric.ACCURACY:
         return float(np.average(1.0 - np.abs(model_output - expected_output)))
     elif metric_name == ClassificationMetric.RECALL:
@@ -44,17 +46,21 @@ def get_classification_metric(metric_name: ClassificationMetric, model_output: n
         return latency
     elif metric_name == ClassificationMetric.LEVEL:
         return float(level)
+    elif metric_name == ClassificationMetric.FLOPS:
+        return float(flops)
     else:
         raise ValueError(f'Unknown metric name {metric_name}')
 
 
-def get_regression_metric(metric_name: RegressionMetric, model_output: np.ndarray, expected_output: np.ndarray, latency: float, level: int) -> float:
+def get_regression_metric(metric_name: RegressionMetric, model_output: np.ndarray, expected_output: np.ndarray, latency: float, level: int, flops: Union[int, float]) -> float:
     if metric_name == RegressionMetric.MSE:
         return np.average(np.square(model_output - expected_output))
     elif metric_name == RegressionMetric.LATENCY:
         return latency
     elif metric_name == RegressionMetric.LEVEL:
         return float(level)
+    elif metric_name == RegressionMetric.FLOPS:
+        return float(flops)
     else:
         raise ValueError(f'Unknown metric name {metric_name}')
 

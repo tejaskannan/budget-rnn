@@ -6,6 +6,7 @@ from .constants import SMALL_NUMBER
 
 
 FusionLayer = namedtuple('FusionLayer', ['prev', 'curr', 'bias'])
+NODES_TO_SKIP = ['initializer', 'dropout']
 
 
 def get_optimizer(name: str, learning_rate: float, learning_rate_decay: float, global_step: tf.Variable, decay_steps: int = 100000, momentum: Optional[float] = None):
@@ -234,3 +235,28 @@ def get_rnn_state(state: Union[tf.Tensor, tf.nn.rnn_cell.LSTMStateTuple, Tuple[t
         return tf.concat(states, axis=-1)
     else:
         return state
+
+
+def get_total_flops(node: Optional[tf.profiler.GraphNodeProto]) -> int:
+    """
+    Returns the total number of floating point ops in the rooted computational graph.
+    """
+    if node is None:
+        return 0
+
+    print(node.name)
+
+    total_flops = node.total_float_ops
+    for child in node.children:
+
+        child_name = child.name.lower()
+        should_skip = False
+        for name in NODES_TO_SKIP:
+            if name not in child.name.lower():
+                should_skip = True
+                break
+
+        if not should_skip:
+            total_flops += get_total_flops(child)
+
+    return total_flops

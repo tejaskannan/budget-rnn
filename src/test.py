@@ -1,5 +1,6 @@
 import re
 import os
+import sys
 from argparse import ArgumentParser
 from typing import Optional
 
@@ -45,16 +46,27 @@ def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperPa
     test_folder = os.path.join(dataset_folder, TEST)
     dataset = RNNSampleDataset(train_folder, valid_folder, test_folder)
 
-    model = get_model(hypers, save_folder=save_folder)
+    # Build model and compute flops
+    model = get_model(hypers, save_folder)
+    model.restore(name=model_name, is_train=False, is_frozen=True)
+    
+    flops_dict: Dict[str, int] = dict()
+    for level, output_op in enumerate(model.output_ops):
+        prev_level_flops = flops_dict[model.output_ops[level - 1]] if level > 0 else 0
+        flops_dict[output_op] = model.compute_flops(level) + prev_level_flops
+
+    print(flops_dict)
 
     # Build model and restore trainable parameters
-    model.restore(name=model_name, is_train=False)
+    model = get_model(hypers, save_folder=save_folder)
+    model.restore(name=model_name, is_train=False, is_frozen=False)
 
     # Test the model
     print('Starting model testing...')
     test_results = model.predict(dataset=dataset,
                                  test_batch_size=batch_size,
-                                 max_num_batches=max_num_batches)
+                                 max_num_batches=max_num_batches,
+                                 flops_dict=flops_dict)
 
     # Close the dataset
     dataset.close()

@@ -3,6 +3,7 @@ SMALL_NUMBER = 1e-7
 ONE_HALF = 0.5
 DATE_FORMAT = '%Y-%m-%dT%H:%M:%S'
 
+# Tensorflow names
 LOSS = 'loss'
 ACCURACY = 'accuracy'
 OPTIMIZER_OP = 'optimizer_op'
@@ -10,6 +11,8 @@ F1_SCORE = 'f1_score'
 LOGITS = 'logits'
 GLOBAL_STEP = 'global_step'
 PREDICTION = 'prediction'
+DROPOUT_KEEP_RATE = 'dropout-keep-rate'
+NODE_REGEX_FORMAT = '.*{0}.*'
 
 # Data format constants
 SAMPLE_ID = 'sample_id'
