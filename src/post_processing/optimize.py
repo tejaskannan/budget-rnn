@@ -18,7 +18,7 @@ from utils.rnn_utils import get_prediction_name
 from post_processing.threshold_optimizer_factory import get_optimizer
 
 
-EvaluationResult = namedtuple('EvaluationResult', ['accuracy', 'precision', 'recall', 'f1_score', 'level', 'thresholds', 'latency', 'all_latency'])
+EvaluationResult = namedtuple('EvaluationResult', ['accuracy', 'precision', 'recall', 'f1_score', 'level', 'thresholds', 'latency', 'all_latency', 'flops'])
 
 
 def print_eval_result(result: EvaluationResult):
@@ -29,6 +29,7 @@ def print_eval_result(result: EvaluationResult):
     print(f'Accuracy: {result.accuracy:.4f}')
     print(f'Average Computed Levels: {result.level:.4f}')
     print(f'Average Latency: {result.latency:.4f}')
+    print(f'Average Flops: {result.flops:.4f}')
 
 
 def result_to_dict(result: EvaluationResult):
@@ -54,7 +55,7 @@ def get_dataset(model_name: str, save_folder: str, dataset_folder: Optional[str]
 
 def get_model(model_name: str, hypers: HyperParameters, save_folder: str) -> AdaptiveModel:
     model = AdaptiveModel(hypers, save_folder)
-    model.restore(name=model_name, is_train=False)
+    model.restore(name=model_name, is_train=False, is_frozen=False)
     return model
 
 
@@ -75,6 +76,7 @@ def evaluate_thresholds(model: AdaptiveModel,
     labels_list: List[np.ndarray] = []
     levels_list: List[np.ndarray] = []
     latencies: List[float] = []
+    flops: List[int] = []
 
     for batch_num, batch in enumerate(test_dataset):
         feed_dict = model.batch_to_feed_dict(batch, is_train=False)
@@ -96,6 +98,7 @@ def evaluate_thresholds(model: AdaptiveModel,
         for level in computed_levels:
             level_name = get_prediction_name(level)
             latencies.append(test_log[level_name][ClassificationMetric.LATENCY.name])
+            flops.append(test_log[level_name][ClassificationMetric.FLOPS.name])
 
         print(f'Completed batch {batch_num + 1}', end='\r')
     print()
@@ -109,6 +112,7 @@ def evaluate_thresholds(model: AdaptiveModel,
     f1 = f1_score(predictions, labels)
     accuracy = np.average(1.0 - np.abs(predictions - labels))
     avg_latency = np.average(latencies)
+    avg_flops = np.average(flops)
 
     return EvaluationResult(precision=p,
                             recall=r,
@@ -117,7 +121,8 @@ def evaluate_thresholds(model: AdaptiveModel,
                             level=avg_levels,
                             latency=avg_latency,
                             all_latency=latencies,
-                            thresholds=list(thresholds))
+                            thresholds=list(thresholds),
+                            flops=avg_flops)
 
 
 def optimize_thresholds(optimizer_params: Dict[str, Union[float, int]], path: str, dataset_folder: Optional[str]):
