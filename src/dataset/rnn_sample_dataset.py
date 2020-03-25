@@ -3,20 +3,21 @@ from dataset.dataset import Dataset
 from typing import Dict, Any
 from datetime import datetime
 
-from utils.constants import DATE_FORMAT
+from utils.constants import DATE_FORMAT, INPUTS, OUTPUT, SAMPLE_ID
+from utils.constants import INPUT_SHAPE, INPUT_SCALER, OUTPUT_SCALER, NUM_OUTPUT_FEATURES
 
 
 class RNNSampleDataset(Dataset):
 
     def tensorize(self, sample: Dict[str, Any], metadata: Dict[str, Any]) -> Dict[str, np.ndarray]:
 
-        input_shape = metadata['input_shape']
-        sequence_length = len(sample['inputs'])
-        inputs = np.array(sample['inputs'])
+        input_shape = metadata[INPUT_SHAPE]
+        sequence_length = len(sample[INPUTS])
+        inputs = np.array(sample[INPUTS])
         
         # Normalize inputs
         normalized_input = inputs
-        input_scaler = metadata['input_scaler']
+        input_scaler = metadata[INPUT_SCALER]
         if input_scaler is not None:
             # Since the standard scaler expects a 2D input, we reshape before normalizing
             input_sample = np.reshape(inputs, newshape=(-1,) + input_shape)
@@ -24,24 +25,21 @@ class RNNSampleDataset(Dataset):
             normalized_input = np.reshape(normalized_input, newshape=(-1, sequence_length) + input_shape)
 
         # Normalize outputs (Scaler expects a 2D input)
-        output_scaler = metadata['output_scaler']
+        output_scaler = metadata[OUTPUT_SCALER]
         if output_scaler is None:
-            normalized_output = [sample['output']]
-        elif not isinstance(sample['output'], list) and not isinstance(sample['output'], np.ndarray):
-            normalized_output = output_scaler.transform([[sample['output']]])
+            normalized_output = [sample[OUTPUT]]
+        elif not isinstance(sample[OUTPUT], list) and not isinstance(sample[OUTPUT], np.ndarray):
+            normalized_output = output_scaler.transform([[sample[OUTPUT]]])
         else:
-            normalized_output = output_scaler.transform([sample['output']])
+            normalized_output = output_scaler.transform([sample[OUTPUT]])
 
         # Shape output into batch
-        normalized_output = np.reshape(normalized_output, (-1, metadata['num_output_features']))
-
-        # Retrieve the sample id
-        sample_id = sample['sample_id']
+        normalized_output = np.reshape(normalized_output, (-1, metadata[NUM_OUTPUT_FEATURES]))
 
         batch_dict = {
-            'inputs': normalized_input,
-            'output': normalized_output,
-            'sample_id': sample_id
+            INPUTS: normalized_input,
+            OUTPUT: normalized_output,
+            SAMPLE_ID: sample[SAMPLE_ID]
         }
 
         return batch_dict

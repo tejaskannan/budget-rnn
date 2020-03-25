@@ -17,9 +17,10 @@ from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
 from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS
-from utils.constants import NODE_REGEX_FORMAT
+from utils.constants import NODE_REGEX_FORMAT, DROPOUT_KEEP_RATE, MODEL, SCHEDULED_MODEL
+from utils.constants import INPUT_SCALER, OUTPUT_SCALER, INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH
 from utils.rnn_utils import *
-from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric
+from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric, ALL_LATENCY
 from utils.np_utils import thresholded_predictions, sigmoid
 
 
@@ -111,30 +112,30 @@ class AdaptiveModel(Model):
             output_scaler = StandardScaler()
             output_scaler.fit(output_samples)
 
-        self.metadata['input_scaler'] = input_scaler
-        self.metadata['output_scaler'] = output_scaler
-        self.metadata['input_shape'] = input_shape
-        self.metadata['num_output_features'] = num_output_features
-        self.metadata['seq_length'] = seq_length
+        self.metadata[INPUT_SCALER] = input_scaler
+        self.metadata[OUTPUT_SCALER] = output_scaler
+        self.metadata[INPUT_SHAPE] = input_shape
+        self.metadata[NUM_OUTPUT_FEATURES] = num_output_features
+        self.metadata[SEQ_LENGTH] = seq_length
 
     def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
         dropout = self.hypers.dropout_keep_rate if is_train else 1.0
-        input_batch = np.array(batch['inputs'])
-        output_batch = np.array(batch['output'])
+        input_batch = np.array(batch[INPUTS])
+        output_batch = np.array(batch[OUTPUT])
 
         if input_batch.shape[1] == 1:
             input_batch = np.squeeze(input_batch, axis=1)
 
-        input_shape = self.metadata['input_shape']
+        input_shape = self.metadata[INPUT_SHAPE]
         num_output_features = self.metadata['num_output_features']
 
         feed_dict = {
             self._placeholders[OUTPUT]: output_batch.reshape(-1, num_output_features),
-            self._placeholders['dropout_keep_rate']: dropout
+            self._placeholders[DROPOUT_KEEP_RATE]: dropout
         }
 
         # Extract parameters
-        seq_length = self.metadata['seq_length']
+        seq_length = self.metadata[SEQ_LENGTH]
         samples_per_seq = self.samples_per_seq
         num_sequences = self.num_sequences
         num_outputs = self.num_outputs
@@ -180,9 +181,9 @@ class AdaptiveModel(Model):
         Create model placeholders.
         """
         # Extract parameters
-        input_features_shape = self.metadata['input_shape']
-        num_output_features = self.metadata['num_output_features']
-        seq_length = self.metadata['seq_length']
+        input_features_shape = self.metadata[INPUT_SHAPE]
+        num_output_features = self.metadata[NUM_OUTPUT_FEATURES]
+        seq_length = self.metadata[SEQ_LENGTH]
         samples_per_seq = self.samples_per_seq
         num_sequences = self.num_sequences
 
@@ -208,15 +209,15 @@ class AdaptiveModel(Model):
             self._placeholders[OUTPUT] = tf.placeholder(shape=[None, num_output_features],
                                                         dtype=tf.float32,
                                                         name=OUTPUT)
-            self._placeholders['dropout_keep_rate'] = tf.placeholder(shape=[],
-                                                                    dtype=tf.float32,
-                                                                    name='dropout-keep-rate')
+            self._placeholders[DROPOUT_KEEP_RATE] = tf.placeholder(shape=[],
+                                                                   dtype=tf.float32,
+                                                                   name=DROPOUT_KEEP_RATE)
             self._placeholders['loss_weights'] = tf.placeholder(shape=[self.num_outputs],
                                                                 dtype=tf.float32,
                                                                 name='loss-weights')
         else:
             self._placeholders[OUTPUT] = tf.ones(shape=[1, num_output_features], dtype=tf.float32, name=OUTPUT)
-            self._placeholders['dropout_keep_rate'] = tf.ones(shape=[], dtype=tf.float32, name='dropout-keep-rate')
+            self._placeholders[DROPOUT_KEEP_RATE] = tf.ones(shape=[], dtype=tf.float32, name=DROPOUT_KEEP_RATE)
             self._placeholders['loss_weights'] = tf.ones(shape=[self.num_outputs], dtype=tf.float32, name='loss-weights')
 
     def compute_flops(self, level: int) -> int:
@@ -233,13 +234,11 @@ class AdaptiveModel(Model):
             cell = get_cell_level_name(level, self.hypers.model_params['share_cell_weights'])
             output = get_output_layer_name(level)
             rnn = get_rnn_level_name(level)
-            embedding = f'embedding-{level}'
-            combine_states = f'{rnn}-combine-states'
-
-            rnn_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), [cell, rnn, combine_states]))
-            single_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), [output, embedding]))
+            embedding = get_embedding_name(level)
+            combine_states = get_combine_states_name(rnn)
 
             # Compute FLOPS from RNN operations
+            rnn_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), [cell, rnn, combine_states]))
             rnn_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
                                 .with_node_names(show_name_regexes=rnn_operations) \
                                 .order_by('flops').build()
@@ -250,6 +249,7 @@ class AdaptiveModel(Model):
 
             # Compute FLOPS from all other operations. Note that the embedding layer has a well-defined input length,
             # so Tensorflow already accounts for the repeated application of this transformation.
+            single_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), [output, embedding]))
             single_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
                                 .with_node_names(show_name_regexes=single_operations) \
                                 .order_by('flops').build()
@@ -305,10 +305,10 @@ class AdaptiveModel(Model):
             scheduled_latencies = [latencies[x] for x in computed_levels]
             scheduled_flops = [flops_dict[get_prediction_name(x)] for x in computed_levels]
 
-            predictions_dict['scheduled_model'].append(np.expand_dims(level_predictions, axis=-1))
-            latencies_dict['scheduled_model'].append(np.average(scheduled_latencies))
-            levels_dict['scheduled_model'].append(np.average(computed_levels + 1.0))
-            flops_dict['scheduled_model'] = np.average(scheduled_flops)
+            predictions_dict[SCHEDULED_MODEL].append(np.expand_dims(level_predictions, axis=-1))
+            latencies_dict[SCHEDULED_MODEL].append(np.average(scheduled_latencies))
+            levels_dict[SCHEDULED_MODEL].append(np.average(computed_levels + 1.0))
+            flops_dict[SCHEDULED_MODEL] = np.average(scheduled_flops)
 
             # Compute metrics for the scheduled model
             if max_num_batches is not None and batch_num >= max_num_batches:
@@ -329,12 +329,12 @@ class AdaptiveModel(Model):
                 metric_value = get_classification_metric(metric_name, predictions, labels, latency, levels, flops)
                 result[model_name][metric_name.name] = metric_value
 
-            result[model_name]['ALL_LATENCY'] = latencies_dict[model_name][1:]
+            result[model_name][ALL_LATENCY] = latencies_dict[model_name][1:]
 
         return result
 
     def make_model(self, is_train: bool):
-        with tf.variable_scope('model', reuse=tf.AUTO_REUSE):
+        with tf.variable_scope(MODEL, reuse=tf.AUTO_REUSE):
             self.make_rnn_model(is_train)
 
     def make_rnn_model(self, is_train: bool):
@@ -342,7 +342,7 @@ class AdaptiveModel(Model):
         states_list: List[tf.TensorArray] = []
         prev_state: Optional[tf.Tensor] = None
 
-        num_output_features = self.metadata['num_output_features']
+        num_output_features = self.metadata[NUM_OUTPUT_FEATURES]
 
         for i in range(self.num_sequences):
             # Get relevant variable names
@@ -361,19 +361,19 @@ class AdaptiveModel(Model):
             # Create the embedding layer
             input_sequence = embedding_layer(inputs=self._placeholders[input_name],
                                              units=self.hypers.model_params['state_size'],
-                                             dropout_keep_rate=self._placeholders['dropout_keep_rate'],
+                                             dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
                                              use_conv=self.hypers.model_params['use_conv_embedding'],
                                              params=self.hypers.model_params['embedding_layer_params'],
                                              seq_length=self.samples_per_seq,
-                                             input_shape=self.metadata['input_shape'],
-                                             name_prefix=f'embedding-{i}')
+                                             input_shape=self.metadata[INPUT_SHAPE],
+                                             name_prefix=get_embedding_name(i))
 
             # Create the RNN Cell
             cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
                                  input_units=self.hypers.model_params['state_size'],
                                  output_units=self.hypers.model_params['state_size'],
                                  activation=self.hypers.model_params['rnn_activation'],
-                                 dropout_keep_rate=self._placeholders['dropout_keep_rate'],
+                                 dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
                                  num_layers=self.hypers.model_params['rnn_layers'],
                                  name=cell_name)
 
@@ -417,7 +417,7 @@ class AdaptiveModel(Model):
                          output_size=num_output_features,
                          hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
                          activations=self.hypers.model_params['output_hidden_activation'],
-                         dropout_keep_rate=self._placeholders['dropout_keep_rate'],
+                         dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
                          name=output_layer_name)
 
             if self.output_type == OutputType.CLASSIFICATION:
@@ -433,7 +433,7 @@ class AdaptiveModel(Model):
                 self._ops[accuracy_name] = classification_output.accuracy
                 self._ops[f1_score_name] = classification_output.f1_score
             else:
-                regression_output = compute_regression_output(model_output=output, expected_otuput=self._placeholders['output'])
+                regression_output = compute_regression_output(model_output=output, expected_otuput=self._placeholders[OUTPUT])
                 self._ops[prediction_name] = regression_output.predictions
                 self._ops[loss_name] = regression_output.loss
 

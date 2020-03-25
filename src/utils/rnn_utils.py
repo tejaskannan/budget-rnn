@@ -1,4 +1,5 @@
 from enum import Enum, auto
+from typing import Optional
 
 from utils.constants import LOGITS, ACCURACY, PREDICTION, F1_SCORE , LOSS
 
@@ -11,6 +12,9 @@ GATES_NAME = 'gates'
 STATES_NAME = 'states'
 ALL_PREDICTIONS_NAME = 'predictions'
 PREDICTION_PROB_NAME = 'prediction_probs'
+EMBEDDING_NAME = 'embedding'
+COMBINE_STATES_NAME = 'combine-states'
+WHILE_LOOP_NAME = 'while-loop'
 
 
 class RNNModelType(Enum):
@@ -68,3 +72,17 @@ def get_states_name(level_index: int) -> str:
 
 def get_f1_score_name(level_index: int) -> str:
     return f'{F1_SCORE}_{level_index}'
+
+
+def get_embedding_name(level_index: int) -> str:
+    return f'{EMBEDDING_NAME}-{level_index}'
+
+def get_combine_states_name(name_prefix: Optional[str]) -> str:
+    if name_prefix is None:
+        return COMBINE_STATES_NAME
+    return f'{name_prefix}-{COMBINE_STATES_NAME}'
+
+def get_rnn_while_loop_name(name_prefix: Optional[str]) -> str:
+    if name_prefix is None:
+        return f'rnn-{WHILE_LOOP_NAME}'
+    return f'{name_prefix}-{WHILE_LOOP_NAME}'

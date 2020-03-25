@@ -29,6 +29,7 @@ SaturationMetrics = namedtuple('SaturationMetrics', ['low', 'high'])
 Prediction = namedtuple('Prediction', ['sample_id', 'prediction', 'expected'])
 
 
+ALL_LATENCY = 'ALL_LATENCY'
 HIGH_SATURATION = 0.9
 LOW_SATURATION = 0.1
 

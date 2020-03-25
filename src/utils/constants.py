@@ -22,6 +22,13 @@ OUTPUT = 'output'
 DATA_FIELDS = [INPUTS, OUTPUT]
 INDEX_FILE = 'index.pkl.gz'
 
+# Metadata Constants
+INPUT_SCALER = 'input_scaler'
+OUTPUT_SCALER = 'output_scaler'
+INPUT_SHAPE = 'input_shape'
+NUM_OUTPUT_FEATURES = 'num_output_features'
+SEQ_LENGTH = 'seq_length'
+
 # Model type names
 MODEL = 'model'
 SCHEDULED_MODEL = 'scheduled_model'

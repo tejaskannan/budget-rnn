@@ -4,6 +4,7 @@ from collections import namedtuple
 
 from layers.cells.cells import MultiRNNCell
 from utils.tfutils import fuse_states, FusionLayer
+from utils.rnn_utils import get_combine_states_name, get_rnn_while_loop_name
 
 
 RnnOutput = namedtuple('RnnOutput', ['outputs', 'states', 'gates'])
@@ -43,7 +44,7 @@ def dynamic_rnn(inputs: tf.Tensor,
 
     fusion_layers: List[FusionLayer] = []
     if previous_states is not None and fusion_mode.lower() == 'gate':
-        combine_layer_name = 'combine-states' if name is None else f'{name}-combine-states'
+        combine_layer_name = get_combine_states_name(name)
 
         for i in range(rnn_layers):
             prev_state_transform = tf.layers.Dense(units=state_size,
@@ -123,7 +124,7 @@ def dynamic_rnn(inputs: tf.Tensor,
     if isinstance(initial_state, list):
         initial_state = tf.stack(initial_state)
 
-    while_loop_name = f'{name}-while-loop' if name is not None else 'rnn-while-loop'
+    while_loop_name = get_rnn_while_loop_name(name)
     _, _, final_outputs, final_states, final_gates = tf.while_loop(cond=cond,
                                                                    body=step,
                                                                    loop_vars=[i, initial_state, outputs_array, states_array, gates_array],
