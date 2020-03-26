@@ -54,7 +54,7 @@ def get_dataset(model_name: str, save_folder: str, dataset_folder: Optional[str]
 
 
 def get_model(model_name: str, hypers: HyperParameters, save_folder: str) -> AdaptiveModel:
-    model = AdaptiveModel(hypers, save_folder)
+    model = AdaptiveModel(hypers, save_folder, is_train=False)
     model.restore(name=model_name, is_train=False, is_frozen=False)
     return model
 
@@ -150,6 +150,7 @@ def optimize_thresholds(optimizer_params: Dict[str, Union[float, int]], path: st
         optimizer = get_optimizer(name=optimizer_params['name'],
                                   iterations=optimizer_params['iterations'],
                                   batch_size=optimizer_params['batch_size'],
+                                  level_weight=optimizer_params['level_weight'],
                                   **optimizer_params['opt_params'])
         output = optimizer.optimize(model, dataset)
         

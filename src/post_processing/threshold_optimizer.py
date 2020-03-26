@@ -11,17 +11,16 @@ from utils.np_utils import thresholded_predictions, f1_score, softmax, sigmoid, 
 
 
 OptimizerOutput = namedtuple('OptimizerOutput', ['thresholds', 'score'])
-LEVEL_WEIGHT = 0.05
-
 
 class ThresholdOptimizer:
     """
     Optimizes probability thresholds using a genetic algorithm.
     """
 
-    def __init__(self, iterations: int, batch_size: int):
+    def __init__(self, iterations: int, batch_size: int, level_weight: float):
         self._batch_size = batch_size
         self._iterations = iterations
+        self._level_weight = level_weight
 
     @property
     def batch_size(self) -> int:
@@ -30,6 +29,10 @@ class ThresholdOptimizer:
     @property
     def iterations(self) -> int:
         return self._iterations
+
+    @property
+    def level_weight(self) -> float:
+        return self._level_weight
 
     def optimize(self, model: AdaptiveModel, dataset: RNNSampleDataset) -> OptimizerOutput:
         """
@@ -109,7 +112,7 @@ class ThresholdOptimizer:
             levels = output.indices
 
             num_levels = probabilities.shape[1]
-            level_penalty = LEVEL_WEIGHT * np.average(levels / num_levels)
+            level_penalty = self.level_weight * np.average(levels / num_levels)
             fitness = f1_score(predictions, labels) - level_penalty
 
             fitnesses.append(fitness)

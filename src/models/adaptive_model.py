@@ -26,8 +26,8 @@ from utils.np_utils import thresholded_predictions, sigmoid
 
 class AdaptiveModel(Model):
 
-    def __init__(self, hyper_parameters: HyperParameters, save_folder: str):
-        super().__init__(hyper_parameters, save_folder)
+    def __init__(self, hyper_parameters: HyperParameters, save_folder: str, is_train: bool):
+        super().__init__(hyper_parameters, save_folder, is_train)
 
         model_type = self.hypers.model_params['model_type'].upper()
         self.model_type = RNNModelType[model_type]

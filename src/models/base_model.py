@@ -19,12 +19,16 @@ from utils.constants import TRAIN, VALID
 
 class Model:
 
-    def __init__(self, hyper_parameters: HyperParameters, save_folder: str):
+    def __init__(self, hyper_parameters: HyperParameters, save_folder: str, is_train: bool):
         self.hypers = hyper_parameters
         self.save_folder = save_folder
         self.metadata: Dict[str, Any] = dict()
 
-        self._sess = tf.Session(graph=tf.Graph())
+        # We turn of parallelism during testing to simulate a single-threaded, low-power environment
+        num_threads = 0 if is_train else 1
+        config = tf.ConfigProto(inter_op_parallelism_threads=num_threads, intra_op_parallelism_threads=num_threads)
+        self._sess = tf.Session(graph=tf.Graph(), config=config)
+
         self._optimizer = None
         self._ops: Dict[str, tf.Tensor] = dict()
         self._placeholders: Dict[str, tf.Tensor] = dict()
@@ -200,13 +204,7 @@ class Model:
         if self.is_made:
             return  # Prevent building twice
 
-        with self._sess.graph.as_default():
-            # Turn off parallelism and logging during testing
-            if not is_train:
-                tf.config.threading.set_inter_op_parallelism_threads(1)
-                tf.config.threading.set_intra_op_parallelism_threads(1)
-                tf.logging.set_verbosity(tf.logging.WARN)
-            
+        with self.sess.graph.as_default():
             self.make_placeholders(is_frozen=is_frozen)
             self.make_model(is_train=is_train)
 

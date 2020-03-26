@@ -68,21 +68,17 @@ def plot_tradeoff(model_results: Dict[str, List[MetricPair]], metric: str, cost:
 
             ax.plot(metric_values, costs, marker='o', markersize=MARKER_SIZE, label=series)
             
-            # Include data labels
-            #for metric_value, latency in zip(metric_values, latencies):
-            #    ax.annotate(f'{metric_value:.4f}', (metric_value, latency), (metric_value - X_OFFSET, latency + Y_OFFSET))
-
         # Formatting for the Metric Name
         metric_tokens = [t.capitalize() for t in metric.split('_')]
         metric_label = ' '.join(metric_tokens)
 
         # Formatting for cost label
-        cost_title_label = 'Latency' if cost == 'latency' else 'FLOPS'
-        cost_axis_label = 'Latency (ms)' if cost == 'latency' else 'FLOPS (log scale)'
+        cost_title_label = 'Latency' if cost == 'latency' else 'FLOP'
+        cost_axis_label = 'Latency (ms)' if cost == 'latency' else 'FLOP (log scale)'
 
         # Set y-axis to a logarithmic scale if we are plotting FLOPS
         if cost == 'flops':
-            ax.set_yscale('log')
+            ax.set_yscale('log', basey=2)
 
         ax.set_title('Tradeoff Curve for {0} vs {1}'.format(metric_label, cost_title_label))
         ax.set_xlabel(metric_label)

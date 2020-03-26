@@ -47,7 +47,7 @@ def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperPa
     dataset = RNNSampleDataset(train_folder, valid_folder, test_folder)
 
     # Build model and compute flops
-    model = get_model(hypers, save_folder)
+    model = get_model(hypers, save_folder, is_train=False)
     model.restore(name=model_name, is_train=False, is_frozen=True)
     
     flops_dict: Dict[str, int] = dict()
@@ -58,7 +58,7 @@ def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperPa
     print(flops_dict)
 
     # Build model and restore trainable parameters
-    model = get_model(hypers, save_folder=save_folder)
+    model = get_model(hypers, save_folder=save_folder, is_train=False)
     model.restore(name=model_name, is_train=False, is_frozen=False)
 
     # Test the model

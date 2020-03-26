@@ -1,13 +1,15 @@
 {
     "name": "genetic",
     "batch_size": 256,
-    "iterations": 256,
-    "instances": 4,
+    "iterations": 100,
+    "instances": 1,
+    "level_weight": 0.05,
     "opt_params": {
         "population_size": 128,
         "mutation_rate": 0.05,
         "crossover_rate": 0.8,
-        "crossover_type": "two_point",
+        "crossover_type": "uniform",
+        "mutation_type": "norm",
         "steady_state_count": 8
     }
 }

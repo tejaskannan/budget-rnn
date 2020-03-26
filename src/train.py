@@ -12,7 +12,7 @@ from test import test
 
 
 def train(data_folder: str, save_folder: str, hypers: HyperParameters, max_epochs: Optional[int] = None) -> str:
-    model = get_model(hypers, save_folder=save_folder)
+    model = get_model(hypers, save_folder=save_folder, is_train=True)
 
     # Create dataset
     train_folder = os.path.join(data_folder, TRAIN)

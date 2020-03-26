@@ -35,8 +35,8 @@ class StandardModelType(Enum):
 
 class StandardModel(Model):
 
-    def __init__(self, hyper_parameters: HyperParameters, save_folder: str):
-        super().__init__(hyper_parameters, save_folder)
+    def __init__(self, hyper_parameters: HyperParameters, save_folder: str, is_train: bool):
+        super().__init__(hyper_parameters, save_folder, is_train)
 
         model_type = self.hypers.model_params['model_type'].upper()
         self._model_type = StandardModelType[model_type]
