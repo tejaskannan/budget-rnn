@@ -1,10 +1,10 @@
 import numpy as np
 from typing import List
 from utils.np_utils import clip_by_norm
-from .threshold_optimizer import ThresholdOptimizer
+from .randomized_threshold_optimizer import RandomizedThresholdOptimizer
 
 
-class SimAnnealOptimizer(ThresholdOptimizer):
+class SimAnnealOptimizer(RandomizedThresholdOptimizer):
 
     def __init__(self, instances: int, epsilon: float, anneal: float, num_candidates: int, move_norm: float, batch_size: int, iterations: int):
         super().__init__(iterations, batch_size)

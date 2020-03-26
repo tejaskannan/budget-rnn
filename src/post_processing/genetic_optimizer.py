@@ -2,7 +2,7 @@ import numpy as np
 from typing import List, Tuple
 from enum import Enum, auto
 
-from .threshold_optimizer import ThresholdOptimizer
+from .randomized_threshold_optimizer import RandomizedThresholdOptimizer
 from utils.np_utils import softmax, linear_normalize, clip_by_norm
 from utils.constants import ONE_HALF
 
@@ -26,7 +26,7 @@ LOWER_BOUND = 0.9
 MAX_NORM = 0.1
 
 
-class GeneticOptimizer(ThresholdOptimizer):
+class GeneticOptimizer(RandomizedThresholdOptimizer):
 
     def __init__(self,
                  population_size: int,

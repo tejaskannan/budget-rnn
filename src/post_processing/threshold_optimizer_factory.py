@@ -1,6 +1,7 @@
 from .threshold_optimizer import ThresholdOptimizer
 from .genetic_optimizer import GeneticOptimizer
 from .sim_anneal_optimizer import SimAnnealOptimizer
+from .gradient_optimizer import GradientOptimizer
 
 
 def get_optimizer(name: str, iterations: int, batch_size: int, level_weight: float, **kwargs) -> ThresholdOptimizer:
@@ -25,5 +26,12 @@ def get_optimizer(name: str, iterations: int, batch_size: int, level_weight: flo
                                   batch_size=batch_size,
                                   iterations=iterations,
                                   level_weight=level_weight)
+    elif name in ('gradient', 'gradient_optimizer', 'gradient-optimizer'):
+        return GradientOptimizer(iterations=iterations,
+                                 batch_size=batch_size,
+                                 update_type=kwargs['update_type'],
+                                 update_params=kwargs['update_params'],
+                                 sharpen_factor=kwargs['sharpen_factor'],
+                                 tolerance=kwargs['tolerance'])
     else:
         raise ValueError(f'Unknown optimizer: {name}')
