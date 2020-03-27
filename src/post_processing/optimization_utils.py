@@ -13,7 +13,7 @@ def array_product(array: np.ndarray, axis: int) -> np.ndarray:
     return np.exp(np.sum(log_array, axis=axis))
 
 
-def f1_loss(predictions: np.ndarray, labels: np.ndarray, thresholds: np.ndarray, sharpen_factor: float) -> float:
+def f1_loss(predictions: np.ndarray, labels: np.ndarray, thresholds: np.ndarray, sharpen_factor: float, beta: float, argmin_weight: float) -> float:
     """
     Returns a differentiable version of a F1-score which can be optimized using gradient-based methods.
 
@@ -22,6 +22,8 @@ def f1_loss(predictions: np.ndarray, labels: np.ndarray, thresholds: np.ndarray,
         labels: A [N] array of the true labels (i.e. 0 / 1)
         thresholds: A [L] array of the current thresholds
         sharpen_factor: Factor by which to sharpen the sigmoid function
+        argmin_weight: Weight to place on argmin loss for zero classifications
+        beta: Factor used during argmin calculation
     """
     expanded_thresholds = np.expand_dims(thresholds, axis=0)  # [1, L]
     thresholded_predictions = threshold_sigmoid(predictions, expanded_thresholds, sharpen_factor)  # [N, L]
@@ -31,10 +33,13 @@ def f1_loss(predictions: np.ndarray, labels: np.ndarray, thresholds: np.ndarray,
     prediction_sum = np.sum(model_predictions)
     label_sum = np.sum(labels)
 
-    return 1.0 - (label_prediction_sum / (prediction_sum + label_sum + SMALL_NUMBER))
+    masked_argmin = soft_argmin(predictions, thresholds, beta=beta) * (1.0 - labels)  # [N]
+    argmin_loss = argmin_weight * np.sum(masked_argmin, axis=0) / len(thresholds)  # Scalar
+
+    return 1.0 - (label_prediction_sum / (prediction_sum + label_sum + SMALL_NUMBER)) + argmin_loss
 
 
-def f1_loss_gradient(predictions: np.ndarray, labels: np.ndarray, thresholds: np.ndarray, sharpen_factor: float) -> np.ndarray:
+def f1_loss_gradient(predictions: np.ndarray, labels: np.ndarray, thresholds: np.ndarray, sharpen_factor: float, beta: float, argmin_weight: float) -> np.ndarray:
     """
     Computes the derivative of the F1 score loss function (in the method above).
 
@@ -43,6 +48,8 @@ def f1_loss_gradient(predictions: np.ndarray, labels: np.ndarray, thresholds: np
         labels: A [N] array of the true labels (i.e. 0 / 1)
         thresholds: A [L] array of the current thresholds
         sharpen_factor: Factor by which to sharpen the sigmoid function
+        beta: Factor used during argmin computation
+        argmin_weight: weight to place on argmin loss for zero classifications
     Returns:
         An [L] array representing the threshold gradients.
     """
@@ -68,4 +75,54 @@ def f1_loss_gradient(predictions: np.ndarray, labels: np.ndarray, thresholds: np
     numerator = 2 * label_derivative_sum * (label_sum + prediction_sum) - 2 * label_prediction_sum * derivative_sum  # [L]
     denominator = np.square(label_sum + prediction_sum)
 
-    return -1 * numerator / (denominator + SMALL_NUMBER)
+    # Compute gradient for the argmin penalty
+    sample_argmin_grad = soft_argmin_gradient(predictions, thresholds, beta=beta) * (1.0 - expanded_labels)  # [N, L]
+    argmin_grad = argmin_weight * np.sum(sample_argmin_grad, axis=0)  # [L]
+
+    return -1 * numerator / (denominator + SMALL_NUMBER) + argmin_grad
+
+
+def soft_argmin(predictions: np.ndarray, thresholds: np.ndarray, beta: float) -> np.ndarray:
+    """
+    Differentiable approximation of an argmin operation
+
+    Args:
+        predictions: A [N, L] array of model predictions
+        thresholds: A [L] array of output thresholds
+        beta: Factor that controls level of approximation (large values are better approximates but have lower numerical stability)
+    Returns:
+        A [N] array containing the approximate argmin for each entry
+    """
+    diff = predictions - np.expand_dims(thresholds, axis=0)  # [N, L]
+    exp_diff = np.exp(beta * diff)  # [N, L]
+
+    exp_sum = np.sum(exp_diff, axis=-1, keepdims=True)  # [N, 1]
+
+    num_thresholds = len(thresholds)
+    indices = num_thresholds - np.expand_dims(np.arange(start=1, stop=num_thresholds + 1), axis=0)  # [1, L]
+    approx_argmin = np.sum(indices * exp_diff / (exp_sum + SMALL_NUMBER), axis=-1)  # [L]
+
+    return approx_argmin
+
+
+def soft_argmin_gradient(predictions: np.ndarray, thresholds: np.ndarray, beta: float) -> np.ndarray:
+    """
+    Returns the gradient of the soft argmin function (above) with respect to the given thresholds.
+
+    Args:
+        predictions: A [N, L] matrix of model predictions
+        thresholds: A [L] array of output thresholds
+        beta: Factor that controls the level of approximation
+    Returns:
+        A [N, L] array containing the gradient of thresholds for each sample
+    """
+    diff = predictions - np.expand_dims(thresholds, axis=0)  # [N, L]
+    exp_diff = np.exp(beta * diff)  # [N, L]
+
+    exp_sum = np.sum(exp_diff, axis=-1, keepdims=True)  # [N, 1]
+    exp_max = exp_diff / (exp_sum + SMALL_NUMBER)  # [N, L]
+
+    num_thresholds = len(thresholds)
+    indices = num_thresholds - np.expand_dims(np.arange(start=1, stop=num_thresholds + 1), axis=0)  # [1, L]
+
+    return (indices) * (-beta) * exp_max * (1.0 - exp_max)  # [N, L]

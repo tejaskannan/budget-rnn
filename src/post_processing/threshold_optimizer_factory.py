@@ -32,6 +32,8 @@ def get_optimizer(name: str, iterations: int, batch_size: int, level_weight: flo
                                  update_type=kwargs['update_type'],
                                  update_params=kwargs['update_params'],
                                  sharpen_factor=kwargs['sharpen_factor'],
+                                 beta=kwargs['beta'],
+                                 argmin_weight=kwargs['argmin_weight'],
                                  tolerance=kwargs['tolerance'])
     else:
         raise ValueError(f'Unknown optimizer: {name}')
