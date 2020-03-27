@@ -1,0 +1,4 @@
+{
+    "param_files": ["params/test_collision_params.json", "params/test_no_collision_params.json"],
+    "feature_type": "corner"
+}

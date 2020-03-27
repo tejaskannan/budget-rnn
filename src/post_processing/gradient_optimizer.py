@@ -12,6 +12,10 @@ from .threshold_optimizer import ThresholdOptimizer, OptimizerOutput
 from .optimization_utils import f1_loss, f1_loss_gradient
 
 
+LOWER_BOUND = 0.05
+UPPER_BOUND = 0.95
+
+
 class UpdateTypes(Enum):
     SGD = auto()
     NESTEROV = auto()
@@ -160,7 +164,7 @@ class SGDUpdate(GradientUpdate):
 
     def apply(self, probabilities: np.ndarray, labels: np.ndarray, thresholds: np.ndarray, sharpen_factor: float, step: int) -> np.ndarray:
         gradient = f1_loss_gradient(probabilities, labels, thresholds, sharpen_factor, beta=self.beta, argmin_weight=self.argmin_weight)
-        return np.clip(thresholds - self.learning_rate * gradient, a_min=0.0, a_max=1.0)
+        return np.clip(thresholds - self.learning_rate * gradient, a_min=LOWER_BOUND, a_max=UPPER_BOUND)
 
 
 class NesterovUpdate(GradientUpdate):
@@ -179,11 +183,11 @@ class NesterovUpdate(GradientUpdate):
         if self._momentum_vector is None:
             self._momentum_vector = np.zeros_like(thresholds)
 
-        diff = np.clip(thresholds - self._learning_rate * self._momentum_vector, a_min=0.0, a_max=1.0)
+        diff = np.clip(thresholds - self._learning_rate * self._momentum_vector, a_min=LOWER_BOUND, a_max=UPPER_BOUND)
         gradient = f1_loss_gradient(probabilities, labels, diff, sharpen_factor, beta=self.beta, argmin_weight=self.argmin_weight)
         self._momentum_vector = self.learning_rate * self._momentum_vector + self.momentum * gradient
 
-        return np.clip(thresholds - self._momentum_vector, a_min=0.0, a_max=1.0)
+        return np.clip(thresholds - self._momentum_vector, a_min=LOWER_BOUND, a_max=UPPER_BOUND)
 
 
 class RMSPropUpdate(GradientUpdate):
@@ -207,7 +211,7 @@ class RMSPropUpdate(GradientUpdate):
 
         weighted_learn_rate = self.learning_rate / (np.sqrt(self._expected_sq_grad) + SMALL_NUMBER)  # [L]
 
-        return np.clip(thresholds - weighted_learn_rate * gradient, a_min=0.0, a_max=1.0)
+        return np.clip(thresholds - weighted_learn_rate * gradient, a_min=LOWER_BOUND, a_max=UPPER_BOUND)
 
 
 class AdamUpdate(GradientUpdate):
@@ -249,4 +253,4 @@ class AdamUpdate(GradientUpdate):
         second_moment = self._second_moment / (1.0 - np.power(self._second_momentum, step))
 
         weighted_learning_rate = self.learning_rate / (np.sqrt(second_moment) + SMALL_NUMBER)
-        return np.clip(thresholds - weighted_learning_rate * first_moment, a_min=0.0, a_max=1.0)
+        return np.clip(thresholds - weighted_learning_rate * first_moment, a_min=LOWER_BOUND, a_max=UPPER_BOUND)
