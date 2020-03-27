@@ -27,7 +27,7 @@ def detect_corners(path: str, num_contours: int) -> List[float]:
     gray_blur = cv2.GaussianBlur(gray, (5, 5), 0)
     edges = cv2.Canny(gray_blur, 35, 125)
 
-    contours, hierarchy = cv2.findContours(edges.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    contours, hierarchy = cv2.findContours(edges.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     if len(contours) == 0:
         return None
@@ -44,20 +44,12 @@ def detect_corners(path: str, num_contours: int) -> List[float]:
     if len(contour_areas) != len(contours):
         return None
 
-    # Fix ill-defined hierarchies
-    if len(contours) != len(hierarchy):
-        hierarhcy = np.zeros_like(contours) - 1
-
-    for _, contour, hierarchy_list in reversed(sorted(zip(contour_areas, contours, hierarchy))):
+    for _, contour in reversed(sorted(zip(contour_areas, contours))):
         if feature_index >= num_contours:
             break
 
-        # The last element of the hierarchy is the parent, and a value of -1 means that there is no
-        # parent contour. Thus, we are ignoring all nested contours
-        if hierarchy_list[-1] != -1:
-            continue
-
         bounding_box = cv2.boundingRect(contour)
+        print(bounding_box)
 
         # Ignore duplicate bounding boxes
         if bounding_box[0] in seen_columns and bounding_box[1] in seen_rows:
@@ -80,6 +72,8 @@ def detect_corners(path: str, num_contours: int) -> List[float]:
             features[FEATURES_PER_CONTOUR * feature_index + i] = features[FEATURES_PER_CONTOUR * (feature_index - 1) + i]
 
         feature_index += 1
+
+    print('==========')
 
     # Explicitly convert to floats because not all file types can handle numpy data types
     return [float(x) for x in features]
