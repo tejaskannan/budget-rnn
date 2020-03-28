@@ -49,17 +49,13 @@ def detect_corners(path: str, num_contours: int) -> List[float]:
             break
 
         bounding_box = cv2.boundingRect(contour)
-        print(bounding_box)
 
         # Ignore duplicate bounding boxes
         if bounding_box[0] in seen_columns and bounding_box[1] in seen_rows:
             continue
 
-        # Normalize the bounding box
-        normalized_bounding_box = bounding_box / normalize_array
-
         for i in range(FEATURES_PER_CONTOUR):
-            features[FEATURES_PER_CONTOUR * feature_index + i] = normalized_bounding_box[i]
+            features[FEATURES_PER_CONTOUR * feature_index + i] = bounding_box[i]
 
         feature_index += 1
         seen_columns.add(bounding_box[0])
@@ -72,8 +68,6 @@ def detect_corners(path: str, num_contours: int) -> List[float]:
             features[FEATURES_PER_CONTOUR * feature_index + i] = features[FEATURES_PER_CONTOUR * (feature_index - 1) + i]
 
         feature_index += 1
-
-    print('==========')
 
     # Explicitly convert to floats because not all file types can handle numpy data types
     return [float(x) for x in features]

@@ -25,9 +25,10 @@ class UpdateTypes(Enum):
 
 class GradientUpdate:
     
-    def __init__(self, learning_rate: float, level_weight: float):
+    def __init__(self, learning_rate: float, level_weight: float, anneal_rate: float):
         self._learning_rate = learning_rate
         self._level_weight = level_weight
+        self._anneal_rate = anneal_rate
 
     @property
     def learning_rate(self) -> float:
@@ -36,6 +37,13 @@ class GradientUpdate:
     @property
     def level_weight(self) -> float:
         return self._level_weight
+
+    @property
+    def anneal_rate(self) -> float:
+        return self._anneal_rate
+
+    def anneal_learning_rate(self):
+        self._learning_rate *= self.anneal_rate
 
     def apply(self, probabilities: np.ndarray, labels: np.ndarray, thresholds: np.ndarray, sharpen_factor: float, step: int) -> np.ndarray:
         raise NotImplementedError()
@@ -58,20 +66,25 @@ class GradientOptimizer(ThresholdOptimizer):
 
         self._update_type = UpdateTypes[update_type.upper()]
         if self._update_type == UpdateTypes.SGD:
-            self._updater = SGDUpdate(learning_rate=update_params['learning_rate'], level_weight=level_weight)
+            self._updater = SGDUpdate(learning_rate=update_params['learning_rate'],
+                                      level_weight=level_weight,
+                                      anneal_rate=update_params['anneal_rate'])
         elif self._update_type == UpdateTypes.NESTEROV:
             self._updater = NesterovUpdate(learning_rate=update_params['learning_rate'],
                                            momentum=update_params['momentum'],
-                                           level_weight=level_weight)
+                                           level_weight=level_weight,
+                                           anneal_rate=update_params['anneal_rate'])
         elif self._update_type == UpdateTypes.RMSPROP:
             self._updater = RMSPropUpdate(learning_rate=update_params['learning_rate'],
                                           gamma=update_params['gamma'],
-                                          level_weight=level_weight)
+                                          level_weight=level_weight,
+                                          anneal_rate=update_params['anneal_rate'])
         elif self._update_type == UpdateTypes.ADAM:
             self._updater = AdamUpdate(learning_rate=update_params['learning_rate'],
                                        first_momentum=update_params['first_momentum'],
                                        second_momentum=update_params['second_momentum'],
-                                       level_weight=level_weight)
+                                       level_weight=level_weight,
+                                       anneal_rate=update_params['anneal_rate'])
         else:
             raise ValueError(f'Unknown update type: {self._update_type}.')
 
@@ -126,6 +139,7 @@ class GradientOptimizer(ThresholdOptimizer):
             
             # Perform update
             next_thresholds = self.updater.apply(probabilities, labels, thresholds, self.sharpen_factor, batch_num + 1)
+            self.updater.anneal_learning_rate()
 
             # Check convergence
             should_stop = bool(np.linalg.norm(thresholds - next_thresholds, ord=2) < self.tolerance)
@@ -155,8 +169,8 @@ class SGDUpdate(GradientUpdate):
 
 class NesterovUpdate(GradientUpdate):
 
-    def __init__(self, learning_rate: float, level_weight: float, momentum: float):
-        super().__init__(learning_rate, level_weight)
+    def __init__(self, learning_rate: float, level_weight: float, anneal_rate: float, momentum: float):
+        super().__init__(learning_rate, level_weight, anneal_rate)
         self._momentum = momentum
         self._momentum_vector = None
 
@@ -178,8 +192,8 @@ class NesterovUpdate(GradientUpdate):
 
 class RMSPropUpdate(GradientUpdate):
 
-    def __init__(self, learning_rate: float, level_weight: float, gamma: float):
-        super().__init__(learning_rate, level_weight)
+    def __init__(self, learning_rate: float, level_weight: float, anneal_rate: float, gamma: float):
+        super().__init__(learning_rate, level_weight, anneal_rate)
         self._gamma = gamma
         self._expected_sq_grad = None
 
@@ -202,8 +216,8 @@ class RMSPropUpdate(GradientUpdate):
 
 class AdamUpdate(GradientUpdate):
 
-    def __init__(self, learning_rate: float, level_weight: float, first_momentum: float, second_momentum: float):
-        super().__init__(learning_rate, level_weight)
+    def __init__(self, learning_rate: float, level_weight: float, anneal_rate: float, first_momentum: float, second_momentum: float):
+        super().__init__(learning_rate, level_weight, anneal_rate)
 
         self._first_momentum = first_momentum
         self._second_momentum = second_momentum

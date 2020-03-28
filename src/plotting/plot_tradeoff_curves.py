@@ -7,9 +7,9 @@ from random import random
 from collections import defaultdict, namedtuple
 
 from utils.file_utils import read_by_file_suffix, make_dir
-from utils.constants import MODEL, SCHEDULED_MODEL, SCHEDULED_GENETIC
+from utils.constants import MODEL, SCHEDULED_MODEL, SCHEDULED_OPTIMIZED
 from utils.testing_utils import ClassificationMetric
-from plotting_constants import STYLE, MARKER_SIZE
+from plotting_constants import STYLE, MARKER_SIZE, LABEL_REGEX
 
 
 MODEL_TYPE_REGEX = re.compile(r'.*model-.*test-log-([^-]+)-.*')
@@ -48,8 +48,10 @@ def fetch_logs(test_log_files: List[str], metric: str, cost: str) -> DefaultDict
         if SCHEDULED_MODEL in test_log:
             result[f'{model_type} Scheduled'].append(get_metric_value(test_log[SCHEDULED_MODEL], metric, cost))
 
-        if SCHEDULED_GENETIC in test_log:
-            result[f'{model_type} Optimized'].append(get_metric_value(test_log[SCHEDULED_GENETIC], metric, cost))
+        if SCHEDULED_OPTIMIZED in test_log:
+            match = LABEL_REGEX.match(test_log_file)
+            label = match.group(1).capitalize()
+            result[f'{model_type} {label}'].append(get_metric_value(test_log[SCHEDULED_OPTIMIZED], metric, cost))
 
         # Compile all other predictions into one series
         for series in sorted(filter(lambda k: k.startswith('prediction'), test_log.keys())):

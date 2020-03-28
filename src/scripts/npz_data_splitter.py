@@ -24,7 +24,7 @@ def get_partition_index(sample: Dict[str, Any], fractions: List[float]) -> int:
 
     bound = 0
     for index, fraction in enumerate(fractions):
-        bound += int(MODULUS * frac)
+        bound += int(MODULUS * fraction)
         if partition_index < bound:
             return index
 
@@ -57,6 +57,8 @@ def split_dataset(input_folder: str, output_folder: str, fractions: List[float],
     partition_counts = [0 for _ in PARTITIONS]
     partition_indexes: List[Dict[int, int]] = [dict() for _ in PARTITIONS]
 
+    normalize_array = np.array([[540, 960, 540, 960, 540, 960, 540, 960]])
+
     for index, sample in enumerate(data_iterator):
         partition_index = get_partition_index(sample, fractions)
         partition_folder = PARTITIONS[partition_index]
@@ -65,6 +67,7 @@ def split_dataset(input_folder: str, output_folder: str, fractions: List[float],
         # Add this sample by giving each field a unique name
         sample_dict: Dict[str, Any] = dict()
         sample_id = sample[SAMPLE_ID]
+
         for field in DATA_FIELDS:
             field_name = DATA_FIELD_FORMAT.format(field, sample_id)
             sample_dict[field_name] = sample[field]
@@ -73,7 +76,8 @@ def split_dataset(input_folder: str, output_folder: str, fractions: List[float],
         partition_indexes[partition_index][sample_id] = partition_file_indexes[partition_index]
         partition_counts[partition_index] += 1
 
-        if len(partition_dict) >= chunk_size:
+        partition_samples = len(partition_dict) / len(DATA_FIELDS)
+        if partition_samples >= chunk_size:
             file_index = partition_file_indexes[partition_index]
             output_file = os.path.join(output_folder, partition_folder, f'{file_prefix}{file_index:03}.npz')
             np.savez_compressed(output_file, **partition_dict)
@@ -136,7 +140,7 @@ if __name__ == '__main__':
     fractions = [args.train_frac, args.valid_frac, args.test_frac]
     assert abs(sum(fractions) - 1.0) < SMALL_NUMBER, f'The fractions must add up to 1.0'
     for frac in fractions:
-        assert frac > 0, 'All fractions must be strictly positive'
+        assert frac >= 0, 'All fractions must be non-negative'
 
     split_dataset(input_folder=args.input_folder,
                   output_folder=args.output_folder,

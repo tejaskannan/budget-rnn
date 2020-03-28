@@ -11,6 +11,7 @@ from utils.hyperparameters import HyperParameters
 from utils.file_utils import extract_model_name, read_by_file_suffix, save_by_file_suffix
 from utils.rnn_utils import get_logits_name
 from utils.constants import HYPERS_PATH, TEST_LOG_PATH, TRAIN, VALID, TEST, METADATA_PATH, SMALL_NUMBER, BIG_NUMBER, OPTIMIZED_TEST_LOG_PATH
+from utils.constants import SCHEDULED_OPTIMIZED, OPTIMIZED_RESULTS, OUTPUT
 from utils.np_utils import thresholded_predictions, f1_score, precision, recall, sigmoid
 from utils.testing_utils import ClassificationMetric
 from utils.rnn_utils import get_prediction_name
@@ -85,7 +86,7 @@ def evaluate_thresholds(model: AdaptiveModel,
         # Concatenate logits into a 2D array (logit_ops is already ordered by level)
         logits_concat = np.squeeze(np.concatenate([logits[op] for op in logit_ops], axis=-1))
         probabilities = sigmoid(logits_concat)
-        labels = np.vstack(batch['output'])
+        labels = np.vstack(batch[OUTPUT])
 
         output = thresholded_predictions(probabilities, thresholds)
         predictions = output.predictions
@@ -125,7 +126,7 @@ def evaluate_thresholds(model: AdaptiveModel,
                             flops=avg_flops)
 
 
-def optimize_thresholds(optimizer_params: Dict[str, Union[float, int]], path: str, dataset_folder: Optional[str]):
+def optimize_thresholds(optimizer_params: Dict[str, Union[float, int, str]], path: str, dataset_folder: Optional[str]):
     save_folder, model_file = os.path.split(path)
 
     model_name = extract_model_name(model_file)
@@ -160,21 +161,40 @@ def optimize_thresholds(optimizer_params: Dict[str, Union[float, int]], path: st
     print('Completed optimization. Choosing the best model...')
     if len(opt_outputs) == 1:
         best_thresholds = opt_outputs[0].thresholds
+
+        final_result = evaluate_thresholds(model=model,
+                                           thresholds=best_thresholds,
+                                           dataset=dataset,
+                                           series=DataSeries.TEST,
+                                           test_log=test_log)
+        test_results = [final_result]
     else:
-        best_thresholds = None
+        best_thresholds, final_thresholds = None, None
         best_f1_score = -BIG_NUMBER
+        final_result = None
+        test_results = []
+
         for opt_output in opt_outputs:
-            result = evaluate_thresholds(model=model,
-                                         thresholds=opt_output.thresholds,
-                                         dataset=dataset,
-                                         series=DataSeries.VALID,
-                                         test_log=test_log)
+            validation_result = evaluate_thresholds(model=model,
+                                                    thresholds=opt_output.thresholds,
+                                                    dataset=dataset,
+                                                    series=DataSeries.VALID,
+                                                    test_log=test_log)
 
-            if result.f1_score > best_f1_score:
-                best_thresholds = result.thresholds
-                best_f1_score = result.f1_score
+            test_result = evaluate_thresholds(model=model,
+                                              thresholds=opt_output.thresholds,
+                                              dataset=dataset,
+                                              series=DataSeries.TEST,
+                                              test_log=test_log)
+            test_results.append(test_result)
 
-    print('Completed selection. Starting evaluation....')
+            # Evaluate models based on the validation set
+            if validation_result.f1_score > best_f1_score:
+                best_thresholds = validation_result.thresholds
+                best_f1_score = validation_result.f1_score
+                final_result = test_result
+
+    print('Completed selection and optimization testing. Starting baseline evaluation....')
 
     baseline = [0.5 for _ in output.thresholds]
     result = evaluate_thresholds(model=model,
@@ -186,16 +206,12 @@ def optimize_thresholds(optimizer_params: Dict[str, Union[float, int]], path: st
 
     print('===============')
 
-    result = evaluate_thresholds(model=model,
-                                 thresholds=best_thresholds,
-                                 dataset=dataset,
-                                 series=DataSeries.TEST,
-                                 test_log=test_log)
-    print_eval_result(result)
+    print_eval_result(final_result)
 
     # Save new results
-    test_log['scheduled_genetic'] = result_to_dict(result)
-    optimized_test_log_path = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format(model_name))
+    test_log[SCHEDULED_OPTIMIZED] = result_to_dict(final_result)
+    test_log[OPTIMIZED_RESULTS] = list(map(result_to_dict, test_results))
+    optimized_test_log_path = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format(optimizer_params['name'], model_name))
     save_by_file_suffix([test_log], optimized_test_log_path)
 
 
