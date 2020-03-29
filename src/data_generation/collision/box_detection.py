@@ -7,21 +7,15 @@ from argparse import ArgumentParser
 from typing import Dict, Any, List
 
 from utils.constants import INPUTS, OUTPUT
+from tracking_utils.constants import COLLISION_FRAME
+from tracking_utils.file_utils import iterate_camera_images
 
 
 FEATURES_PER_CONTOUR = 4
 
 
-def append_to_jsonl_gz(data_dict: Dict[str, Any], output_file: str):
-    with gzip.GzipFile(output_file, 'a') as fout:
-        json_str = json.dumps(data_dict) + '\n'
-        fout.write(json_str.encode('utf-8'))
-
-
 def detect_corners(path: str, num_contours: int) -> List[float]:
     img = cv2.imread(path)
-    max_x, max_y = img.shape[0], img.shape[1]
-    normalize_array = np.array([max_x, max_y, max_x, max_y])
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray_blur = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -91,15 +85,15 @@ if __name__ == '__main__':
     data_dict = {
         INPUTS: [],
         OUTPUT: label,
-        'collision_frame': args.collision_frame
+        COLLISION_FRAME: args.collision_frame
     }
-    
-    for file_name in os.listdir(args.folder):
-        path = os.path.join(args.folder, file_name)
-        features = detect_corners(path, num_contours)
-        
+
+    for image_path in iterate_camera_images(args.folder):
+        features = detect_corners(image_path, num_contours)
+
         if features is None:
             should_write = False
+            break
         else:
             data_dict[INPUTS].append(features)
 

@@ -17,7 +17,6 @@ from blender.base import BlenderObject
 from tracking_utils.constants import *
 from tracking_utils.parameters import Parameters
 from tracking_utils.position_utils import Point
-from tracking_utils.file_utils import save_jsonl_gz, load_as_pickle, load_jsonl_gz, save_as_pickle
 from tracking_utils.general_utils import get_random_point
 
 
@@ -86,7 +85,7 @@ def create_camera(loc: Dict[str, List[int]], lens: int) -> Camera:
     Initializes the camera sensors in the Blender world.
 
     Args:
-        locations: List of dictionaries specifiying the location
+        locations: List of dictionaries specifying the location
             and rotation of each sensor
         lens: Lens size
     Returns:
@@ -167,8 +166,6 @@ def run_trial(params: Dict[str, Any], output_folder: str) -> int:
     collision_iters = np.random.randint(low=collision_iter, high=collision_iter + 2, size=(len(params['obj_configs']), ))
     collision_pos = get_random_point(model_params['collision_positions'])
 
-    print(collision_iters)
-
     target_objects: List[BlenderObject] = []
     motion_models: List[MotionModel] = []
     for i, obj_config in enumerate(params['obj_configs']):
@@ -204,16 +201,15 @@ def run_trial(params: Dict[str, Any], output_folder: str) -> int:
     run_animation(target_objects, motion_models, camera,
                   output_folder=output_folder,
                   max_iters=params['iters'])
- 
+
     return collision_iter
 
 
 def main(params_file: str, feature_type: str):
     # Extract the parameters
     with open(params_file, 'r') as f:
-        params = json.load(f);
+        params = json.load(f)
 
-    # num_contours = params['num_feature_contours']
     label = str(params['label'])
     output_folder = params['output_folder']
     features_file_prefix = params['features_file_prefix']
@@ -228,11 +224,14 @@ def main(params_file: str, feature_type: str):
 
         # Compute features (we call this in a subprocess to avoid library import issues)
         try:
-            if feature_type == 'corner':
+            if feature_type == 'box':
                 num_contours = str(params['num_feature_contours'])
-                subprocess.check_call(['python3', 'corner_detection.py', '--folder', output_folder, '--num-contours', num_contours, '--label', label, '--collision-frame', collision_frame, '--output-file', output_file])
+                subprocess.check_call(['python3', 'box_detection.py', '--folder', output_folder, '--num-contours', num_contours, '--label', label, '--collision-frame', collision_frame, '--output-file', output_file])
+            elif feature_type == 'corner':
+                num_points = str(params['num_points'])
+                subprocess.check_call(['python3', 'fast_detection.py', '--folder', output_folder, '--label', label, '--collision-frame', collision_frame, '--num-points', num_points, '--output-file', output_file])
             elif feature_type == 'image':
-                subprocess.check_call(['python3', 'downsample_image.py', '--image-folder', output_folder, '--output-file', output_file, '--label', label, '--collision-frame', collision_frame, '--scale', scale])
+                subprocess.check_call(['python3', 'downsample_image.py', '--folder', output_folder, '--output-file', output_file, '--label', label, '--collision-frame', collision_frame, '--scale', scale])
             else:
                 raise ValueError('Unknown feature type: {0}'.format(feature_type))
         except subprocess.CalledProcessError:
@@ -244,7 +243,7 @@ if __name__ == '__main__':
         config = json.load(config_file)
 
     feature_type = config['feature_type'].lower()
-    assert feature_type in ('corner', 'image'), 'The feature type must be one of: corner, image'
+    assert feature_type in ('corner', 'box', 'image'), 'The feature type must be one of: corner, box, image'
 
     for param_file in config['param_files']:
         main(param_file, feature_type=feature_type)

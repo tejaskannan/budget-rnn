@@ -4,7 +4,6 @@ import numpy as np
 from typing import Any
 
 from tracking_utils.position_utils import Point
-from tracking_utils.file_utils import load_jsonl_gz
 
 
 class Camera:
