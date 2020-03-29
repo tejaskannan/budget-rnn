@@ -11,3 +11,4 @@ HOMOGRAPHY_FILE = 'homographies.pkl.gz'
 CAMERA_FMT = 'camera-{0}'
 
 COLLISION_FRAME = 'collision_frame'
+CAMERA_INDEX = 'camera_index'

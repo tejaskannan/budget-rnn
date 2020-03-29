@@ -3,6 +3,7 @@ import os
 import numpy as np
 import json
 import subprocess
+import time
 from mathutils import Vector
 from typing import List, Dict, Optional, Any, Union
 
@@ -80,7 +81,7 @@ def setup(world: BlenderObject,
     return [target_object.get_object() for target_object in target_objects]
 
 
-def create_camera(loc: Dict[str, List[int]], lens: int) -> Camera:
+def create_camera(loc: Dict[str, List[int]], lens: int, index: int) -> Camera:
     """
     Initializes the camera sensors in the Blender world.
 
@@ -88,6 +89,7 @@ def create_camera(loc: Dict[str, List[int]], lens: int) -> Camera:
         locations: List of dictionaries specifying the location
             and rotation of each sensor
         lens: Lens size
+        index: Index number of this camera
     Returns:
         A list of the initialized camera objects
     """
@@ -96,7 +98,7 @@ def create_camera(loc: Dict[str, List[int]], lens: int) -> Camera:
     cam = Camera(location=Point(*loc['location']),
                  rotation=Point(*loc['rotation']),
                  lens=lens,
-                 name='camera')
+                 name=CAMERA_FMT.format(index))
     cam.create(scene)
 
     return cam
@@ -104,7 +106,7 @@ def create_camera(loc: Dict[str, List[int]], lens: int) -> Camera:
 
 def run_animation(target_objects: List[BlenderObject],
                   motion_models: List[MotionModel],
-                  camera: Camera,
+                  cameras: List[Camera],
                   output_folder: str,
                   max_iters: int):
     """
@@ -114,7 +116,7 @@ def run_animation(target_objects: List[BlenderObject],
     Args:
         target_object: Object to track
         motion_model: Model defining how the object moves in the world
-        camera: Camera sensor
+        camera: Camera sensors
         output_folder: Folder in which to save all results
         max_iters: Maximum number of iterations of object motion
     """
@@ -136,7 +138,10 @@ def run_animation(target_objects: List[BlenderObject],
             positions[j] = motion_model.get_next_position(positions[j])
             target_object.set_location(positions[j].location)
 
-        camera.capture(scene, index=i, folder=output_folder)
+        # Capture images from each camera
+        for camera in cameras:
+            camera.capture(scene, index=i, folder=output_folder)
+
         frame_num += motion_model.frame_delay
 
     # Stop the animation
@@ -194,46 +199,42 @@ def run_trial(params: Dict[str, Any], output_folder: str) -> int:
           lamp=lamp)
 
     # Create camera sensors
-    camera_pos = np.random.randint(len(params['camera_locations']))
-    camera = create_camera(loc=params['camera_locations'][camera_pos], lens=10)
+    cameras: List[Camera] = []
+    for camera_index, camera_location in enumerate(params['camera_locations']):
+        camera = create_camera(loc=camera_location, lens=10, index=camera_index)
+        cameras.append(camera)
 
     # Evaluation
-    run_animation(target_objects, motion_models, camera,
+    run_animation(target_objects, motion_models, cameras,
                   output_folder=output_folder,
                   max_iters=params['iters'])
 
     return collision_iter
 
 
-def main(params_file: str, feature_type: str):
+def main(params_file: str):
     # Extract the parameters
     with open(params_file, 'r') as f:
         params = json.load(f)
 
     label = str(params['label'])
     output_folder = params['output_folder']
-    features_file_prefix = params['features_file_prefix']
+    output_file = params['features_file_prefix']
     scale = str(params['image_scale'])
+    num_cameras = str(len(params['camera_locations']))
 
     if not os.path.exists(output_folder):
         os.mkdir(output_folder)
 
     for trial_index in range(params['trials']):
         collision_frame = str(run_trial(params, output_folder))
-        output_file = f'{features_file_prefix}_{trial_index}.npz'
+
+        # Sleep for a bit to ensure that the image files are saved on disk
+        time.sleep(0.5)
 
         # Compute features (we call this in a subprocess to avoid library import issues)
         try:
-            if feature_type == 'box':
-                num_contours = str(params['num_feature_contours'])
-                subprocess.check_call(['python3', 'box_detection.py', '--folder', output_folder, '--num-contours', num_contours, '--label', label, '--collision-frame', collision_frame, '--output-file', output_file])
-            elif feature_type == 'corner':
-                num_points = str(params['num_points'])
-                subprocess.check_call(['python3', 'fast_detection.py', '--folder', output_folder, '--label', label, '--collision-frame', collision_frame, '--num-points', num_points, '--output-file', output_file])
-            elif feature_type == 'image':
-                subprocess.check_call(['python3', 'downsample_image.py', '--folder', output_folder, '--output-file', output_file, '--label', label, '--collision-frame', collision_frame, '--scale', scale])
-            else:
-                raise ValueError('Unknown feature type: {0}'.format(feature_type))
+            subprocess.check_call(['python3', 'downsample_image.py', '--folder', output_folder, '--output-file', output_file, '--label', label, '--collision-frame', collision_frame, '--scale', scale, '--num-cameras', num_cameras])
         except subprocess.CalledProcessError:
             pass
 
@@ -242,8 +243,5 @@ if __name__ == '__main__':
     with open('config.json', 'r') as config_file:
         config = json.load(config_file)
 
-    feature_type = config['feature_type'].lower()
-    assert feature_type in ('corner', 'box', 'image'), 'The feature type must be one of: corner, box, image'
-
     for param_file in config['param_files']:
-        main(param_file, feature_type=feature_type)
+        main(param_file)
