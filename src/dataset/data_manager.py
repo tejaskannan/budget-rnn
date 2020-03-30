@@ -196,7 +196,8 @@ def get_data_manager(folder: str, sample_id_name: str, fields: List[str], extens
     if extension is None:
         extension_counter: Counter = Counter()
         for file_name in os.listdir(folder):
-            _, ext = os.path.splitext(file_name)
+            file_tokens = file_name.split('.')
+            ext = '.'.join(file_tokens[1:])  # Get all tokens after the first period
             extension_counter[ext] += 1
 
         ext, _ = extension_counter.most_common(1)[0]

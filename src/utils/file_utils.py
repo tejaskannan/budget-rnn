@@ -22,7 +22,8 @@ def iterate_files(folder: str, pattern: Optional[str] = None) -> Iterable[str]:
     if pattern is None:
         pattern = r'.'
 
-    for file_name in os.listdir(folder):
+    # Always sort files to ensure consistent retrieval
+    for file_name in sorted(os.listdir(folder)):
         match = re.match(pattern, file_name)
         if match is not None:
             yield os.path.join(folder, file_name)

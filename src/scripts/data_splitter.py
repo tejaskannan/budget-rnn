@@ -6,13 +6,14 @@ from collections import defaultdict, Counter
 
 from utils.constants import TRAIN, VALID, TEST, SAMPLE_ID, DATA_FIELDS, SMALL_NUMBER, INDEX_FILE
 from utils.file_utils import save_by_file_suffix, make_dir
-from utils.data_writer import DataWriter
-from dataset.data_manager import InMemoryDataManager
+from utils.data_writer import DataWriter, NpzDataWriter
+from dataset.data_manager import get_data_manager
 
 
 PARTITIONS = [TRAIN, VALID, TEST]
 MODULUS = 2**16
 CHUNK_SIZE = 10000
+FILE_TYPES = ['jsonl.gz', 'pkl.gz', 'npz']
 
 
 def compute_hash(sample: Dict[str, Any]) -> int:
@@ -33,16 +34,17 @@ def get_partition_index(sample: Dict[str, Any], fractions: List[float]) -> int:
     # Default to TRAIN
     return 0
 
-def split_dataset(input_folder: str, output_folder: str, fractions: List[float], file_prefix: str, chunk_size: int):
+def split_dataset(input_folder: str, output_folder: str, fractions: List[float], file_prefix: str, chunk_size: int, file_type: str):
     assert len(fractions) == len(PARTITIONS), f'Must provide enough fractions to account for all partitions'
+    assert file_type in FILE_TYPES, f'Invalid file type: {file_type}'
 
     # Make output folder if necessary
     make_dir(output_folder)
 
     # Create the data manager
-    data_manager = InMemoryDataManager(input_folder, SAMPLE_ID, DATA_FIELDS, 'jsonl.gz')
+    data_manager = get_data_manager(input_folder, SAMPLE_ID, DATA_FIELDS, extension=file_type)
     data_manager.load()
-    data_iterator = data_manager.iterate(should_shuffle=False, batch_size=None)
+    data_iterator = data_manager.iterate(should_shuffle=False, batch_size=chunk_size)
     num_samples = data_manager.length
 
     # Get folders for each partition
@@ -53,26 +55,35 @@ def split_dataset(input_folder: str, output_folder: str, fractions: List[float],
     # Track counts per partition
     partition_counters: Counter = Counter()
 
-    with DataWriter(train_folder, file_prefix='data', file_suffix='jsonl.gz', chunk_size=chunk_size) as train_writer, \
-            DataWriter(valid_folder, file_prefix='data', file_suffix='jsonl.gz', chunk_size=chunk_size) as valid_writer, \
-            DataWriter(test_folder, file_prefix='data', file_suffix='jsonl.gz', chunk_size=chunk_size) as test_writer:
-        
+    # Create data writers
+    if file_type == 'npz':
         partition_writers = {
-            TRAIN: train_writer,
-            VALID: valid_writer,
-            TEST: test_writer
+            TRAIN: NpzDataWriter(train_folder, file_prefix=file_prefix, file_suffix=file_type, chunk_size=chunk_size, sample_id_name=SAMPLE_ID, data_fields=DATA_FIELDS, mode='w'),
+            VALID: NpzDataWriter(valid_folder, file_prefix=file_prefix, file_suffix=file_type, chunk_size=chunk_size, sample_id_name=SAMPLE_ID, data_fields=DATA_FIELDS, mode='w'),
+            TEST: NpzDataWriter(test_folder, file_prefix=file_prefix, file_suffix=file_type, chunk_size=chunk_size, sample_id_name=SAMPLE_ID, data_fields=DATA_FIELDS, mode='w')
+        }
+    else:
+        partition_writers = {
+            TRAIN: DataWriter(train_folder, file_prefix=file_prefix, file_suffix=file_type, chunk_size=chunk_size, mode='w'),
+            VALID: DataWriter(valid_folder, file_prefix=file_prefix, file_suffix=file_type, chunk_size=chunk_size, mode='w'),
+            TEST: DataWriter(test_folder, file_prefix=file_prefix, file_suffix=file_type, chunk_size=chunk_size, mode='w')
         }
 
-        for index, sample in enumerate(data_iterator):
-            partition_index = get_partition_index(sample, fractions)
-            partition_folder = PARTITIONS[partition_index]
-        
-            partition_writers[partition_folder].add(sample)
-            partition_counters[partition_folder] += 1
+    # Write to chunked files
+    for index, sample in enumerate(data_iterator):
+        partition_index = get_partition_index(sample, fractions)
+        partition_folder = PARTITIONS[partition_index]
+    
+        partition_writers[partition_folder].add(sample)
+        partition_counters[partition_folder] += 1
 
-            if (index + 1) % chunk_size == 0:
-                print(f'Completed {index + 1}/{num_samples} samples.', end='\r')
+        if (index + 1) % chunk_size == 0:
+            print(f'Completed {index + 1}/{num_samples} samples.', end='\r')
     print()
+
+    # Flush any remaining data samples
+    for writer in partition_writers.values():
+        writer.flush()
 
     # Print out metrics and save metadata
     print('====== RESULTS ======')
@@ -97,6 +108,7 @@ if __name__ == '__main__':
     parser.add_argument('--valid-frac', type=float, required=True)
     parser.add_argument('--test-frac', type=float)
     parser.add_argument('--file-prefix', type=str, default='data')
+    parser.add_argument('--file-type', type=str, choices=['jsonl.gz', 'pkl.gz', 'npz'])
     parser.add_argument('--chunk-size', type=int, default=1000)
     args = parser.parse_args()
 
@@ -114,4 +126,5 @@ if __name__ == '__main__':
                   output_folder=args.output_folder,
                   fractions=fractions,
                   chunk_size=args.chunk_size,
-                  file_prefix=args.file_prefix)
+                  file_prefix=args.file_prefix,
+                  file_type=args.file_type)

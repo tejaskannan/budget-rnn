@@ -1,42 +1,51 @@
 import os
 from argparse import ArgumentParser
 from random import random
+from typing import List, Any
 
 from utils.data_writer import DataWriter, NpzDataWriter
 from utils.constants import SAMPLE_ID, DATA_FIELDS, OUTPUT
+from utils.file_utils import save_by_file_suffix
 from dataset.data_manager import get_data_manager
 
 
-def sample_dataset(input_folder: str, output_folder: str, zero_frac: float, one_frac: float, chunk_size: int, file_prefix: str, is_npz: bool):
+OVERFLOW_NAME = 'overflow'
+
+
+def sample_dataset(input_folder: str, output_folder: str, zero_frac: float, one_frac: float, chunk_size: int, file_prefix: str, file_type: str):
 
     # Load input data
-    extension = 'npz' if is_npz else None
-    data_manager = get_data_manager(input_folder, SAMPLE_ID, DATA_FIELDS, extension=extension)
+    data_manager = get_data_manager(input_folder, SAMPLE_ID, DATA_FIELDS, extension=file_type)
     data_manager.load()
     data_iterator = data_manager.iterate(should_shuffle=False, batch_size=100)
     num_samples = data_manager.length
 
-    if is_npz:
-        writer = NpzDataWriter(output_folder, file_prefix=file_prefix, file_suffix='npz', chunk_size=chunk_size, sample_id_name=SAMPLE_ID, data_fields=DATA_FIELDS)
-    else:
-        writer = DataWriter(output_folder, file_prefix=file_prefix, file_suffix='jsonl.gz', chunk_size=chunk_size)
+    # Create overflow folder
+    overflow_folder = os.path.join(output_folder, OVERFLOW_NAME)
 
+    if file_type == 'npz':
+        writer = NpzDataWriter(output_folder, file_prefix=file_prefix, file_suffix=file_type, chunk_size=chunk_size, sample_id_name=SAMPLE_ID, data_fields=DATA_FIELDS, mode='w')
+        overflow_writer = NpzDataWriter(overflow_folder, file_prefix=OVERFLOW_NAME, file_suffix=file_type, chunk_size=chunk_size, sample_id_name=SAMPLE_ID, data_fields=DATA_FIELDS, mode='w')
+    else:
+        writer = DataWriter(output_folder, file_prefix=file_prefix, file_suffix=file_type, chunk_size=chunk_size, mode='w')
+        overflow_writer = DataWriter(overflow_folder, file_prefix=OVERFLOW_NAME, file_suffix=file_type, chunk_size=chunk_size, mode='w')
+
+    overflow: List[Any] = []
     for index, sample in enumerate(data_iterator):
         # Sample to omit some labels
         r = random()
-        if sample[OUTPUT] == 0 and r > zero_frac:
-            continue
-        elif sample[OUTPUT] == 1 and r > one_frac:
-            continue
+        if (sample[OUTPUT] == 0 and r > zero_frac) or (sample[OUTPUT] == 1 and r > one_frac):
+            overflow_writer.add(sample)
+        else:
+            writer.add(sample)
 
-        writer.add(sample)
-        
         if (index + 1) % chunk_size == 0:
             print(f'Completed {index + 1}/{num_samples} samples.', end='\r')
     print()
 
     # Write any remaining entries
     writer.close()
+    overflow_writer.close()
 
 
 if __name__ == '__main__':
@@ -47,7 +56,7 @@ if __name__ == '__main__':
     parser.add_argument('--one-frac', type=float, required=True)
     parser.add_argument('--chunk-size', type=int, default=5000)
     parser.add_argument('--file-prefix', type=str, default='data')
-    parser.add_argument('--npz', action='store_true')
+    parser.add_argument('--file-type', type=str, choices=['npz', 'jsonl.gz', 'pkl.gz'])
     args = parser.parse_args()
 
     assert os.path.exists(args.input_folder), f'The folder {args.input_folder} does not exist!'
@@ -60,4 +69,4 @@ if __name__ == '__main__':
                    one_frac=args.one_frac,
                    chunk_size=args.chunk_size,
                    file_prefix=args.file_prefix,
-                   is_npz=args.npz)
+                   file_type=args.file_type)
