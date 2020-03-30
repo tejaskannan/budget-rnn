@@ -5,8 +5,9 @@ from typing import Union, Dict, Any, DefaultDict, List, Generator, Iterable
 from collections import defaultdict
 from more_itertools import ichunked
 
-from utils.npz_data_manager import NpzDataManager
+# from utils.npz_data_manager import NpzDataManager
 from utils.constants import SAMPLE_ID, DATA_FIELDS
+from .data_manager import get_data_manager
 
 
 class DataSeries(Enum):
@@ -33,9 +34,9 @@ class Dataset:
 
         # Create data managers for each partition
         self.dataset = {
-            DataSeries.TRAIN: NpzDataManager(self.data_folders[DataSeries.TRAIN], SAMPLE_ID, DATA_FIELDS),
-            DataSeries.VALID: NpzDataManager(self.data_folders[DataSeries.VALID], SAMPLE_ID, DATA_FIELDS),
-            DataSeries.TEST: NpzDataManager(self.data_folders[DataSeries.TEST], SAMPLE_ID, DATA_FIELDS)
+            DataSeries.TRAIN: get_data_manager(self.data_folders[DataSeries.TRAIN], SAMPLE_ID, DATA_FIELDS),
+            DataSeries.VALID: get_data_manager(self.data_folders[DataSeries.VALID], SAMPLE_ID, DATA_FIELDS),
+            DataSeries.TEST: get_data_manager(self.data_folders[DataSeries.TEST], SAMPLE_ID, DATA_FIELDS)
         }
 
     def tensorize(self, sample: Dict[str, Any], metadata: Dict[str, Any]) -> Dict[str, np.ndarray]:

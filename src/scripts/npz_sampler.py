@@ -4,8 +4,8 @@ from argparse import ArgumentParser
 from typing import Dict, List, Any
 
 from utils.constants import DATA_FIELD_FORMAT, SAMPLE_ID, OUTPUT, DATA_FIELDS, INDEX_FILE
-from utils.npz_data_manager import NpzDataManager
 from utils.file_utils import make_dir, save_by_file_suffix
+from dataset.data_manager import NpzDataManager
 
 
 def sample_dataset(input_folder: str, output_folder: str, zero_frac: float, one_frac: float, chunk_size: int, file_prefix: str):

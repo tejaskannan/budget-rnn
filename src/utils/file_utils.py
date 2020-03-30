@@ -4,6 +4,7 @@ import json
 import codecs
 import pickle
 import os
+import numpy as np
 
 from collections import OrderedDict
 from typing import Union, Optional, Iterable, Any
@@ -34,6 +35,10 @@ def read_by_file_suffix(file_path: str) -> Any:
         return read_pickle_gz(file_path)
     elif file_path.endswith('.json'):
         return read_json(file_path)
+    elif file_path.endswith('.pkl'):
+        return read_pickle(file_path)
+    elif file_path.endswith('.npz'):
+        return read_npz(file_path)
     else:
         raise ValueError(f'Cannot read file: {file_path}')
 
@@ -45,6 +50,10 @@ def save_by_file_suffix(data: Any, file_path: str):
         return save_pickle_gz(data, file_path)
     elif file_path.endswith('.json'):
         return save_json(data, file_path)
+    elif file_path.endswith('.pkl'):
+        return save_pickle(data, file_path)
+    elif file_path.endswith('.npz'):
+        return save_npz(data, file_path)
     else:
         raise ValueError(f'Cannot save into file: {file_path}')
 
@@ -101,6 +110,31 @@ def save_json(data: Any, file_path: str):
     assert file_path.endswith('.json'), 'Must provide a json file.'
     with open(file_path, 'w') as f:
         json.dump(data, f)
+
+
+def read_pickle(file_path: str) -> Any:
+    assert file_path.endswith('.pkl'), 'Must provide a pickle file.'
+    with open(file_path, 'rb') as f:
+        return pickle.load(file_path)
+
+
+def save_pickle(data: Any, file_path: str):
+    assert file_path.endswith('.pkl'), 'Must provide a pickle file.'
+    with open(file_path, 'wb') as f:
+        pickle.dump(data, f)
+
+
+def read_npz(file_path: str) -> Any:
+    assert file_path.endswith('.npz'), 'Must provide a npz file.'
+    return np.load(file_path)
+
+
+def save_npz(data: Any, file_path: str):
+    assert file_path.endswith('.npz'), 'Must provide a npz file.'
+    if isinstance(data, dict):
+        np.savez_compressed(file_path, **data)
+    else:
+        np.savez_compressed(file_path, data)
 
 
 def extract_model_name(model_file: str) -> Optional[str]:

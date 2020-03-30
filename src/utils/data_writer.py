@@ -1,66 +1,110 @@
-import numpy as np
 import os
-from argparse import ArgumentParser
 
-from utils.constants import SAMPLE_ID, DATA_FIELD_FORMAT, INDEX_FILE
-from utils.file_utils import save_by_file_suffix
+from typing import List, Any, Iterable
+
+from utils.file_utils import save_by_file_suffix, iterate_files, make_dir
+from utils.constants import INDEX_FILE, DATA_FIELD_FORMAT
 
 
-def merge_npz_files(input_folder: str, output_folder: str, file_prefix: str, chunk_size: int):
-    """
-    Merges all arrays stored in NPZ files in the given input folder into fewer NPZ files
-    with unique sample ids.
-    """
-    # Get all npz files
-    data_files = [os.path.join(input_folder, name) for name in os.listdir(input_folder) if name.endswith('.npz')]
+class DataWriter:
 
-    if not os.path.exists(output_folder):
-        os.mkdir(output_folder)
+    def __init__(self, output_folder: str, file_prefix: str, file_suffix: str, chunk_size: int):
+        self._output_folder = output_folder
+        self._file_prefix = file_prefix
+        self._file_suffix = file_suffix
+        self._chunk_size = chunk_size
 
-    # Dictionary to hold elements
-    elements: Dict[str, np.ndarray] = dict()
-    data_index: Dict[int, int] = dict()
+        self._file_index = 0
+        self._dataset: List[Any] = []
 
-    # Track index of output file
-    file_index = 0
+        # Create the output directory if necessary
+        make_dir(self._output_folder)
 
-    # Merge arrays in the given files
-    for sample_id, data_file in enumerate(data_files):
+    @property
+    def output_folder(self) -> str:
+        return self._output_folder
 
-        # Copy sample into the new dictionary
-        sample = np.load(data_file, mmap_mode='r')
-        for field in sample.files:
+    @property
+    def file_prefix(self) -> str:
+        return self._file_prefix
+    
+    @property
+    def file_suffix(self) -> str:
+        return self._file_suffix
+
+    @property
+    def chunk_size(self) -> int:
+        return self._chunk_size
+
+    @property
+    def file_index(self) -> int:
+        return self._file_index
+
+    def current_output_file(self) -> str:
+        file_name = f'{self.file_prefix}{self.file_index:03}.{self.file_suffix}'
+        return os.path.join(self.output_folder, file_name)
+
+    def increment_file_index(self):
+        self._file_index += 1
+
+    def add(self, data: Any):
+        self._dataset.append(data)
+        if len(self._dataset) >= self.chunk_size:
+            self.flush()
+
+    def add_many(self, data: Iterable[Any]):
+        for element in data:
+            self.add(data)
+
+    def flush(self):
+        save_by_file_suffix(self._dataset, self.current_output_file())
+        self._dataset = []  # Reset the data list
+        self.increment_file_index()
+
+    def close(self):
+        self.flush()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.flush()
+
+
+class NpzDataWriter(DataWriter):
+
+    def __init__(self, output_folder: str, file_prefix: str, file_suffix: str, chunk_size: int, sample_id_name: str, data_fields: List[str]):
+        super().__init__(output_folder, file_prefix, file_suffix, chunk_size)
+
+        self._dataset: Dict[str, Any] = dict()
+        self._index: Dict[int, int] = dict()
+        self._sample_id_name = sample_id_name
+        self._data_fields = data_fields
+        self._length = 0
+
+    def add(self, data: Any):
+        assert isinstance(data, dict), 'Can only add dictionaries to npz files.'
+
+        # Create fields with sample id
+        sample_dict: Dict[str, Any] = dict()
+        sample_id = data[self._sample_id_name]
+        for field in self._data_fields:
             field_name = DATA_FIELD_FORMAT.format(field, sample_id)
-            elements[field_name] = sample[field]
+            sample_dict[field_name] = data[field]
 
-        # Add sample to lookup index
-        data_index[sample_id] = file_index
+        self._dataset.update(**sample_dict)
+        self._index[sample_id] = self.file_index
+        self._length += 1
 
-        # Save chunk
-        if (sample_id + 1) % chunk_size == 0:
-            output_file = os.path.join(output_folder, f'{file_prefix}{file_index:03}.npz')
-            np.savez_compressed(output_file, **elements)
-            elements = dict()
-            file_index += 1
+        if self._length >= self.chunk_size:
+            self.flush()
 
-    # Save the reverse index
-    index_file = os.path.join(output_folder, INDEX_FILE)
-    save_by_file_suffix(data_index, index_file)
+    def flush(self):
+        # Save data and index
+        save_by_file_suffix(self._dataset, self.current_output_file())
+        save_by_file_suffix(self._index, os.path.join(self.output_folder, INDEX_FILE))
+        self.increment_file_index()
 
-    # Clean up any remaining elements
-    if len(elements) > 0:
-        output_file = os.path.join(output_folder, f'{file_prefix}{file_index:03}.npz')
-        np.savez_compressed(output_file, **elements)
-
-
-if __name__ == '__main__':
-    parser = ArgumentParser('Utility script to merge NPZ files')
-    parser.add_argument('--input-folder', type=str, required=True)
-    parser.add_argument('--output-folder', type=str, required=True)
-    parser.add_argument('--file-prefix', type=str, default='data')
-    parser.add_argument('--chunk-size', type=int, default=1000)
-    args = parser.parse_args()
-
-    assert os.path.exists(args.input_folder), f'The folder {args.input_folder} does not exist!'
-
-    merge_npz_files(args.input_folder, args.output_folder, args.file_prefix, args.chunk_size)
+        # Reset data. Keep the index as is--we always overwrite the index upon flushing
+        self._dataset = dict()
+        self._length = 0

@@ -5,8 +5,8 @@ from argparse import ArgumentParser
 from typing import Dict, List, Any
 
 from utils.constants import TRAIN, VALID, TEST, SAMPLE_ID, DATA_FIELDS, SMALL_NUMBER, DATA_FIELD_FORMAT, INDEX_FILE
-from utils.npz_data_manager import NpzDataManager
 from utils.file_utils import save_by_file_suffix
+from dataset.data_manager import NpzDataManager
 
 
 PARTITIONS = [TRAIN, VALID, TEST]
@@ -56,8 +56,6 @@ def split_dataset(input_folder: str, output_folder: str, fractions: List[float],
     partition_file_indexes = [0 for _ in PARTITIONS]
     partition_counts = [0 for _ in PARTITIONS]
     partition_indexes: List[Dict[int, int]] = [dict() for _ in PARTITIONS]
-
-    normalize_array = np.array([[540, 960, 540, 960, 540, 960, 540, 960]])
 
     for index, sample in enumerate(data_iterator):
         partition_index = get_partition_index(sample, fractions)
@@ -122,7 +120,7 @@ def split_dataset(input_folder: str, output_folder: str, fractions: List[float],
 
 
 if __name__ == '__main__':
-    parser = ArgumentParser('Utility script to split a dataset into folds.')
+    parser = ArgumentParser('Utility script to split an NPZ dataset into folds.')
     parser.add_argument('--input-folder', type=str, required=True)
     parser.add_argument('--output-folder', type=str, required=True)
     parser.add_argument('--train-frac', type=float, required=True)
