@@ -108,3 +108,6 @@ src/saved_models/*
 src/datasets/*
 src/raw_datasets/*
 *.npz
+*.jsonl.gz
+*.png
+*.pdf

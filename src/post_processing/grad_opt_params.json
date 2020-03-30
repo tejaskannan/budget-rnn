@@ -1,15 +1,16 @@
 {
     "name": "gradient",
     "batch_size": 256,
-    "iterations": 100,
-    "instances": 1,
-    "level_weight": 1.5,
+    "iterations": 500,
+    "instances": 4,
+    "level_weight": 1.0,
     "opt_params": {
         "sharpen_factor": 25.0,
         "tolerance": 1e-7,
         "update_type": "adam",
         "update_params": {
             "learning_rate": 0.1,
+            "anneal_rate": 0.999,
             "first_momentum": 0.9,
             "second_momentum": 0.999
         }

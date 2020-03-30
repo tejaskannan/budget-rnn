@@ -22,7 +22,7 @@
 		"pool_mode": "final_state",
 		"model_type": "sample",
 		"share_cell_weights": true,
-		"loss_weights": [1, 1, 1, 1],
+		"loss_weights": 1.0,
         "link_levels": false,
         "loss_mode": "cross-entropy",
         "fusion_mode": "gate",

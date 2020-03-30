@@ -1,8 +1,8 @@
 {
     "name": "genetic",
     "batch_size": 256,
-    "iterations": 100,
-    "instances": 1,
+    "iterations": 256,
+    "instances": 4,
     "level_weight": 0.05,
     "opt_params": {
         "population_size": 128,
