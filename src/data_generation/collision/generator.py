@@ -238,6 +238,13 @@ def main(params_file: str):
         except subprocess.CalledProcessError:
             pass
 
+    # Save the parameters to logging purposes
+    _, params_file_name = os.path.split(params_file)
+    data_folder, _ = os.path.split(output_file)
+    params_file_backup = os.path.join(data_folder, params_file_name)
+    with open(params_file_backup, 'w') as f:
+        json.dump(params, f)
+
 
 if __name__ == '__main__':
     with open('config.json', 'r') as config_file:

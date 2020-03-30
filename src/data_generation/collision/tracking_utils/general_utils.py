@@ -18,12 +18,15 @@ def softmax(array: Union[np.array, List[float]]) -> np.array:
 def get_random_point(points: List[Dict[str, List[float]]]) -> List[float]:
     bound_index = np.random.randint(low=0, high=len(points))
     bound = points[bound_index]
-    
+
     low, high = bound['low'], bound['high']
-    
+
     point = []
     for low_val, high_val in zip(low, high):
-        p = np.random.uniform(low=low_val, high=high_val + SMALL_NUMBER)
-        point.append(p)
+        if abs(high_val - low_val) < SMALL_NUMBER:
+            point.append(low_val)
+        else:
+            p = np.random.uniform(low=low_val, high=high_val + SMALL_NUMBER)
+            point.append(p)
 
     return point

@@ -2,23 +2,20 @@
 	"obj_configs": [
         {
             "type": "ball", 
-            "locations": [ { "low": [2, 0.5, 2], "high": [3, 1.5, 2] }, { "low": [2.5, 1, 2], "high": [3, 3, 2] }],
+            "locations": [ { "low": [1, 1, 2], "high": [4, 4, 2] } ],
             "size": 0.5,
             "color": [1, 0, 0] 
         },
         {
             "type": "ball",
-            "locations": [ { "low": [-3, -2, 2], "high": [-2, -1.5, 2] }, { "low": [-2, -1, 2], "high": [-1, 1, 2] } ],
+            "locations": [ { "low": [-4, -4, 2], "high": [-1, -1, 2] } ],
             "size": 0.5,
             "color": [0, 1, 0]
         }
     ],
 	"lamp_location": [-3, 0, 12],
-     	"plane_dimensions": [20, 20, 0],
+    "plane_dimensions": [20, 20, 0],
 	"output_folder": "scenes/collision_scenes",
-	"camera_noise": 0.1,
-	"salt_pepper_prob": 0.0,
-	"motion_noise": 0.1,
 	"camera_locations": [
 		{
 			"location": [3, -3, 5],
@@ -27,21 +24,32 @@
         {
 			"location": [-3, -3, 5],
 			"rotation": [0.5, 0, -0.5]
-		}
+		},
+        {
+            "location": [5, 5, 5],
+            "rotation": [-0.9, -0.25, -0.5]
+        },
+        {
+            "location": [-2, -5, 5],
+            "rotation": [0.5, 0, -0.25]
+        },
+        {
+            "location": [-5, 5, 5],
+            "rotation": [-0.5, -0.4, -0.1]
+        }
 	],
 	"frame_delay": 5,
     "iters": 12,
-    "trials": 5000,
+    "trials": 1,
 	"motion_model": "collision",
 	"motion_params": {
         "x_bound": [-10, 10],
         "y_bound": [-10, 10],
         "random_factor": 0.5,
-        "collision_positions": [ { "low": [-0.5, -0.5, 2], "high": [1.5, 1.5, 2] }, { "low": [1, 1, 2], "high": [3, 3, 2] }, { "low": [-3, -3, 2], "high": [-1, -1, 2] } ],
+        "collision_positions": [ { "low": [-3, -3, 2], "high": [3, 3, 2] } ],
         "force_collision": true
 	},
-    "features_file_prefix": "image_features_2/collisions",
+    "features_file_prefix": "train_images_v2/data",
     "label": 1,
-    "num_feature_contours": 2,
-    "image_scale": 0.03
+    "image_scale": 0.05
 }
