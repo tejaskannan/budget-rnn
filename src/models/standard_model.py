@@ -7,7 +7,7 @@ from collections import defaultdict
 from typing import Optional, Dict, List, Any, DefaultDict, Iterable
 
 from layers.basic import mlp, pool_sequence
-from layers.output_layers import OutputType, compute_binary_classification_output, compute_regression_output
+from layers.output_layers import OutputType, compute_binary_classification_output
 from layers.embedding_layer import embedding_layer
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
@@ -15,6 +15,7 @@ from utils.tfutils import pool_rnn_outputs, get_activation, tf_rnn_cell, get_rnn
 from utils.constants import ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS, PREDICTION, F1_SCORE, LOGITS, NODE_REGEX_FORMAT
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, INPUT_SCALER, OUTPUT_SCALER, SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric, ALL_LATENCY
+from utils.loss_utils import binary_classification_loss, f1_score_loss
 from .base_model import Model
 
 
@@ -256,23 +257,39 @@ class StandardModel(Model):
 
         if self.output_type == OutputType.CLASSIFICATION:
             classification_output = compute_binary_classification_output(model_output=output,
-                                                                         labels=self._placeholders[OUTPUT],
-                                                                         false_pos_weight=1.0,
-                                                                         false_neg_weight=1.0,
-                                                                         mode=self.hypers.model_params['loss_mode'])
+                                                                         labels=self._placeholders[OUTPUT])
 
             self._ops[LOGITS] = classification_output.logits
             self._ops[PREDICTION] = classification_output.predictions
-            self._ops[LOSS] = classification_output.loss
             self._ops[ACCURACY] = classification_output.accuracy
             self._ops[F1_SCORE] = classification_output.f1_score
         else:
-            regression_output = compute_regression_output(model_output=output, expected_otuput=self._placeholders[OUTPUT])
-            self._ops[PREDICTION] = regression_output.predictions
-            self._ops[LOSS] = regression_output.loss
+            self._ops[PREDICTION] = output
 
     def make_loss(self):
-        pass  # Loss made during model creation
+        expected_output = self._placeholders[OUTPUT]
+        predictions = self._ops[PREDICTION]
+
+        if self.output_type == OutputType.CLASSIFICATION:
+            loss_mode = self.hypers.model_params['loss_mode'].lower()
+
+            logits = self._ops[LOGITS]
+            predicted_probs = tf.math.sigmoid(logits)
+
+            if loss_mode in ('cross-entropy', 'accuracy', 'cross_entropy'):
+                self._ops[LOSS] = binary_classification_loss(predicted_probs=predicted_probs,
+                                                             predictions=predictions,
+                                                             labels=expected_output,
+                                                             pos_weight=1.0,
+                                                             neg_weight=1.0)
+            elif loss_mode in ('f1', 'f1-score', 'f1_score'):
+                self._ops[LOSS] = f1_score_loss(predicted_probs=predicted_probs,
+                                                labels=expected_output)
+            else:
+                raise ValueError(f'Unknown loss mode: {loss_mode}')
+        else:
+            self._ops[LOSS] = tf.reduce_mean(tf.square(predictions - expected_output))
+
 
     def compute_flops(self, level: int) -> int:
         """

@@ -2,7 +2,7 @@ import os
 import numpy as np
 from argparse import ArgumentParser
 from collections import namedtuple
-from typing import Dict, Union, List, Optional
+from typing import Dict, Union, List, Optional, Tuple, Any
 
 from models.adaptive_model import AdaptiveModel
 from dataset.dataset import DataSeries
@@ -58,6 +58,27 @@ def get_model(model_name: str, hypers: HyperParameters, save_folder: str) -> Ada
     model = AdaptiveModel(hypers, save_folder, is_train=False)
     model.restore(name=model_name, is_train=False, is_frozen=False)
     return model
+
+
+def get_serialized_info(model_path: str, dataset_folder: Optional[str]) -> Tuple[AdaptiveModel, RNNSampleDataset, Dict[str, Any]]:
+    save_folder, model_file = os.path.split(model_path)
+
+    model_name = extract_model_name(model_file)
+    assert model_name is not None, f'Could not extract name from file: {model_file}'
+
+    # Extract hyperparameters
+    hypers_path = os.path.join(save_folder, HYPERS_PATH.format(model_name))
+    hypers = HyperParameters.create_from_file(hypers_path)
+
+    dataset = get_dataset(model_name, save_folder, dataset_folder)
+    model = get_model(model_name, hypers, save_folder)
+
+    # Get test log
+    test_log_path = os.path.join(save_folder, TEST_LOG_PATH.format(model_name))
+    assert os.path.exists(test_log_path), f'Must perform model testing before post processing'
+    test_log = list(read_by_file_suffix(test_log_path))[0]
+
+    return model, dataset, test_log
 
 
 def evaluate_thresholds(model: AdaptiveModel,
@@ -126,23 +147,25 @@ def evaluate_thresholds(model: AdaptiveModel,
                             flops=avg_flops)
 
 
-def optimize_thresholds(optimizer_params: Dict[str, Union[float, int, str]], path: str, dataset_folder: Optional[str]):
-    save_folder, model_file = os.path.split(path)
-
+def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model: AdaptiveModel, dataset: RNNSampleDataset, test_log: Dict[str, Any]):
+    # Get model save folder and name for later result saving
+    save_folder, model_file = os.path.split(model_path)
     model_name = extract_model_name(model_file)
-    assert model_name is not None, f'Could not extract name from file: {model_file}'
 
-    # Extract hyperparameters
-    hypers_path = os.path.join(save_folder, HYPERS_PATH.format(model_name))
-    hypers = HyperParameters.create_from_file(hypers_path)
+   # model_name = extract_model_name(model_file)
+   # assert model_name is not None, f'Could not extract name from file: {model_file}'
 
-    dataset = get_dataset(model_name, save_folder, dataset_folder)
-    model = get_model(model_name, hypers, save_folder)
+   # # Extract hyperparameters
+   # hypers_path = os.path.join(save_folder, HYPERS_PATH.format(model_name))
+   # hypers = HyperParameters.create_from_file(hypers_path)
 
-    # Get test log
-    test_log_path = os.path.join(save_folder, TEST_LOG_PATH.format(model_name))
-    assert os.path.exists(test_log_path), f'Must perform model testing before post processing'
-    test_log = list(read_by_file_suffix(test_log_path))[0]
+   # dataset = get_dataset(model_name, save_folder, dataset_folder)
+   # model = get_model(model_name, hypers, save_folder)
+
+   # # Get test log
+   # test_log_path = os.path.join(save_folder, TEST_LOG_PATH.format(model_name))
+   # assert os.path.exists(test_log_path), f'Must perform model testing before post processing'
+   # test_log = list(read_by_file_suffix(test_log_path))[0]
 
     print('Starting optimization')
 
@@ -211,20 +234,34 @@ def optimize_thresholds(optimizer_params: Dict[str, Union[float, int, str]], pat
     # Save new results
     test_log[SCHEDULED_OPTIMIZED] = result_to_dict(final_result)
     test_log[OPTIMIZED_RESULTS] = list(map(result_to_dict, test_results))
-    optimized_test_log_path = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format(optimizer_params['name'], model_name))
+    optimized_test_log_path = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format(optimizer_params['name'], optimizer_params['level_weight'], model_name))
     save_by_file_suffix([test_log], optimized_test_log_path)
 
 
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--model-path', type=str, required=True)
-    parser.add_argument('--optimizer-params', type=str, required=True)
+    parser.add_argument('--optimizer-params', type=str, nargs='+')
     parser.add_argument('--dataset-folder', type=str)
     args = parser.parse_args()
 
-    optimizer_params_file = args.optimizer_params
-    assert os.path.exists(optimizer_params_file), f'The file {optimizer_params_file} does not exist'
+    # Extract all parameters first to ensure they exist
+    params: List[Dict[str, Any]] = []
+    for optimizer_params_file in args.optimizer_params:
+        assert os.path.exists(optimizer_params_file), f'The file {optimizer_params_file} does not exist'
 
-    optimizer_params = read_by_file_suffix(optimizer_params_file)
+        optimizer_params = read_by_file_suffix(optimizer_params_file)
+        params.append(optimizer_params)
 
-    optimize_thresholds(optimizer_params, args.model_path, args.dataset_folder)
+    # Retrieved saved information
+    model, dataset, test_log = get_serialized_info(args.model_path, args.dataset_folder)
+
+    # Run optimization
+    num_params = len(params)
+    for i, opt_params in enumerate(params):
+        print(f'========== Starting {i+1}/{num_params} ==========')
+        optimize_thresholds(optimizer_params=opt_params,
+                            model_path=args.model_path,
+                            model=model,
+                            dataset=dataset,
+                            test_log=test_log)

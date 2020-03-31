@@ -7,7 +7,7 @@ from utils.testing_utils import ClassificationMetric
 
 
 MODEL_TYPE_REGEX = re.compile(r'.*model-.*test-log-([^-]+)-.*')
-HEADERS = ['Model', ClassificationMetric.ACCURACY.name, ClassificationMetric.PRECISION.name, ClassificationMetric.RECALL.name, ClassificationMetric.F1_SCORE.name, ClassificationMetric.LATENCY.name]
+HEADERS = ['Model', ClassificationMetric.ACCURACY.name, ClassificationMetric.PRECISION.name, ClassificationMetric.RECALL.name, ClassificationMetric.F1_SCORE.name, ClassificationMetric.FLOPS.name]
 
 
 def get_model_type(test_log_file: str) -> str:
@@ -24,6 +24,8 @@ def create_table(test_log_files: List[str], digits: int, output_file: str):
         model_type = get_model_type(test_log_file)
 
         for series, model_results in test_log.items():
+            if not isinstance(model_results, dict):
+                continue
 
             series_name = series.replace('_', ' ').replace('prediction', 'level')
             series_name = ' '.join([t.capitalize() for t in series_name.split(' ')])
@@ -34,6 +36,7 @@ def create_table(test_log_files: List[str], digits: int, output_file: str):
                 metric_value = model_results[metric.name]
                 if metric == ClassificationMetric.LATENCY:
                     metric_value *= 1000.0
+
                 result_dict[metric.name] = metric_value
 
             result[series_name] = result_dict
@@ -62,7 +65,11 @@ def create_table(test_log_files: List[str], digits: int, output_file: str):
 
     table_str = '\n'.join(table_rows)
 
-    print(table_str)
+    if output_file is not None:
+        with open(output_file, 'w') as f:
+            f.write(table_str)
+    else:
+        print(table_str)
 
 
 if __name__ == '__main__':

@@ -11,7 +11,7 @@ from models.base_model import Model
 from layers.basic import rnn_cell, mlp
 from layers.cells.cells import make_rnn_cell, MultiRNNCell
 from layers.rnn import dynamic_rnn, dropped_rnn, RnnOutput
-from layers.output_layers import OutputType, compute_binary_classification_output, compute_regression_output
+from layers.output_layers import OutputType, compute_binary_classification_output
 from layers.embedding_layer import embedding_layer
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
@@ -19,6 +19,7 @@ from utils.tfutils import pool_rnn_outputs
 from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS
 from utils.constants import NODE_REGEX_FORMAT, DROPOUT_KEEP_RATE, MODEL, SCHEDULED_MODEL
 from utils.constants import INPUT_SCALER, OUTPUT_SCALER, INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH
+from utils.loss_utils import f1_score_loss, binary_classification_loss
 from utils.rnn_utils import *
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric, ALL_LATENCY
 from utils.np_utils import thresholded_predictions, sigmoid
@@ -422,20 +423,14 @@ class AdaptiveModel(Model):
 
             if self.output_type == OutputType.CLASSIFICATION:
                 classification_output = compute_binary_classification_output(model_output=output,
-                                                                             labels=self._placeholders[OUTPUT],
-                                                                             false_pos_weight=self.hypers.model_params['pos_weights'][i],
-                                                                             false_neg_weight=self.hypers.model_params['neg_weights'][i],
-                                                                             mode=self.hypers.model_params['loss_mode'])
+                                                                             labels=self._placeholders[OUTPUT])
 
                 self._ops[logits_name] = classification_output.logits
                 self._ops[prediction_name] = classification_output.predictions
-                self._ops[loss_name] = classification_output.loss
                 self._ops[accuracy_name] = classification_output.accuracy
                 self._ops[f1_score_name] = classification_output.f1_score
             else:
-                regression_output = compute_regression_output(model_output=output, expected_otuput=self._placeholders[OUTPUT])
-                self._ops[prediction_name] = regression_output.predictions
-                self._ops[loss_name] = regression_output.loss
+                self._ops[prediction_name] = output
 
             self._ops[gate_name] = rnn_gates.stack()  # [B, T, M, D]
             self._ops[state_name] = rnn_states.stack()  # [B, T, D]
@@ -451,9 +446,32 @@ class AdaptiveModel(Model):
     def make_loss(self):
         losses: List[tf.Tensor] = []
 
+        loss_mode = self.hypers.model_params['loss_mode'].lower()
+
         # The loss_op keys are ordered by the output level
         for level in range(self.num_outputs):
-            batch_loss = self._ops[get_loss_name(level)]
+            loss_name = get_loss_name(level)
+            expected_output = self._placeholders[OUTPUT]
+            predictions = self._ops[get_prediction_name(level)]
+
+            if self.output_type == OutputType.CLASSIFICATION:
+                logits = self.ops[get_logits_name(level)]
+                predicted_probs = tf.math.sigmoid(logits)
+
+                if loss_mode in ('cross-entropy', 'cross-entropy', 'accuracy'):
+                    self._ops[loss_name] = binary_classification_loss(predicted_probs=predicted_probs,
+                                                                      predictions=predictions,
+                                                                      labels=expected_output,
+                                                                      pos_weight=self.hypers.model_params['pos_weights'][level],
+                                                                      neg_weight=self.hypers.model_params['neg_weights'][level])
+                elif loss_mode in ('f1', 'f1_score', 'f1-score'):
+                    self._ops[loss_name] = f1_score_loss(predicted_probs=predicted_probs, labels=expected_output)
+                else:
+                    raise ValueError(f'Unknown loss mode: {loss_mode}')
+            else:  # Regression task
+                self._ops[loss_name] = tf.reduce_mean(tf.square(predictions - expected_output))  # MSE loss
+
+            batch_loss = self._ops[loss_name]
             losses.append(tf.reduce_mean(batch_loss))
 
         losses = tf.stack(losses)  # [N], N is the number of sequences

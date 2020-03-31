@@ -10,8 +10,8 @@ from utils.tfutils import tf_f1_score
 
 
 # Tuples to store output types
-ClassificationOutput = namedtuple('ClassificationOutput', ['logits', 'prediction_probs', 'predictions', 'loss', 'accuracy', 'f1_score'])
-RegressionOutput = namedtuple('RegressionOutput', ['predictions', 'loss'])
+ClassificationOutput = namedtuple('ClassificationOutput', ['logits', 'prediction_probs', 'predictions', 'accuracy', 'f1_score'])
+RegressionOutput = namedtuple('RegressionOutput', ['predictions'])
 
 
 # Enum to denote output layer type
@@ -20,40 +20,18 @@ class OutputType(Enum):
     REGRESSION = auto()
 
 
-def compute_regression_output(model_output: tf.Tensor, expected_output: tf.Tensor) -> RegressionOutput:
-    """
-    Uses the model output and expected output to compute the prediction and loss for this regression     task.
-    """
-    return RegressionOutput(predictions=model_output,
-                            loss=tf.reduce_mean(tf.square(model_output - expected_output)))
-
-
-def compute_binary_classification_output(model_output: tf.Tensor, labels: tf.Tensor, false_pos_weight: float, false_neg_weight: float, mode: str) -> ClassificationOutput:
+def compute_binary_classification_output(model_output: tf.Tensor, labels: tf.Tensor) -> ClassificationOutput:
     """
     Uses the model output and expected output to compute the classification output values for the
     given binary classification task.
 
     Args:
-        model_output: A [B, 1] tensor containing the model outputs for each batch sample
+        model_output: A [B, 1] tensor containing the model outputs (logits) for each batch sample
         labels: A [B] float tensor with the correct labels
-        false_pos_weight: Weight penalty for false positives
-        false_neg_weight: Weight penalty for false negatives
     """
     logits = model_output
     predicted_probs = tf.math.sigmoid(logits)
     predictions = tf.cast(predicted_probs > ONE_HALF, dtype=tf.float32)
-
-    mode = mode.lower()
-    if mode == 'cross-entropy':
-        loss = binary_classification_loss(predicted_probs=predicted_probs,
-                                          predictions=predictions,
-                                          labels=labels,
-                                          pos_weight=false_pos_weight,
-                                          neg_weight=false_neg_weight)
-    elif mode == 'f1':
-        loss = f1_score_loss(predicted_probs=predicted_probs, labels=labels)
-    else:
-        raise ValueError(f'Unknown loss mode {mode}. Expected one of [\'f1\', \'cross-entropy\'].')
 
     # Compute the batch-wise accuracy
     accuracy = tf.reduce_mean(1.0 - tf.abs(predictions - labels))
@@ -64,6 +42,5 @@ def compute_binary_classification_output(model_output: tf.Tensor, labels: tf.Ten
     return ClassificationOutput(logits=logits,
                                 prediction_probs=predicted_probs,
                                 predictions=predictions,
-                                loss=loss,
                                 accuracy=accuracy,
                                 f1_score=f1_score)
