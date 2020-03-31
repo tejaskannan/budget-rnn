@@ -12,9 +12,10 @@ from utils.file_utils import extract_model_name, read_by_file_suffix, save_by_fi
 from utils.rnn_utils import get_logits_name
 from utils.constants import HYPERS_PATH, TEST_LOG_PATH, TRAIN, VALID, TEST, METADATA_PATH, SMALL_NUMBER, BIG_NUMBER, OPTIMIZED_TEST_LOG_PATH
 from utils.constants import SCHEDULED_OPTIMIZED, OPTIMIZED_RESULTS, OUTPUT
-from utils.np_utils import thresholded_predictions, f1_score, precision, recall, sigmoid
+from utils.np_utils import f1_score, precision, recall, sigmoid
 from utils.testing_utils import ClassificationMetric
 from utils.rnn_utils import get_prediction_name
+from utils.threshold_utils import adaptive_inference, InferenceMode, TwoSidedThreshold
 
 from post_processing.threshold_optimizer_factory import get_optimizer
 
@@ -82,9 +83,10 @@ def get_serialized_info(model_path: str, dataset_folder: Optional[str]) -> Tuple
 
 
 def evaluate_thresholds(model: AdaptiveModel,
-                        thresholds: List[float],
+                        thresholds: List[TwoSidedThreshold],
                         dataset: RNNSampleDataset,
                         series: DataSeries,
+                        mode: InferenceMode,
                         test_log: Dict[str, Dict[str, float]]) -> EvaluationResult:
     test_dataset = dataset.minibatch_generator(series,
                                                metadata=model.metadata,
@@ -109,7 +111,7 @@ def evaluate_thresholds(model: AdaptiveModel,
         probabilities = sigmoid(logits_concat)
         labels = np.vstack(batch[OUTPUT])
 
-        output = thresholded_predictions(probabilities, thresholds)
+        output = adaptive_inference(probabilities, thresholds, mode=mode)
         predictions = output.predictions
         computed_levels = output.indices
 
@@ -143,7 +145,7 @@ def evaluate_thresholds(model: AdaptiveModel,
                             level=avg_levels,
                             latency=avg_latency,
                             all_latency=latencies,
-                            thresholds=list(thresholds),
+                            thresholds=[t._asdict() for t in thresholds],
                             flops=avg_flops)
 
 
@@ -175,11 +177,14 @@ def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model
                                   iterations=optimizer_params['iterations'],
                                   batch_size=optimizer_params['batch_size'],
                                   level_weight=optimizer_params['level_weight'],
+                                  mode=optimizer_params['mode'],
                                   **optimizer_params['opt_params'])
         output = optimizer.optimize(model, dataset)
         
         opt_outputs.append(output)
         print('==========')
+
+    mode = InferenceMode[optimizer_params['mode'].upper()]
 
     print('Completed optimization. Choosing the best model...')
     if len(opt_outputs) == 1:
@@ -189,6 +194,7 @@ def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model
                                            thresholds=best_thresholds,
                                            dataset=dataset,
                                            series=DataSeries.TEST,
+                                           mode=mode,
                                            test_log=test_log)
         test_results = [final_result]
     else:
@@ -202,12 +208,14 @@ def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model
                                                     thresholds=opt_output.thresholds,
                                                     dataset=dataset,
                                                     series=DataSeries.VALID,
+                                                    mode=mode,
                                                     test_log=test_log)
 
             test_result = evaluate_thresholds(model=model,
                                               thresholds=opt_output.thresholds,
                                               dataset=dataset,
                                               series=DataSeries.TEST,
+                                              mode=mode,
                                               test_log=test_log)
             test_results.append(test_result)
 
@@ -219,11 +227,12 @@ def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model
 
     print('Completed selection and optimization testing. Starting baseline evaluation....')
 
-    baseline = [0.5 for _ in output.thresholds]
+    baseline = [TwoSidedThreshold(lower=0.5, upper=0.5) for _ in output.thresholds]
     result = evaluate_thresholds(model=model,
                                  thresholds=baseline,
                                  dataset=dataset,
                                  series=DataSeries.TEST,
+                                 mode=InferenceMode.BINARY_ONE_SIDED,
                                  test_log=test_log)
     print_eval_result(result)
 

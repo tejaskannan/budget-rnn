@@ -1,10 +1,12 @@
 import numpy as np
 from typing import List, Tuple
 from enum import Enum, auto
+from copy import deepcopy
 
 from .randomized_threshold_optimizer import RandomizedThresholdOptimizer
 from utils.np_utils import softmax, linear_normalize, clip_by_norm
 from utils.constants import ONE_HALF
+from utils.threshold_utils import TwoSidedThreshold, order_threshold_lists
 
 
 class CrossoverType(Enum):
@@ -21,9 +23,9 @@ class MutationType(Enum):
     NORM = auto()
 
 
-UPPER_BOUND = 0.1
-LOWER_BOUND = 0.9
-MAX_NORM = 0.1
+UPPER_BOUND = 0.0
+LOWER_BOUND = 1.0
+MAX_NORM = 0.05
 
 
 class GeneticOptimizer(RandomizedThresholdOptimizer):
@@ -35,10 +37,12 @@ class GeneticOptimizer(RandomizedThresholdOptimizer):
                  crossover_type: str,
                  mutation_type: str,
                  steady_state_count: int,
+                 should_sort: bool,
                  batch_size: int,
                  iterations: int,
-                 level_weight: float):
-        super().__init__(iterations, batch_size, level_weight)
+                 level_weight: float,
+                 mode: str):
+        super().__init__(iterations, batch_size, level_weight, mode)
 
         # Validate parameters
         assert mutation_rate <= 1.0 and mutation_rate >= 0.0, f'Mutation rate must be in [0, 1]'
@@ -51,6 +55,7 @@ class GeneticOptimizer(RandomizedThresholdOptimizer):
         self._crossover_type = CrossoverType[crossover_type.upper()]
         self._mutation_type = MutationType[mutation_type.upper()]
         self._steady_state_count = steady_state_count
+        self._should_sort = should_sort
 
     @property
     def population_size(self) -> int:
@@ -76,22 +81,29 @@ class GeneticOptimizer(RandomizedThresholdOptimizer):
     def steady_state_count(self) -> int:
         return self._steady_state_count
 
-    def init(self, num_features: int) -> List[np.ndarray]:
+    @property
+    def should_sort(self) -> bool:
+        return self._should_sort
+
+    def init(self, num_features: int) -> List[TwoSidedThreshold]:
         population = []
         for _ in range(self.population_size - 1):
-            init = np.random.uniform(low=LOWER_BOUND, high=UPPER_BOUND, size=(num_features, ))
-            population.append(np.sort(init))
+            init = np.random.uniform(low=LOWER_BOUND, high=UPPER_BOUND, size=(num_features, 2))
+
+            thresholds = [TwoSidedThreshold(lower=np.min(x), upper=np.max(x)) for x in init]
+            population.append(thresholds)
 
         # Always initialize with an all-0.5 distribution
-        population.append(np.full(shape=(num_features,), fill_value=0.5))
+        threshold = [TwoSidedThreshold(lower=0.5, upper=0.5) for _ in range(num_features)]
+        population.append(threshold)
 
         return population
 
-    def update(self, state: List[np.ndarray], fitness: List[float], probabilities: np.ndarray, labels: np.ndarray) -> List[np.ndarray]:
+    def update(self, state: List[List[TwoSidedThreshold]], fitness: List[float], probabilities: np.ndarray, labels: np.ndarray) -> List[List[TwoSidedThreshold]]:
         state = self._selection(state, fitness)
         return self._mutation(state)
 
-    def _selection(self, population: List[np.ndarray], fitness: List[float]) -> List[np.ndarray]:
+    def _selection(self, population: List[List[TwoSidedThreshold]], fitness: List[float]) -> List[List[TwoSidedThreshold]]:
         """
         Stochastic universal sampling using a linear ranking fitness technique
         """
@@ -99,29 +111,45 @@ class GeneticOptimizer(RandomizedThresholdOptimizer):
  
         # Select next population using roulette wheel selection
         next_indices = self._sample(fitness, count=population_size - self.steady_state_count)
-        next_population = [np.copy(population[i]) for i in next_indices]
+        next_population = [deepcopy(population[i]) for i in next_indices]
 
         # Perform crossover
-        crossover_population: List[np.ndarray] = []
+        crossover_population: List[TwoSidedThreshold] = []
         for i in range(0, len(next_population), 2):
+
+            # Crossover on thresholds
             first_parent = next_population[i]
             second_parent = next_population[i+1]
 
+            # Get lower and upper thresholds
+            first_lower, first_upper = [t.lower for t in first_parent], [t.upper for t in first_parent]
+            second_lower, second_upper = [t.lower for t in second_parent], [t.upper for t in second_parent]
+
+            # Crossover on lower
             r = np.random.uniform(low=0.0, high=1.0)
             if r < self.crossover_rate:
-                first_parent, second_parent = self._crossover(first_parent, second_parent)
+                first_lower, second_lower = self._crossover(first_lower, second_lower)
 
-            crossover_population.append(np.copy(first_parent))
-            crossover_population.append(np.copy(second_parent))
+            # Crossover on upper
+            r = np.random.uniform(low=0.0, high=1.0)
+            if r < self.crossover_rate:
+                first_upper, second_upper = self._crossover(first_upper, second_upper)
+
+            # Create new individuals
+            first_offspring = order_threshold_lists(lower=first_lower, upper=first_upper, should_sort=self.should_sort)
+            second_offspring = order_threshold_lists(lower=second_lower, upper=second_upper, should_sort=self.should_sort)
+
+            crossover_population.append(first_offspring)
+            crossover_population.append(second_offspring)
 
         # Add in the 'best' individuals unchanged
         top_indices = np.argsort(fitness)[-self.steady_state_count:]
-        crossover_population.extend((np.copy(population[i]) for i in top_indices))
+        crossover_population.extend((deepcopy(population[i]) for i in top_indices))
 
         # Pad population if needed
         for i in range(0, len(population) - len(crossover_population)):
             rand_individual = np.random.randint(low=0, high=len(population))
-            crossover_population.append(np.copy(population[rand_individual]))
+            crossover_population.append(deepcopy(population[rand_individual]))
 
         return crossover_population
 
@@ -136,30 +164,43 @@ class GeneticOptimizer(RandomizedThresholdOptimizer):
 
         return selected
 
-    def _mutation(self, population: List[np.ndarray]) -> List[np.ndarray]:
+    def _mutation(self, population: List[List[TwoSidedThreshold]]) -> List[List[TwoSidedThreshold]]:
         for i in range(len(population)):
-            # Get individual
-            individual = population[i]
+            # Get individual thresholds
+            lower = [t.lower for t in population[i]]
+            upper = [t.upper for t in population[i]]
 
             # Apply desired mutation operation
             if self.mutation_rate == MutationType.ELEMENT:
                 r = np.random.uniform(low=0.0, high=1.0, size=(len(individual), ))
                 random_elements = np.random.uniform(low=LOWER_BOUND, high=UPPER_BOUND, size=(len(individual), ))
-                individual = np.where(r < self.mutation_rate, random_elements, individual)
+                lower = np.where(r < self.mutation_rate, random_elements, lower)
+
+                r = np.random.uniform(low=0.0, high=1.0, size=(len(individual), ))
+                random_elements = np.random.uniform(low=LOWER_BOUND, high=UPPER_BOUND, size=(len(individual), ))
+                upper = np.where(r < self.mutation_rate, random_elements, upper)
             elif self.mutation_rate == MutationType.NORM:
                 r = np.random.uniform(low=0.0, high=1.0)
                 if r < self.mutation_rate:
                     random_move = clip_by_norm(np.random.uniform(low=0.0, high=MAX_NORM), MAX_NORM)
-                    individual = np.clip(indiviual + random_move, a_min=0.0, a_max=1.0)
+                    lower = np.clip(lower + random_move, a_min=0.0, a_max=1.0)
+
+                r = np.random.uniform(low=0.0, high=1.0)
+                if r < self.mutation_rate:
+                    random_move = clip_by_norm(np.random.uniform(low=0.0, high=MAX_NORM), MAX_NORM)
+                    upper = np.clip(upper + random_move, a_min=0.0, a_max=1.0)
+
+            # Re-order the mutated individual
+            mutated_individual = order_threshold_lists(lower=lower, upper=upper, should_sort=self.should_sort)
 
             # Include mutated individual in the population
-            population[i] = np.sort(individual)
+            population[i] = mutated_individual
 
         return population
 
     def _crossover(self, first_parent: np.ndarray, second_parent: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
-        num_features = first_parent.shape[0]
+        num_features = len(first_parent)
 
         if self.crossover_type == CrossoverType.ONE_POINT:
             point = np.random.randint(low=0, high=num_features - 1)
@@ -223,4 +264,4 @@ class GeneticOptimizer(RandomizedThresholdOptimizer):
 
             first_parent, second_parent = next_first_parent, next_second_parent
 
-        return np.sort(first_parent), np.sort(second_parent)
+        return first_parent, second_parent

@@ -7,7 +7,8 @@ from dataset.rnn_sample_dataset import RNNSampleDataset
 from models.adaptive_model import AdaptiveModel
 from utils.rnn_utils import get_logits_name
 from utils.constants import SMALL_NUMBER, OUTPUT
-from utils.np_utils import thresholded_predictions, f1_score, softmax, sigmoid, linear_normalize
+from utils.np_utils import f1_score, softmax, sigmoid, linear_normalize
+from utils.threshold_utils import adaptive_inference, TwoSidedThreshold, InferenceMode
 
 from .threshold_optimizer import ThresholdOptimizer, OptimizerOutput
 
@@ -17,8 +18,8 @@ class RandomizedThresholdOptimizer(ThresholdOptimizer):
     Optimizes probability thresholds using a genetic algorithm.
     """
 
-    def __init__(self, iterations: int, batch_size: int, level_weight: float):
-        super().__init__(iterations, batch_size)
+    def __init__(self, iterations: int, batch_size: int, level_weight: float, mode: str):
+        super().__init__(iterations, batch_size, mode)
         self._level_weight = level_weight
 
     @property
@@ -39,7 +40,7 @@ class RandomizedThresholdOptimizer(ThresholdOptimizer):
         logit_ops = [get_logits_name(i) for i in range(model.num_outputs)]
 
         best_score = 0.0
-        best_thresholds = [0.5 for _ in range(model.num_outputs)]
+        best_thresholds = [TwoSidedThreshold(upper=0.5, lower=0.5) for _ in range(model.num_outputs)]
 
         # Compute optimization steps per batch
         batch = next(data_generator)
@@ -78,20 +79,27 @@ class RandomizedThresholdOptimizer(ThresholdOptimizer):
 
         return OptimizerOutput(score=best_score, thresholds=best_thresholds)
 
-    def init(self, num_features: int) -> List[np.ndarray]:
+    def init(self, num_features: int) -> List[List[TwoSidedThreshold]]:
         raise NotImplementedError()
 
-    def has_converged(self, state: List[np.ndarray]) -> bool:
-        return np.isclose(np.array(state), state[0]).all()
+    def has_converged(self, state: List[List[TwoSidedThreshold]]) -> bool:
+        state_array = np.array(state)
 
-    def update(self, state: List[np.ndarray], fitness: List[float], probabilities: np.ndarray, labels: np.ndarray) -> List[np.ndarray]:
+        if self.inference_mode == InferenceMode.BINARY_ONE_SIDED:
+            lower = np.array([t.lower for t in state[0]])
+
+            return np.isclose(state_array[:, :, 0], lower).all()
+        else:
+            return np.isclose(state_array, state_array[0]).all()
+
+    def update(self, state: List[TwoSidedThreshold], fitness: List[float], probabilities: np.ndarray, labels: np.ndarray) -> List[np.ndarray]:
         raise NotImplementedError()
 
-    def evaluate(self, state: List[np.ndarray], probabilities: np.ndarray, labels: np.ndarray) -> List[float]:
+    def evaluate(self, state: List[TwoSidedThreshold], probabilities: np.ndarray, labels: np.ndarray) -> List[float]:
         fitnesses: List[float] = []
-        
+
         for element in state:
-            output = thresholded_predictions(probabilities, element)
+            output = adaptive_inference(probabilities, element, mode=self.inference_mode)
             predictions = output.predictions
             levels = output.indices
 

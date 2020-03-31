@@ -22,7 +22,8 @@ from utils.constants import INPUT_SCALER, OUTPUT_SCALER, INPUT_SHAPE, NUM_OUTPUT
 from utils.loss_utils import f1_score_loss, binary_classification_loss
 from utils.rnn_utils import *
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric, ALL_LATENCY
-from utils.np_utils import thresholded_predictions, sigmoid
+from utils.np_utils import sigmoid
+from utils.threshold_utils import lower_threshold_predictions
 
 
 class AdaptiveModel(Model):
@@ -299,7 +300,7 @@ class AdaptiveModel(Model):
             logits = np.concatenate(logits_list, axis=-1)
             predicted_probs = sigmoid(logits)
             thresholds = [ONE_HALF for _ in range(self.num_outputs)]
-            level_output = thresholded_predictions(predicted_probs, thresholds)
+            level_output = lower_thresholded_predictions(predicted_probs, thresholds)
             level_predictions = level_output.predictions
             computed_levels = level_output.indices
 

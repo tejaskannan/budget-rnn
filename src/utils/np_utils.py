@@ -5,9 +5,6 @@ from collections import namedtuple
 from .constants import SMALL_NUMBER, BIG_NUMBER
 
 
-ThresholdedOutput = namedtuple('ThresholdedOutput', ['predictions', 'indices'])
-
-
 def pad_array(arr: np.array, new_size: int, value: Any, axis: int) -> np.array:
     pad_width = new_size - arr.shape[axis]
     if pad_width <= 0 :
@@ -71,19 +68,3 @@ def f1_score(predictions: np.ndarray, labels: np.ndarray) -> float:
     r = recall(predictions, labels)
 
     return 2 * (p * r) / (p + r + SMALL_NUMBER)
-
-
-def thresholded_predictions(predicted_probs: np.ndarray, thresholds: Union[List[float], np.ndarray]) -> ThresholdedOutput:
-    assert predicted_probs.shape[1] == len(thresholds), 'Must have as many thresholds as outputs.'
-
-    thresholds_arr = np.expand_dims(thresholds, axis=0)  # [1, L]
-    level_outputs = np.greater(predicted_probs, thresholds_arr).astype(dtype=np.float32)  # [B, L]
-
-    unified_outputs = np.prod(level_outputs, axis=-1)  # [B]
-
-    # Compute indices of 'stopped' levels
-    index_range = np.arange(start=0, stop=len(thresholds))
-    zero_indices = np.where(level_outputs == 0, index_range, len(thresholds) - 1)
-    indices = np.min(zero_indices, axis=-1)
-
-    return ThresholdedOutput(predictions=unified_outputs, indices=indices)
