@@ -14,10 +14,16 @@ def get_label_distribution(folder: str, file_type: str):
     data_manager.load()
     data_iterator = data_manager.iterate(should_shuffle=False, batch_size=100)
 
+    total = 0
     for sample in data_iterator:
         label_counter[float(sample[OUTPUT])] += 1
+        total += 1
 
-    print(label_counter)
+    for key, value in sorted(label_counter.items()):
+        frac = float(value) / float(total) * 100
+        print(f'{key}: {value} ({frac:.02f})')
+
+    print(f'Total: {total}')
 
 if __name__ == '__main__':
     parser = ArgumentParser()

@@ -1,9 +1,9 @@
 {
     "name": "gradient",
     "batch_size": 256,
-    "iterations": 500,
-    "instances": 4,
-    "level_weight": 1.0,
+    "iterations": 256,
+    "instances": 10,
+    "level_weight": 1.25,
     "opt_params": {
         "sharpen_factor": 25.0,
         "tolerance": 1e-7,

@@ -40,7 +40,7 @@
 	],
 	"frame_delay": 5,
     "iters": 12,
-    "trials": 1,
+    "trials": 1500,
 	"motion_model": "collision",
 	"motion_params": {
         "x_bound": [-10, 10],
