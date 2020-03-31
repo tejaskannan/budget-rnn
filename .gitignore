@@ -107,7 +107,9 @@ venv.bak/
 src/saved_models/*
 src/datasets/*
 src/raw_datasets/*
+src/data_generation/collision/simulated_datasets/*
 *.npz
 *.jsonl.gz
 *.png
 *.pdf
+*.tex
