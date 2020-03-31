@@ -40,6 +40,16 @@ def order_thresholds(thresholds: List[TwoSidedThreshold], should_sort: bool) -> 
     return sorted_thresholds
 
 
+def matrix_to_thresholds(threshold_matrix: np.ndarray) -> List[TwoSidedThreshold]:
+    """
+    Converts a [L, 2] matrix of thresholds into a list of two-sided threshold tuples.
+    """
+    thresholds: List[TwoSidedThreshold] = []
+    for entry in threshold_matrix:
+        thresholds.append(TwoSidedThreshold(lower=np.min(entry), upper=np.max(entry)))
+    return thresholds
+
+
 def adaptive_inference(predicted_probs: np.ndarray, thresholds: List[TwoSidedThreshold], mode: InferenceMode) -> ThresholdedOutput:
     if mode == InferenceMode.BINARY_ONE_SIDED:
         return lower_threshold_predictions(predicted_probs, thresholds)

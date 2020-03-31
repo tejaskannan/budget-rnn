@@ -95,7 +95,7 @@ class RandomizedThresholdOptimizer(ThresholdOptimizer):
     def update(self, state: List[TwoSidedThreshold], fitness: List[float], probabilities: np.ndarray, labels: np.ndarray) -> List[np.ndarray]:
         raise NotImplementedError()
 
-    def evaluate(self, state: List[TwoSidedThreshold], probabilities: np.ndarray, labels: np.ndarray) -> List[float]:
+    def evaluate(self, state: List[List[TwoSidedThreshold]], probabilities: np.ndarray, labels: np.ndarray) -> List[float]:
         fitnesses: List[float] = []
 
         for element in state:

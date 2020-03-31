@@ -3,6 +3,8 @@
     "batch_size": 256,
     "iterations": 64,
     "instances": 1,
+    "level_weight": 0.05,
+    "mode": "binary_two_sided",
     "opt_params": {
         "instances": 16,
         "num_candidates": 16,

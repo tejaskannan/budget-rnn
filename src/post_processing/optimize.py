@@ -227,7 +227,7 @@ def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model
 
     print('Completed selection and optimization testing. Starting baseline evaluation....')
 
-    baseline = [TwoSidedThreshold(lower=0.5, upper=0.5) for _ in output.thresholds]
+    baseline = [TwoSidedThreshold(lower=0.5, upper=1.0) for _ in output.thresholds]
     result = evaluate_thresholds(model=model,
                                  thresholds=baseline,
                                  dataset=dataset,

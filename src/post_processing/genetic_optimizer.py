@@ -94,7 +94,7 @@ class GeneticOptimizer(RandomizedThresholdOptimizer):
             population.append(thresholds)
 
         # Always initialize with an all-0.5 distribution
-        threshold = [TwoSidedThreshold(lower=0.5, upper=0.5) for _ in range(num_features)]
+        threshold = [TwoSidedThreshold(lower=0.5, upper=1.0) for _ in range(num_features)]
         population.append(threshold)
 
         return population
