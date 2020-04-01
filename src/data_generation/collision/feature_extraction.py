@@ -9,9 +9,11 @@ from sklearn.cluster import KMeans
 
 from utils.constants import INPUTS, OUTPUT, SAMPLE_ID
 from utils.file_utils import iterate_files, make_dir, save_by_file_suffix, read_by_file_suffix
+from utils.data_writer import DataWriter
 from tracking_utils.constants import COLLISION_FRAME, CAMERA_INDEX
 from tracking_utils.file_utils import iterate_camera_images
 from feature_utils import apply_gabor_filter, average_pool, apply_laplace_filter
+from transform_images import reflect_images
 
 
 THRESHOLD = 10
@@ -23,8 +25,6 @@ def gist_features(image_sample: Dict[str, Any],
                   scales: List[float],
                   angles: List[float],
                   num_chunks: int,
-                  collision_cameras: List[Dict[str, Any]],
-                  no_collision_cameras: List[Dict[str, Any]],
                   should_show: bool) -> Dict[str, Any]:
     data_dict = {
         INPUTS: [],
@@ -33,14 +33,6 @@ def gist_features(image_sample: Dict[str, Any],
         SAMPLE_ID: image_sample[SAMPLE_ID],
         CAMERA_INDEX: image_sample[CAMERA_INDEX]
     }
-
-    # Get features from camera angle
-    if image_sample[OUTPUT] == 0:
-        camera = no_collision_cameras[image_sample[CAMERA_INDEX]]
-    else:
-        camera = collision_cameras[image_sample[CAMERA_INDEX]]
-
-    camera_features = camera['location'] + camera['rotation']
 
     # Process each individual image
     for image_matrix in image_sample[INPUTS]:
@@ -64,13 +56,14 @@ def gist_features(image_sample: Dict[str, Any],
                 filtered_image = apply_gabor_filter(grayscale_img, filter_size=filter_size, scale=scale, angle=angle)
 
                 if should_show:
-                    plt.imshow(filtered_image)
+                    plt.imshow(filtered_image.astype(int), cmap='gray')
                     plt.show()
 
-                filter_features = average_pool(filtered_image, num_chunks=num_chunks) 
+                filter_features = average_pool(filtered_image, num_chunks=num_chunks)
+
                 gabor_features.extend(filter_features)
 
-        features = list(np.concatenate([laplace_features, gabor_features, camera_features]).astype(float))
+        features = list(np.concatenate([laplace_features, gabor_features]).astype(float))
         data_dict[INPUTS].append(features)
 
     return data_dict
@@ -191,50 +184,89 @@ def box_detection(image_sample: Dict[str, Any], num_points: int, should_show: bo
     return data_dict
 
 
+def get_features(sample: Dict[str, Any], params: Dict[str, Any], should_show: bool, mode: str) -> Dict[str, Any]:
+    features = None
+
+    if mode == 'fast':
+        features = fast_detection(sample, params['num_points'], should_show)
+    elif mode == 'box':
+        features = box_detection(sample, params['num_points'], should_show)
+    elif mode == 'gist':
+        features = gist_features(image_sample=sample,
+                                 filter_size=params['filter_size'],
+                                 scales=params['scales'],
+                                 angles=params['angles'],
+                                 num_chunks=params['num_chunks'],
+                                 should_show=should_show)
+
+    return features
+
+
 def process_directory(input_folder: str,
                       file_prefix: str,
                       output_folder: str,
                       params: Dict[str, Any],
-                      collision_cameras: List[Dict[str, Any]],
-                      no_collision_cameras: List[Dict[str, Any]],
-                      should_show: bool):
+                      chunk_size: int,
+                      should_show: bool,
+                      should_transform: bool):
 
     data_files = list(iterate_files(input_folder, pattern=r'.*jsonl.gz'))
-    make_dir(output_folder)
 
     # Get the extraction mode
     mode = params['mode'].lower()
     assert mode in ('fast', 'box', 'gist'), 'Invalid mode. Must be one of: fast, box, gist.'
 
-    num_files = len(data_files)
-    for i, data_file in enumerate(data_files):
-        # Get the output file name
-        _, file_name = os.path.split(data_file)
-        output_path = os.path.join(output_folder, file_name)
+    with DataWriter(output_folder, file_prefix=file_prefix, chunk_size=chunk_size, file_suffix='jsonl.gz') as writer:
+        num_files = len(data_files)
 
-        dataset: List[Dict[str, Any]] = []
-        for sample in read_by_file_suffix(data_file):
 
-            if mode == 'fast':
-                features = fast_detection(sample, params['num_points'], should_show)
-            elif mode == 'box':
-                features = box_detection(sample, params['num_points'], should_show)
-            elif mode == 'gist':
-                features = gist_features(image_sample=sample,
-                                         filter_size=params['filter_size'],
-                                         scales=params['scales'],
-                                         angles=params['angles'],
-                                         num_chunks=params['num_chunks'],
-                                         collision_cameras=collision_cameras,
-                                         no_collision_cameras=no_collision_cameras,
-                                         should_show=should_show)
+        sample_id = 0
+        for i, data_file in enumerate(data_files):
+            # Get the output file name
+            _, file_name = os.path.split(data_file)
+            output_path = os.path.join(output_folder, file_name)
 
-            if features is not None:
-                dataset.append(features)
+            dataset: List[Dict[str, Any]] = []
+            for sample in read_by_file_suffix(data_file):
 
-        save_by_file_suffix(dataset, output_path)
- 
-        print(f'Completed {i+1}/{num_files} files.', end='\r')
+                images = sample[INPUTS]
+
+                # Normal image
+                normal_features = get_features(sample, params=params, should_show=should_show, mode=mode)
+                if normal_features is not None:
+                    normal_features[SAMPLE_ID] = sample_id
+                    writer.add(normal_features)
+                    sample_id += 1
+
+                if not should_transform:
+                    continue
+
+                # Reflected by X
+                sample[INPUTS] = reflect_images(images, axis=1, show=False)
+                x_reflected = sample[INPUTS]
+                x_features = get_features(sample, params=params, should_show=should_show, mode=mode)
+                if x_features is not None:
+                    x_features[SAMPLE_ID] = sample_id
+                    writer.add(x_features)
+                    sample_id += 1
+
+                # Reflected by Y
+                sample[INPUTS] = reflect_images(images, axis=0, show=False)
+                y_features = get_features(sample, params=params, should_show=should_show, mode=mode)
+                if y_features is not None:
+                    y_features[SAMPLE_ID] = sample_id
+                    writer.add(y_features)
+                    sample_id += 1
+
+                # Reflected by X and Y
+                sample[INPUTS] = reflect_images(x_reflected, axis=0, show=False)
+                xy_features = get_features(sample, params=params, should_show=should_show, mode=mode)
+                if xy_features is not None:
+                    xy_features[SAMPLE_ID] = sample_id
+                    writer.add(xy_features)
+                    sample_id += 1
+
+            print(f'Completed {i+1}/{num_files} files.', end='\r')
     print()
 
 
@@ -244,26 +276,18 @@ if __name__ == '__main__':
     parser.add_argument('--output-folder', type=str, required=True)
     parser.add_argument('--file-prefix', type=str, default='data')
     parser.add_argument('--params', type=str, required=True)
-    parser.add_argument('--collision-params', type=str, required=True)
-    parser.add_argument('--no-collision-params', type=str, required=True)
+    parser.add_argument('--chunk-size', type=int, default=5000)
+    parser.add_argument('--should-transform', action='store_true')
     parser.add_argument('--show', action='store_true')
     args = parser.parse_args()
 
     assert os.path.exists(args.params), f'The file {args.params} does not exist!'
     params = read_by_file_suffix(args.params)
 
-    assert os.path.exists(args.collision_params), f'The file {args.collision_params} does not exist!'
-    collision_params = read_by_file_suffix(args.collision_params)
-    collision_cameras = collision_params['camera_locations']
-
-    assert os.path.exists(args.no_collision_params), f'The file {args.no_collision_params} does not exist!'
-    no_collision_params = read_by_file_suffix(args.no_collision_params)
-    no_collision_cameras = no_collision_params['camera_locations']
-
     process_directory(input_folder=args.input_folder,
                       file_prefix=args.file_prefix,
                       output_folder=args.output_folder,
                       params=params,
-                      collision_cameras=collision_cameras,
-                      no_collision_cameras=no_collision_cameras,
+                      should_transform=args.should_transform,
+                      chunk_size=args.chunk_size,
                       should_show=args.show)

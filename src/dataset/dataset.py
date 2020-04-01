@@ -39,7 +39,7 @@ class Dataset:
             DataSeries.TEST: get_data_manager(self.data_folders[DataSeries.TEST], SAMPLE_ID, DATA_FIELDS)
         }
 
-    def tensorize(self, sample: Dict[str, Any], metadata: Dict[str, Any]) -> Dict[str, np.ndarray]:
+    def tensorize(self, sample: Dict[str, Any], metadata: Dict[str, Any], is_train: bool) -> Dict[str, np.ndarray]:
         pass
 
     def process_raw_sample(self, raw_sample: Dict[str, Any]) -> Dict[str, Any]:
@@ -92,13 +92,16 @@ class Dataset:
         # Create iterator over the data
         data_iterator = data_series.iterate(should_shuffle=should_shuffle, batch_size=batch_size)
 
+        # Set training flag
+        is_train = series == DataSeries.TRAIN
+
         # Generate minibatches
         for minibatch in ichunked(data_iterator, batch_size):
             # Turn minibatch into a feed dict
             feed_dict: DefaultDict[str, List[Any]] = defaultdict(list)
             num_samples = 0
             for sample in minibatch:
-                tensorized_sample = self.tensorize(sample, metadata)
+                tensorized_sample = self.tensorize(sample, metadata, is_train=is_train)
                 for key, tensor in tensorized_sample.items():
                     feed_dict[key].append(tensor)
                 num_samples += 1

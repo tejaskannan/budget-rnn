@@ -3,9 +3,10 @@
 	"dropout_keep_rate": 0.9,
 	"learning_rate": 0.0001,
 	"gradient_clip": 1,
-	"epochs": 75,
+	"epochs": 27,
 	"patience": 10,
     "model": "standard",
+    "input_noise": 0.01,
 	"model_params": {
 		"state_size": 8,
 		"output_hidden_units": [16],
