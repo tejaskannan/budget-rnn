@@ -101,7 +101,8 @@ if __name__ == '__main__':
 
     # Make the output folder if necessary
     base_output_dir, _ = os.path.split(args.output_file)
-    make_dir(base_output_dir)
+    if len(base_output_dir) > 0:
+        make_dir(base_output_dir)
 
     downsample_images(image_folder=args.folder,
                       scale=args.scale,

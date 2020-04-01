@@ -106,7 +106,7 @@ if __name__ == '__main__':
     parser.add_argument('--output-folder', type=str, required=True)
     parser.add_argument('--train-frac', type=float, required=True)
     parser.add_argument('--valid-frac', type=float, required=True)
-    parser.add_argument('--test-frac', type=float)
+    parser.add_argument('--test-frac', type=float, default=0.0)
     parser.add_argument('--file-prefix', type=str, default='data')
     parser.add_argument('--file-type', type=str, choices=['jsonl.gz', 'pkl.gz', 'npz'])
     parser.add_argument('--chunk-size', type=int, default=1000)

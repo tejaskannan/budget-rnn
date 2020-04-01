@@ -35,7 +35,7 @@
 	],
 	"frame_delay": 5,
     "iters": 12,
-    "trials": 9000,
+    "trials": 3000,
 	"motion_model": "collision",
 	"motion_params": {
         "x_bound": [-10, 10],
@@ -44,7 +44,7 @@
         "collision_positions": [ { "low": [-3, -3, 2], "high": [3, 3, 2] } ],
         "force_collision": false
 	},
-    "features_file_prefix": "features/no_collisions",
+    "features_file_prefix": "test_images/data",
     "label": 0,
     "image_scale": 0.05
 }

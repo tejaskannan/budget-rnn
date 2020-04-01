@@ -23,7 +23,7 @@ from utils.loss_utils import f1_score_loss, binary_classification_loss
 from utils.rnn_utils import *
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric, ALL_LATENCY
 from utils.np_utils import sigmoid
-from utils.threshold_utils import lower_threshold_predictions
+from utils.threshold_utils import lower_threshold_predictions, TwoSidedThreshold
 
 
 class AdaptiveModel(Model):
@@ -270,6 +270,9 @@ class AdaptiveModel(Model):
         levels_dict = defaultdict(list)
         labels: List[np.ndarray] = []
 
+        # Standard, baseline thresholds
+        thresholds = [TwoSidedThreshold(lower=ONE_HALF, upper=1.0) for _ in range(self.num_outputs)]
+
         for batch_num, batch in enumerate(test_batch_generator):
             feed_dict = self.batch_to_feed_dict(batch, is_train=False)
 
@@ -299,8 +302,7 @@ class AdaptiveModel(Model):
             # Scheduled model
             logits = np.concatenate(logits_list, axis=-1)
             predicted_probs = sigmoid(logits)
-            thresholds = [ONE_HALF for _ in range(self.num_outputs)]
-            level_output = lower_thresholded_predictions(predicted_probs, thresholds)
+            level_output = lower_threshold_predictions(predicted_probs, thresholds)
             level_predictions = level_output.predictions
             computed_levels = level_output.indices
 
