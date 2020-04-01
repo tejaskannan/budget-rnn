@@ -18,7 +18,7 @@ from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
 from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS
 from utils.constants import NODE_REGEX_FORMAT, DROPOUT_KEEP_RATE, MODEL, SCHEDULED_MODEL
-from utils.constants import INPUT_SCALER, OUTPUT_SCALER, INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH
+from utils.constants import INPUT_SCALER, OUTPUT_SCALER, INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE
 from utils.loss_utils import f1_score_loss, binary_classification_loss
 from utils.rnn_utils import *
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric, ALL_LATENCY
@@ -119,6 +119,7 @@ class AdaptiveModel(Model):
         self.metadata[INPUT_SHAPE] = input_shape
         self.metadata[NUM_OUTPUT_FEATURES] = num_output_features
         self.metadata[SEQ_LENGTH] = seq_length
+        self.metadata[INPUT_NOISE] = self.hypers.input_noise
 
     def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
         dropout = self.hypers.dropout_keep_rate if is_train else 1.0
@@ -236,7 +237,7 @@ class AdaptiveModel(Model):
             cell = get_cell_level_name(level, self.hypers.model_params['share_cell_weights'])
             output = get_output_layer_name(level)
             rnn = get_rnn_level_name(level)
-            embedding = get_embedding_name(level)
+            embedding = get_embedding_name()
             combine_states = get_combine_states_name(rnn)
 
             # Compute FLOPS from RNN operations
@@ -249,13 +250,22 @@ class AdaptiveModel(Model):
             flops_factor = level + 1 if self.model_type == RNNModelType.VANILLA else 1
             total_flops += flops.total_float_ops * flops_factor * self.samples_per_seq
 
-            # Compute FLOPS from all other operations. Note that the embedding layer has a well-defined input length,
-            # so Tensorflow already accounts for the repeated application of this transformation.
-            single_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), [output, embedding]))
+            # Compute FLOPS for the output layer
+            single_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), [output]))
             single_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
                                 .with_node_names(show_name_regexes=single_operations) \
                                 .order_by('flops').build()
             flops = tf.profiler.profile(self.sess.graph, options=single_options)
+            total_flops += flops.total_float_ops
+
+            # Get FLOPS for the embedding layer. We do this in a `marginal' way because there is no need to ever re-compute
+            # an embedding (they are all independent). Thus, the number of additional embedding computations is equal
+            # to the number of operations on the first level.
+            embedding_regex = ['.*{0}-dense/.*'.format(get_embedding_name()), '.*{0}-filter-[0-9]+/.*'.format(get_embedding_name())]
+            embedding_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
+                                    .with_node_names(show_name_regexes=embedding_regex) \
+                                    .order_by('flops').build()
+            flops = tf.profiler.profile(self.sess.graph, options=embedding_options)
             total_flops += flops.total_float_ops
 
         return total_flops
@@ -370,7 +380,7 @@ class AdaptiveModel(Model):
                                              params=self.hypers.model_params['embedding_layer_params'],
                                              seq_length=self.samples_per_seq,
                                              input_shape=self.metadata[INPUT_SHAPE],
-                                             name_prefix=get_embedding_name(i))
+                                             name_prefix=get_embedding_name())
 
             # Create the RNN Cell
             cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
@@ -462,11 +472,9 @@ class AdaptiveModel(Model):
                 predicted_probs = tf.math.sigmoid(logits)
 
                 if loss_mode in ('cross-entropy', 'cross-entropy', 'accuracy'):
-                    self._ops[loss_name] = binary_classification_loss(predicted_probs=predicted_probs,
-                                                                      predictions=predictions,
-                                                                      labels=expected_output,
-                                                                      pos_weight=self.hypers.model_params['pos_weights'][level],
-                                                                      neg_weight=self.hypers.model_params['neg_weights'][level])
+                    sample_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=expected_output,
+                                                                          logits=logits)
+                    self._ops[loss_name] = tf.reduce_mean(sample_loss)
                 elif loss_mode in ('f1', 'f1_score', 'f1-score'):
                     self._ops[loss_name] = f1_score_loss(predicted_probs=predicted_probs, labels=expected_output)
                 else:

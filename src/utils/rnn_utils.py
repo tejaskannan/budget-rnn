@@ -74,9 +74,9 @@ def get_f1_score_name(level_index: int) -> str:
     return f'{F1_SCORE}_{level_index}'
 
 
-def get_embedding_name(level_index: int) -> str:
-    # return f'{EMBEDDING_NAME}-{level_index}'
+def get_embedding_name() -> str:
     return EMBEDDING_NAME
+
 
 def get_combine_states_name(name_prefix: Optional[str]) -> str:
     if name_prefix is None:

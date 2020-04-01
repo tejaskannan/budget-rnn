@@ -25,7 +25,7 @@ def binary_classification_loss(predicted_probs: tf.Tensor,
         log_opp_probs = -tf.log(1.0 - predicted_probs)
         sample_loss = tf.where((1.0 - tf.abs(predictions - labels)) < SMALL_NUMBER,
                                x=neg_weight * labels * log_probs + pos_weight * (1.0 - labels) * log_opp_probs,  # False negative or False Positive
-                               y=labels * log_probs + (1.0 - labels) * log_opp_probs)
+                               y=labels * log_probs + (1.0 - labels) * log_opp_probs) 
         return tf.reduce_mean(sample_loss)
 
 

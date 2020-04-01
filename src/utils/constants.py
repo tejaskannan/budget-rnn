@@ -28,6 +28,7 @@ OUTPUT_SCALER = 'output_scaler'
 INPUT_SHAPE = 'input_shape'
 NUM_OUTPUT_FEATURES = 'num_output_features'
 SEQ_LENGTH = 'seq_length'
+INPUT_NOISE = 'input_noise'
 
 # Model type names
 MODEL = 'model'

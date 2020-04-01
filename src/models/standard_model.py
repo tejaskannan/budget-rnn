@@ -13,7 +13,7 @@ from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs, get_activation, tf_rnn_cell, get_rnn_state
 from utils.constants import ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS, PREDICTION, F1_SCORE, LOGITS, NODE_REGEX_FORMAT
-from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, INPUT_SCALER, OUTPUT_SCALER, SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL
+from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, INPUT_SCALER, OUTPUT_SCALER, SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, INPUT_NOISE
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric, ALL_LATENCY
 from utils.loss_utils import binary_classification_loss, f1_score_loss
 from .base_model import Model
@@ -104,6 +104,7 @@ class StandardModel(Model):
         self.metadata[INPUT_SHAPE] = input_shape
         self.metadata[NUM_OUTPUT_FEATURES] = num_output_features
         self.metadata[SEQ_LENGTH] = seq_length
+        self.metadata[INPUT_NOISE] = self.hypers.input_noise
 
     def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
         dropout = self.hypers.dropout_keep_rate if is_train else 1.0
@@ -277,11 +278,9 @@ class StandardModel(Model):
             predicted_probs = tf.math.sigmoid(logits)
 
             if loss_mode in ('cross-entropy', 'accuracy', 'cross_entropy'):
-                self._ops[LOSS] = binary_classification_loss(predicted_probs=predicted_probs,
-                                                             predictions=predictions,
-                                                             labels=expected_output,
-                                                             pos_weight=1.0,
-                                                             neg_weight=1.0)
+                sample_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=expected_output,
+                                                                      logits=logits)
+                self._ops[LOSS] = tf.reduce_mean(sample_loss)
             elif loss_mode in ('f1', 'f1-score', 'f1_score'):
                 self._ops[LOSS] = f1_score_loss(predicted_probs=predicted_probs,
                                                 labels=expected_output)
