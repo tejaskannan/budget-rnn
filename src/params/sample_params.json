@@ -27,7 +27,7 @@
         "link_levels": false,
         "loss_mode": "cross-entropy",
         "fusion_mode": "gate",
-        "loss_penalty_type": "entropy",
+        "loss_penalty_type": "none",
         "normalize_inputs": true,
         "use_conv_embedding": false,
         "embedding_layer_params": {
