@@ -155,10 +155,12 @@ def run_trial(params: Dict[str, Any], output_folder: str) -> int:
     Args:
         params_file: JSON file containing the run parameters
     """
+
+    plane_color = tuple(np.random.uniform(low=0.5, high=0.8, size=(3,)))
     # Initialize the world objects
     plane = Plane(location=(0, 0, 0),
                   dimensions=params['plane_dimensions'],
-                  color=(0.66, 0.66, 0.66),
+                  color=plane_color,
                   name='plane')
 
     lamp = Lamp(location=params['lamp_location'],
@@ -177,10 +179,14 @@ def run_trial(params: Dict[str, Any], output_folder: str) -> int:
         start_location = get_random_point(obj_config['locations'])
         end_location = get_random_point(obj_config['locations'])
 
+        color_index = np.random.randint(low=0, high=3)
+        color = tuple([0 if i != color_index else 1 for i in range(3)])
+        print(color)
+
         target_obj = create_target_object(object_type=obj_config['type'],
                                           location=start_location,
                                           size=obj_config['size'],
-                                          color=tuple(obj_config['color']),
+                                          color=color,
                                           index=i)
         target_objects.append(target_obj)
 

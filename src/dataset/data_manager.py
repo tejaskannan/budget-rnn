@@ -97,6 +97,13 @@ class InMemoryDataManager(DataManager):
         for index in self._ids:
             yield self._dataset[index]
 
+    def close(self):
+        self.set_loaded(False)
+        self._dataset = []
+        self._ids = []
+
+        self.set_length(0)
+
 
 class NpzDataManager(DataManager):
 
@@ -149,6 +156,13 @@ class NpzDataManager(DataManager):
         for arr in self._arrays:
             arr.close()
 
+        self._ids = []
+        self._index = dict()
+        self._array_lengths = []
+        self._arrays = []
+
+        self.set_length(0)
+
     def _get_array_index(self, sample_id: int) -> int:
         length_sum = 0
         for index, length in enumerate(self._array_lengths):
@@ -200,6 +214,7 @@ def get_data_manager(folder: str, sample_id_name: str, fields: List[str], extens
             ext = '.'.join(file_tokens[1:])  # Get all tokens after the first period
             extension_counter[ext] += 1
 
+        # Select the most common extension
         ext, _ = extension_counter.most_common(1)[0]
     else:
         ext = extension

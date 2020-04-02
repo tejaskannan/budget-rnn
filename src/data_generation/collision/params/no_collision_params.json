@@ -2,13 +2,13 @@
 	"obj_configs": [
         {
             "type": "ball", 
-            "locations": [ { "low": [1, 1, 2], "high": [4, 4, 2] } ],
+            "locations": [ { "low": [-6, -6, 2], "high": [6, 6, 2] } ],
             "size": 0.5,
             "color": [1, 0, 0] 
         },
         {
             "type": "ball",
-            "locations": [ { "low": [-4, -4, 2], "high": [-1, -1, 2] } ],
+            "locations": [ { "low": [-6, -6, 2], "high": [6, 6, 2] } ],
             "size": 0.5,
             "color": [0, 1, 0]
         }
@@ -26,21 +26,13 @@
 			"rotation": [0.5, 0, -0.5]
 		},
         {
-            "location": [5, 5, 5],
-            "rotation": [-0.9, -0.25, -0.5]
-        },
-        {
             "location": [-2, -5, 5],
             "rotation": [0.5, 0, -0.25]
-        },
-        {
-            "location": [-5, 5, 5],
-            "rotation": [-0.5, -0.4, -0.1]
         }
 	],
 	"frame_delay": 5,
     "iters": 12,
-    "trials": 1500,
+    "trials": 2500,
 	"motion_model": "collision",
 	"motion_params": {
         "x_bound": [-10, 10],
@@ -49,7 +41,7 @@
         "collision_positions": [ { "low": [-3, -3, 2], "high": [3, 3, 2] } ],
         "force_collision": false
 	},
-    "features_file_prefix": "train_images_v2/data",
+    "features_file_prefix": "train_images/data",
     "label": 0,
     "image_scale": 0.05
 }

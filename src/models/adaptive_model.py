@@ -488,6 +488,36 @@ class AdaptiveModel(Model):
         losses = tf.stack(losses)  # [N], N is the number of sequences
         weighted_losses = tf.reduce_sum(losses * self._placeholders['loss_weights'], axis=-1)  # Scalar
 
+        penalty_type = self.hypers.model_params['loss_penalty_type'].lower()
+        if penalty_type != 'none':
+            level_logits = tf.concat([self._ops[get_logits_name(level)] for level in range(self.num_outputs)], axis=-1)
+            predicted_probs = tf.math.sigmoid(level_logits)  # [B, L]
+
+            indices = tf.expand_dims(tf.range(start=0, limit=tf.shape(predicted_probs)[-1]), axis=0)  # [1, L]
+            mask = tf.cast(indices > 0, dtype=tf.float32)
+
+            if penalty_type == 'entropy':
+                entropy = -1 * tf.log(predicted_probs) * predicted_probs - tf.log(1 - predicted_probs) * (1 - predicted_probs)  # [B, L]
+                shifted_entropy = tf.roll(entropy, shift=1, axis=-1)  # [B, L]
+                
+                entropy_penalty = tf.nn.relu(entropy - shifted_entropy) * mask  # [B, L]
+                sample_penalty = tf.reduce_mean(tf.reduce_sum(entropy_penalty, axis=-1))
+            elif penalty_type == 'confidence':
+                shifted_probs = tf.roll(predicted_probs, shift=1, axis=-1)  # [B, L]
+                shifted_confidence = tf.square(shifted_probs - ONE_HALF)
+                confidence = tf.square(predicted_probs - ONE_HALF)
+
+                confidence_diff = tf.nn.relu(confidence - shifted_confidence) * mask
+                sample_penalty = tf.reduce_mean(tf.reduce_sum(confidence_diff, axis=-1))
+            elif penalty_type == 'decreasing':
+                shifted_probs = tf.roll(predicted_probs, shift=1, axis=-1)  # [B, L]
+                level_penalty = tf.nn.relu(predicted_probs - shifted_probs) * mask  # [B, L]
+                sample_penalty = tf.reduce_mean(tf.reduce_sum(level_penalty, axis=-1))
+            else:
+                raise ValueError(f'Unknown penalty type: {penalty_type}')
+
+            weighted_losses += sample_penalty
+
         self._ops[LOSS] = weighted_losses
 
     def anytime_generator(self, feed_dict: Dict[tf.Tensor, List[Any]],

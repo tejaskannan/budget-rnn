@@ -2,6 +2,7 @@ import tensorflow as tf
 import numpy as np
 import re
 import os
+import gc
 from datetime import datetime
 from collections import defaultdict
 from typing import Optional, Iterable, Dict, Any, Union, List, DefaultDict, Set
@@ -325,6 +326,22 @@ class Model:
         init_metric_value = BIG_NUMBER if self.output_type == OutputType.REGRESSION else -BIG_NUMBER
         best_valid_metric_dict: DefaultDict[str, float] = defaultdict(lambda: init_metric_value)
 
+        # Create dictionary to map accuracy operations to loss operations
+        accuracy_loss_dict: Dict[str, str] = dict()
+        assert len(self.accuracy_op_names) == len(self.loss_op_names) or len(self.loss_op_names) == 1, f'Misaligned accuracy and loss operations.'
+        if len(self.loss_op_names):
+            accuracy_loss_dict = {acc_op: self.loss_op_names[0] for acc_op in self.accuracy_op_names}
+        else:
+            accuracy_loss_dict = {acc_op: loss_op for acc_op, loss_op in zip(self.accuracy_op_names, self.loss_op_names)}
+
+        # Create dictionary mapping each loss operation to the set of corresponding trainable variables. This mapping does not change
+        # after graph construction, so we create if before starting training.
+        loss_var_dict: Dict[str, tf.Variable] = dict()
+        with self.sess.graph.as_default():
+            for loss_op in self.loss_op_names:
+                loss_var_dict[loss_op] = [v.name for v in variables_for_loss_op(self.trainable_vars, self.ops[loss_op])]
+
+        # Execute training and validation epochs
         num_not_improved = 0
         for epoch in range(self.hypers.epochs):
             print(f'-------- Epoch {epoch} --------')
@@ -432,14 +449,6 @@ class Model:
             acc_dict[TRAIN].append(np.average(list(epoch_train_acc.values())) / train_batch_counter)
             acc_dict[VALID].append(np.average(list(epoch_valid_acc.values())) / valid_batch_counter)
 
-            # Create dictionary to map accuracy operations to loss operations
-            accuracy_loss_dict: Dict[str, str] = dict()
-            assert len(self.accuracy_op_names) == len(self.loss_op_names) or len(self.loss_op_names) == 1, f'Misaligned accuracy and loss operations.'
-            if len(self.loss_op_names):
-                accuracy_loss_dict = {acc_op: self.loss_op_names[0] for acc_op in self.accuracy_op_names}
-            else:
-                accuracy_loss_dict = {acc_op: loss_op for acc_op, loss_op in zip(self.accuracy_op_names, self.loss_op_names)}
-
             # Collect loss operation to save
             metric_ops = self.loss_op_names if self.output_type == OutputType.REGRESSION else self.accuracy_op_names
             has_improved = False
@@ -468,7 +477,7 @@ class Model:
             loss_ops_to_save = list(sorted(loss_ops_to_save))
             if len(loss_ops_to_save) > 0:
                 print('Saving model for operations: {0}'.format(','.join(loss_ops_to_save)))
-                self.save(name=name, data_folders=dataset.data_folders, loss_ops=loss_ops_to_save)
+                self.save(name=name, data_folders=dataset.data_folders, loss_ops=loss_ops_to_save, loss_var_dict=loss_var_dict)
 
             if has_improved:
                 num_not_improved = 0
@@ -479,6 +488,9 @@ class Model:
                 print('Exiting due to Early Stopping')
                 break
 
+            # Call garbage collector at the end of each iteration (just to be safe)
+            gc.collect()
+
         # Save training metrics
         metrics_dict = dict(loss=loss_dict, accuracy=acc_dict)
         log_file = os.path.join(self.save_folder, TRAIN_LOG_PATH.format(name))
@@ -486,7 +498,7 @@ class Model:
 
         return name
 
-    def save(self, name: str, data_folders: Dict[DataSeries, str], loss_ops: Optional[List[str]]):
+    def save(self, name: str, data_folders: Dict[DataSeries, str], loss_ops: Optional[List[str]], loss_var_dict: Dict[str, List[str]]):
         """
         Save model weights, hyper-parameters, and metadata
 
@@ -522,8 +534,9 @@ class Model:
 
                 # Get variables to save
                 for loss_op in loss_ops:
-                    valid_vars = variables_for_loss_op(trainable_vars, self.ops[loss_op])
-                    valid_vars_dict = {v.name: vars_dict[v.name] for v in valid_vars}
+                    # Fetch the corresponding trainable variables
+                    valid_vars = loss_var_dict[loss_op]
+                    valid_vars_dict = {v: vars_dict[v] for v in valid_vars}
 
                     # Update values for the valid variables
                     saved_vars.update(valid_vars_dict)
@@ -533,6 +546,7 @@ class Model:
 
             # Save results
             save_by_file_suffix(vars_dict, model_path)
+
 
     def restore(self, name: str, is_train: bool, is_frozen: bool):
         """

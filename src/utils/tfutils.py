@@ -244,8 +244,6 @@ def get_total_flops(node: Optional[tf.profiler.GraphNodeProto]) -> int:
     if node is None:
         return 0
 
-    print(node.name)
-
     total_flops = node.total_float_ops
     for child in node.children:
 

@@ -2,7 +2,7 @@
     "name": "genetic",
     "batch_size": 256,
     "iterations": 256,
-    "instances": 1,
+    "instances": 4,
     "level_weight": 0.05,
     "mode": "binary_two_sided",
     "opt_params": {
