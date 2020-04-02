@@ -148,7 +148,7 @@ class Model:
                                                            should_shuffle=False,
                                                            drop_incomplete_batches=True)
 
-        if self.output_type == OutputType.CLASSIFICATION:
+        if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
             return self.predict_classification(test_batch_generator, test_batch_size, max_num_batches, flops_dict)
         else:  # Regression
             return self.predict_regression(test_batch_generator, test_batch_size, max_num_batches, flops_dict)

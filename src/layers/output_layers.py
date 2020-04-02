@@ -60,7 +60,7 @@ def compute_multi_classification_output(model_output: tf.Tensor, labels: tf.Tens
     predictions = tf.math.argmax(predicted_probs, axis=-1, output_type=labels.dtype)  # [B]
 
     # Compute the batch-wise accuracy
-    correct = tf.cast(predictions == tf.squeeze(labels, axis=-1), dtype=tf.float32)
+    correct = tf.cast(tf.equal(predictions, tf.squeeze(labels, axis=-1)), dtype=tf.float32)
     accuracy = tf.reduce_mean(correct)
 
     # TODO: Compute the 'average' F1 score for each class

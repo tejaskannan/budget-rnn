@@ -5,7 +5,7 @@ from argparse import ArgumentParser
 from typing import Optional
 
 from models.model_factory import get_model
-from dataset.rnn_sample_dataset import RNNSampleDataset
+from dataset.dataset_factory import get_dataset
 from utils.hyperparameters import HyperParameters
 from utils.file_utils import extract_model_name, read_by_file_suffix, save_by_file_suffix
 from utils.constants import HYPERS_PATH, TEST_LOG_PATH, TRAIN, VALID, TEST, METADATA_PATH
@@ -41,10 +41,7 @@ def model_test(path: str, batch_size: Optional[int], max_num_batches: Optional[i
 
 def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperParameters, batch_size: Optional[int], max_num_batches: Optional[int]):
     # Create the dataset
-    train_folder = os.path.join(dataset_folder, TRAIN)
-    valid_folder = os.path.join(dataset_folder, VALID)
-    test_folder = os.path.join(dataset_folder, TEST)
-    dataset = RNNSampleDataset(train_folder, valid_folder, test_folder)
+    dataset = get_dataset(hypers.dataset_type, dataset_folder)
 
     # Build model and compute flops
     model = get_model(hypers, save_folder, is_train=False)

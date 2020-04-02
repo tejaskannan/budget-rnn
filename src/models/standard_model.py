@@ -328,7 +328,7 @@ class StandardModel(Model):
             # Get FLOPS for operations that are applied to the entire sequence. We include the embedding layer
             # here because it has a well-defined sequence length so Tensorflow will automatically account for 
             # the multiplier
-            single_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), [OUTPUT_LAYER_NAME, TRANSFORM_LAYER_NAME]))
+            single_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), [OUTPUT_LAYER_NAME, EMBEDDING_LAYER_NAME]))
             single_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
                                             .with_node_names(show_name_regexes=single_operations) \
                                             .order_by('flops').build()
@@ -353,10 +353,11 @@ class StandardModel(Model):
             elapsed = time.time() - start
 
             labels_list.append(np.vstack(batch[OUTPUT]))
-            predictions_list.append(prediction)
+            predictions_list.append(np.vstack(prediction))
             latencies.append(elapsed)
 
         predictions = np.vstack(predictions_list)
+
         labels = np.vstack(labels_list)
         avg_latency = np.average(latencies[1:])  # Skip first due to outliers in caching
         flops = flops_dict[self.output_ops[0]]
