@@ -6,6 +6,7 @@ from utils.hyperparameters import HyperParameters
 from utils.constants import TRAIN, VALID, TEST
 from utils.file_utils import read_by_file_suffix, make_dir
 from models.model_factory import get_model
+from dataset.dataset_factory import get_dataset
 from dataset.rnn_sample_dataset import RNNSampleDataset
 from typing import Optional, Dict
 from test import test
@@ -15,10 +16,7 @@ def train(data_folder: str, save_folder: str, hypers: HyperParameters, max_epoch
     model = get_model(hypers, save_folder=save_folder, is_train=True)
 
     # Create dataset
-    train_folder = os.path.join(data_folder, TRAIN)
-    valid_folder = os.path.join(data_folder, VALID)
-    test_folder = os.path.join(data_folder, TEST)
-    dataset = RNNSampleDataset(train_folder, valid_folder, test_folder)
+    dataset = get_dataset(hypers.dataset_type, data_folder)
 
     if max_epochs is not None:
         hypers.epochs = max_epochs

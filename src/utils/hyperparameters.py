@@ -7,8 +7,6 @@ from utils.file_utils import read_by_file_suffix
 
 class HyperParameters:
 
-    __slots__ = ['epochs', 'patience', 'learning_rate', 'gradient_clip', 'learning_rate_decay', 'optimizer', 'batch_size', 'model', 'dropout_keep_rate', 'model_params', 'decay_steps', 'input_noise']
-
     def __init__(self, parameters: Dict[str, Any]):
         # Unpack arguments
         self.learning_rate = parameters.get('learning_rate', 0.0001)
@@ -23,6 +21,7 @@ class HyperParameters:
         self.model = parameters.get('model')
         self.model_params = parameters.get('model_params', dict())
         self.input_noise = parameters.get('input_noise', 0.0)
+        self.dataset_type = parameters.get('dataset_type', 'standard')
 
     def __dict__(self) -> Dict[str, Any]:
         return {
@@ -37,7 +36,8 @@ class HyperParameters:
             'dropout_keep_rate': self.dropout_keep_rate,
             'model': self.model,
             'model_params': self.model_params,
-            'input_noise': self.input_noise
+            'input_noise': self.input_noise,
+            'dataset_type': self.dataset_type
         }
 
     def __str__(self) -> str:

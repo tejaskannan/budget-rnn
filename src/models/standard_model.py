@@ -7,7 +7,7 @@ from collections import defaultdict
 from typing import Optional, Dict, List, Any, DefaultDict, Iterable
 
 from layers.basic import mlp, pool_sequence
-from layers.output_layers import OutputType, compute_binary_classification_output
+from layers.output_layers import OutputType, compute_binary_classification_output, compute_multi_classification_output
 from layers.embedding_layer import embedding_layer
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
@@ -131,21 +131,21 @@ class StandardModel(Model):
         seq_length = self.metadata[SEQ_LENGTH]
 
         input_shape = (None, seq_length) + input_features_shape
+        output_dtype = tf.int32 if self.output_type == OutputType.MULTI_CLASSIFICATION else tf.float32
 
         if not is_frozen:
             self._placeholders[INPUTS] = tf.placeholder(shape=input_shape,
                                                         dtype=tf.float32,
                                                         name=INPUTS)
-
             self._placeholders[OUTPUT] = tf.placeholder(shape=(None, num_output_features),
-                                                        dtype=tf.float32,
+                                                        dtype=output_dtype,
                                                         name=OUTPUT)
             self._placeholders[DROPOUT_KEEP_RATE] = tf.placeholder(shape=(),
                                                                    dtype=tf.float32,
                                                                    name=DROPOUT_KEEP_RATE)
         else:
             self._placeholders[INPUTS] = tf.ones(shape=(1,) + input_shape[1:], dtype=tf.float32, name=INPUTS)
-            self._placeholders[OUTPUT] = tf.ones(shape=(1, num_output_features), dtype=tf.float32, name=OUTPUT)
+            self._placeholders[OUTPUT] = tf.ones(shape=(1, num_output_features), dtype=output_dtype, name=OUTPUT)
             self._placeholders[DROPOUT_KEEP_RATE] = tf.ones(shape=(), dtype=tf.float32, name=DROPOUT_KEEP_RATE)
 
     def make_model(self, is_train: bool):
@@ -153,7 +153,6 @@ class StandardModel(Model):
             self._make_model(is_train)
 
     def _make_model(self, is_train: bool):
-    
         # Embed the input sequence into a [B, T, D] tensor
         input_sequence = embedding_layer(inputs=self._placeholders[INPUTS],
                                          units=self.hypers.model_params['state_size'],
@@ -249,17 +248,25 @@ class StandardModel(Model):
             raise ValueError(f'Unknown transformation type: {self.model_type}')
 
         # Create the output layer
+        output_size = self.metadata[NUM_OUTPUT_FEATURES] if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[SEQ_LENGTH] + 1
         output = mlp(inputs=aggregated,
-                     output_size=self.metadata[NUM_OUTPUT_FEATURES],
+                     output_size=output_size,
                      hidden_sizes=self.hypers.model_params['output_hidden_units'],
                      activations=self.hypers.model_params['output_hidden_activation'],
                      dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
                      name='output-layer')
 
-        if self.output_type == OutputType.CLASSIFICATION:
+        if self.output_type == OutputType.BINARY_CLASSIFICATION:
             classification_output = compute_binary_classification_output(model_output=output,
                                                                          labels=self._placeholders[OUTPUT])
 
+            self._ops[LOGITS] = classification_output.logits
+            self._ops[PREDICTION] = classification_output.predictions
+            self._ops[ACCURACY] = classification_output.accuracy
+            self._ops[F1_SCORE] = classification_output.f1_score
+        elif self.output_type == OutputType.MULTI_CLASSIFICATION:
+            classification_output = compute_multi_classification_output(model_output=output,
+                                                                        labels=self._placeholders[OUTPUT])
             self._ops[LOGITS] = classification_output.logits
             self._ops[PREDICTION] = classification_output.predictions
             self._ops[ACCURACY] = classification_output.accuracy
@@ -271,13 +278,13 @@ class StandardModel(Model):
         expected_output = self._placeholders[OUTPUT]
         predictions = self._ops[PREDICTION]
 
-        if self.output_type == OutputType.CLASSIFICATION:
+        if self.output_type == OutputType.BINARY_CLASSIFICATION:
             loss_mode = self.hypers.model_params['loss_mode'].lower()
 
             logits = self._ops[LOGITS]
             predicted_probs = tf.math.sigmoid(logits)
 
-            if loss_mode in ('cross-entropy', 'accuracy', 'cross_entropy'):
+            if loss_mode in ('binary-cross-entropy', 'binary_cross_entropy'):
                 sample_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=expected_output,
                                                                       logits=logits)
                 self._ops[LOSS] = tf.reduce_mean(sample_loss)
@@ -286,6 +293,12 @@ class StandardModel(Model):
                                                 labels=expected_output)
             else:
                 raise ValueError(f'Unknown loss mode: {loss_mode}')
+
+        elif self.output_type == OutputType.MULTI_CLASSIFICATION:
+            logits = self._ops[LOGITS]
+            sample_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits,
+                                                                         labels=tf.squeeze(expected_output, axis=-1))
+            self._ops[LOSS] = tf.reduce_mean(sample_loss)
         else:
             self._ops[LOSS] = tf.reduce_mean(tf.square(predictions - expected_output))
 

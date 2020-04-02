@@ -360,7 +360,7 @@ class Model:
                 feed_dict = self.batch_to_feed_dict(batch, is_train=True)
                 ops_to_run = [self.optimizer_op_name, self.global_step_op_name] + self.loss_op_names
 
-                if self.output_type == OutputType.CLASSIFICATION:
+                if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
                     ops_to_run += self.accuracy_op_names
 
                 train_results = self.execute(feed_dict, ops_to_run)
@@ -384,7 +384,7 @@ class Model:
 
                 avg_train_acc_so_far = train_acc_agg / train_batch_counter
 
-                if self.output_type == OutputType.CLASSIFICATION:
+                if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
                     print(f'Train Batch {train_batch_counter}. Avg loss so far: {avg_train_loss_so_far:.4f}, Avg accuracy so far: {avg_train_acc_so_far:.4f}', end='\r')
                 else:
                     print(f'Train Batch {train_batch_counter}. Avg loss so far: {avg_train_loss_so_far:.4f}', end='\r')
@@ -408,7 +408,7 @@ class Model:
                 feed_dict = self.batch_to_feed_dict(batch, is_train=False)
 
                 ops_to_run: List[str] = []
-                if self.output_type == OutputType.CLASSIFICATION:
+                if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
                     ops_to_run += self.accuracy_op_names
 
                 ops_to_run += self.loss_op_names
@@ -434,7 +434,7 @@ class Model:
 
                 avg_valid_acc_so_far = valid_acc_agg / valid_batch_counter
 
-                if self.output_type == OutputType.CLASSIFICATION:
+                if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
                     print(f'Valid Batch {valid_batch_counter}. Avg loss so far: {avg_valid_loss_so_far:.4f}, Avg accuracy so far: {avg_valid_acc_so_far:.4f}', end='\r')
                 else:
                     print(f'Valid Batch {valid_batch_counter}. Avg loss so far: {avg_valid_loss_so_far:.4f}', end='\r')
@@ -463,7 +463,7 @@ class Model:
                         has_improved = True
 
                 # For classification tasks, we want to maximize accuracy
-                if self.output_type == OutputType.CLASSIFICATION:
+                if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
                     valid_acc = epoch_valid_acc[op_name]
                     if valid_acc > best_valid_metric_dict[op_name]:
                         # Save the corresponding loss operation
