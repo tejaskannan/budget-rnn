@@ -296,8 +296,8 @@ class StandardModel(Model):
 
         elif self.output_type == OutputType.MULTI_CLASSIFICATION:
             logits = self._ops[LOGITS]
-            sample_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits,
-                                                                         labels=tf.squeeze(expected_output, axis=-1))
+            labels = tf.squeeze(expected_output, axis=-1)
+            sample_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=labels)
             self._ops[LOSS] = tf.reduce_mean(sample_loss)
         else:
             self._ops[LOSS] = tf.reduce_mean(tf.square(predictions - expected_output))

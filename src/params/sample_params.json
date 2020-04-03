@@ -6,6 +6,7 @@
 	"epochs": 50,
 	"patience": 10,
     "model": "adaptive",
+    "dataset_type": "collision",
     "input_noise": 0.01,
 	"model_params": {
 		"state_size": 8,
@@ -15,7 +16,7 @@
 		"rnn_layers": 1,
 		"output_hidden_units": [16],
 		"output_hidden_activation": "tanh",
-        "output_type": "classification",
+        "output_type": "multi_classification",
         "pos_weights": [1.0, 1.0, 1.0, 1.0],
         "neg_weights": [1.0, 1.0, 1.0, 1.0],
 		"layer_weight": 1.0,

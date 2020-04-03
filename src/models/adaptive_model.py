@@ -11,7 +11,7 @@ from models.base_model import Model
 from layers.basic import rnn_cell, mlp
 from layers.cells.cells import make_rnn_cell, MultiRNNCell
 from layers.rnn import dynamic_rnn, dropped_rnn, RnnOutput
-from layers.output_layers import OutputType, compute_binary_classification_output
+from layers.output_layers import OutputType, compute_binary_classification_output, compute_multi_classification_output
 from layers.embedding_layer import embedding_layer
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
@@ -190,6 +190,8 @@ class AdaptiveModel(Model):
         samples_per_seq = self.samples_per_seq
         num_sequences = self.num_sequences
 
+        output_dtype = tf.int32 if self.output_type == OutputType.MULTI_CLASSIFICATION else tf.float32
+
         # Make input placeholders
         for i in range(num_sequences):
             input_shape = [None, samples_per_seq] + list(input_features_shape)
@@ -210,7 +212,7 @@ class AdaptiveModel(Model):
         if not is_frozen:
             # [B, K]
             self._placeholders[OUTPUT] = tf.placeholder(shape=[None, num_output_features],
-                                                        dtype=tf.float32,
+                                                        dtype=output_dtype,
                                                         name=OUTPUT)
             self._placeholders[DROPOUT_KEEP_RATE] = tf.placeholder(shape=[],
                                                                    dtype=tf.float32,
@@ -219,7 +221,7 @@ class AdaptiveModel(Model):
                                                                 dtype=tf.float32,
                                                                 name='loss-weights')
         else:
-            self._placeholders[OUTPUT] = tf.ones(shape=[1, num_output_features], dtype=tf.float32, name=OUTPUT)
+            self._placeholders[OUTPUT] = tf.ones(shape=[1, num_output_features], dtype=output_dtype, name=OUTPUT)
             self._placeholders[DROPOUT_KEEP_RATE] = tf.ones(shape=[], dtype=tf.float32, name=DROPOUT_KEEP_RATE)
             self._placeholders['loss_weights'] = tf.ones(shape=[self.num_outputs], dtype=tf.float32, name='loss-weights')
 
@@ -280,9 +282,6 @@ class AdaptiveModel(Model):
         levels_dict = defaultdict(list)
         labels: List[np.ndarray] = []
 
-        # Standard, baseline thresholds
-        thresholds = [TwoSidedThreshold(lower=ONE_HALF, upper=1.0) for _ in range(self.num_outputs)]
-
         for batch_num, batch in enumerate(test_batch_generator):
             feed_dict = self.batch_to_feed_dict(batch, is_train=False)
 
@@ -294,9 +293,9 @@ class AdaptiveModel(Model):
             start = time.time()
             prediction_generator = self.anytime_generator(feed_dict, self.num_outputs)
             for prediction_op, (prediction, logits) in zip(self.prediction_ops, prediction_generator):
-                predictions_dict[prediction_op].append(prediction)  # [B]
+                predictions_dict[prediction_op].append(np.vstack(prediction))  # [B]
                 logits_list.append(logits)
- 
+
                 elapsed = time.time() - start
 
                 latencies.append(elapsed)
@@ -309,22 +308,6 @@ class AdaptiveModel(Model):
 
             labels.append(np.vstack(batch[OUTPUT]))
 
-            # Scheduled model
-            logits = np.concatenate(logits_list, axis=-1)
-            predicted_probs = sigmoid(logits)
-            level_output = lower_threshold_predictions(predicted_probs, thresholds)
-            level_predictions = level_output.predictions
-            computed_levels = level_output.indices
-
-            scheduled_latencies = [latencies[x] for x in computed_levels]
-            scheduled_flops = [flops_dict[get_prediction_name(x)] for x in computed_levels]
-
-            predictions_dict[SCHEDULED_MODEL].append(np.expand_dims(level_predictions, axis=-1))
-            latencies_dict[SCHEDULED_MODEL].append(np.average(scheduled_latencies))
-            levels_dict[SCHEDULED_MODEL].append(np.average(computed_levels + 1.0))
-            flops_dict[SCHEDULED_MODEL] = np.average(scheduled_flops)
-
-            # Compute metrics for the scheduled model
             if max_num_batches is not None and batch_num >= max_num_batches:
                 break
 
@@ -343,6 +326,7 @@ class AdaptiveModel(Model):
                 metric_value = get_classification_metric(metric_name, predictions, labels, latency, levels, flops)
                 result[model_name][metric_name.name] = metric_value
 
+            # Remove first latency to remove outliers due to startup costs
             result[model_name][ALL_LATENCY] = latencies_dict[model_name][1:]
 
         return result
@@ -427,17 +411,25 @@ class AdaptiveModel(Model):
             rnn_output = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
 
             # [B, K]
+            output_size = num_output_features if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[SEQ_LENGTH] + 1
             output = mlp(inputs=rnn_output,
-                         output_size=num_output_features,
+                         output_size=output_size,
                          hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
                          activations=self.hypers.model_params['output_hidden_activation'],
                          dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
                          name=output_layer_name)
 
-            if self.output_type == OutputType.CLASSIFICATION:
+            if self.output_type == OutputType.BINARY_CLASSIFICATION:
                 classification_output = compute_binary_classification_output(model_output=output,
                                                                              labels=self._placeholders[OUTPUT])
 
+                self._ops[logits_name] = classification_output.logits
+                self._ops[prediction_name] = classification_output.predictions
+                self._ops[accuracy_name] = classification_output.accuracy
+                self._ops[f1_score_name] = classification_output.f1_score
+            elif self.output_type == OutputType.MULTI_CLASSIFICATION:
+                classification_output = compute_multi_classification_output(model_output=output,
+                                                                            labels=self._placeholders[OUTPUT])
                 self._ops[logits_name] = classification_output.logits
                 self._ops[prediction_name] = classification_output.predictions
                 self._ops[accuracy_name] = classification_output.accuracy
@@ -467,7 +459,7 @@ class AdaptiveModel(Model):
             expected_output = self._placeholders[OUTPUT]
             predictions = self._ops[get_prediction_name(level)]
 
-            if self.output_type == OutputType.CLASSIFICATION:
+            if self.output_type == OutputType.BINARY_CLASSIFICATION:
                 logits = self.ops[get_logits_name(level)]
                 predicted_probs = tf.math.sigmoid(logits)
 
@@ -479,6 +471,12 @@ class AdaptiveModel(Model):
                     self._ops[loss_name] = f1_score_loss(predicted_probs=predicted_probs, labels=expected_output)
                 else:
                     raise ValueError(f'Unknown loss mode: {loss_mode}')
+            elif self.output_type == OutputType.MULTI_CLASSIFICATION:
+                logits = self.ops[get_logits_name(level)]
+                labels = tf.squeeze(expected_output, axis=-1)
+
+                sample_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=labels)
+                self._ops[loss_name] = tf.reduce_mean(sample_loss)
             else:  # Regression task
                 self._ops[loss_name] = tf.reduce_mean(tf.square(predictions - expected_output))  # MSE loss
 
