@@ -513,6 +513,14 @@ class AdaptiveModel(Model):
                 shifted_probs = tf.roll(predicted_probs, shift=1, axis=-1)  # [B, L]
                 level_penalty = tf.nn.relu(predicted_probs - shifted_probs) * mask  # [B, L]
                 sample_penalty = tf.reduce_mean(tf.reduce_sum(level_penalty, axis=-1))
+            elif penalty_type == 'trend':
+                mask = tf.cast(indices > 1, dtype=tf.float32)  # [1, L]
+
+                shifted_one = tf.roll(predicted_probs, shift=1, axis=-1)  # [B, L]
+                shifted_two = tf.roll(predicted_probs, shift=2, axis=-1)  # [B, L]
+
+                second_difference = mask * tf.square(predicted_probs - 2 * shifted_one + shifted_two) / 4.0
+                sample_penalty = tf.reduce_mean(tf.reduce_sum(second_difference, axis=-1))
             else:
                 raise ValueError(f'Unknown penalty type: {penalty_type}')
 

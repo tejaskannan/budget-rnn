@@ -5,7 +5,7 @@ from collections import namedtuple
 from .constants import SMALL_NUMBER
 
 
-FusionLayer = namedtuple('FusionLayer', ['prev', 'curr', 'bias'])
+FusionLayer = namedtuple('FusionLayer', ['dense', 'bias'])
 NODES_TO_SKIP = ['initializer', 'dropout']
 
 
@@ -115,9 +115,8 @@ def fuse_states(curr_state: tf.Tensor, prev_state: Optional[tf.Tensor], fusion_l
         concat = tf.concat([tf.expand_dims(curr_state, axis=-1), tf.expand_dims(prev_state, axis=-1)], axis=-1)  # [B, D, 2]
         return tf.reduce_max(concat, axis=-1)  # [B, D]
     elif mode in ('gate', 'gate_layer', 'gate-layer'):
-        curr_transform = fusion_layer.curr(curr_state)  # [B, D]
-        prev_transform = fusion_layer.prev(prev_state)  # [B, D]
-        update_weight = tf.math.sigmoid(prev_transform + curr_transform + fusion_layer.bias)
+        transform = fusion_layer.dense(tf.concat([curr_state, prev_state], axis=-1))  # [B, D]
+        update_weight = tf.math.sigmoid(transform + fusion_layer.bias)
         return update_weight * curr_state + (1.0 - update_weight) * prev_state
     else:
         raise ValueError(f'Unknown fusion mode: {mode}')

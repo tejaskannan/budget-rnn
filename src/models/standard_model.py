@@ -315,7 +315,7 @@ class StandardModel(Model):
             # Get FLOPS for operations that are applied to the entire sequence. We include the embedding layer
             # here because it has a well-defined sequence length so Tensorflow will automatically account for 
             # the multiplier
-            single_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), [OUTPUT_LAYER_NAME, TRANSFORM_LAYER_NAME]))
+            single_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), [OUTPUT_LAYER_NAME, EMBEDDING_LAYER_NAME]))
             single_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
                                             .with_node_names(show_name_regexes=single_operations) \
                                             .order_by('flops').build()
