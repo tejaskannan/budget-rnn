@@ -1,6 +1,6 @@
 import numpy as np
 from collections import namedtuple
-from typing import Union, List
+from typing import Union, List, Any
 from enum import Enum, auto
 
 from utils.constants import SMALL_NUMBER, BIG_NUMBER
@@ -13,6 +13,7 @@ TwoSidedThreshold = namedtuple('TwoSidedThreshold', ['lower', 'upper'])
 class InferenceMode(Enum):
     BINARY_ONE_SIDED = auto()
     BINARY_TWO_SIDED = auto()
+    MULTICLASS = auto()
 
 
 def order_threshold_lists(lower: List[float], upper: List[float], should_sort: bool) -> List[TwoSidedThreshold]:
@@ -50,11 +51,13 @@ def matrix_to_thresholds(threshold_matrix: np.ndarray) -> List[TwoSidedThreshold
     return thresholds
 
 
-def adaptive_inference(predicted_probs: np.ndarray, thresholds: List[TwoSidedThreshold], mode: InferenceMode) -> ThresholdedOutput:
+def adaptive_inference(predicted_probs: np.ndarray, thresholds: List[Any], mode: InferenceMode) -> ThresholdedOutput:
     if mode == InferenceMode.BINARY_ONE_SIDED:
         return lower_threshold_predictions(predicted_probs, thresholds)
     elif mode == InferenceMode.BINARY_TWO_SIDED:
         return two_sided_predictions(predicted_probs, thresholds)
+    elif mode == InferenceMode.MULTICLASS:
+        return upper_threshold_predictions(predicted_probs, thresholds)
 
     raise ValueError(f'Unknown inference mode: {mode}')
 
@@ -143,42 +146,33 @@ def upper_threshold_predictions(predicted_probs: np.ndarray, thresholds: np.ndar
     """
     assert predicted_probs.shape[1:] == thresholds.shape, 'Misaligned shapes for predictions and thresholds'
 
-    num_thresholds, num_classes = thresholds.shape
+    num_samples, num_thresholds, num_classes = predicted_probs.shape 
     threshold_indices = np.arange(start=0, stop=num_thresholds)
-    class_indices = np.arange(start=0, stop=num_classes)
 
     # Compute the predicted index for each level
     batch_indices = np.expand_dims(np.arange(start=0, stop=predicted_probs.shape[0]), axis=-1) # [B, 1]
     batch_indices = batch_indices * num_thresholds * num_classes  # [B, 1]
-    print(batch_indices)
+    classes_shift = np.expand_dims(threshold_indices * num_classes, axis=0)  # [1, L]
+    index_shift = np.repeat(batch_indices, repeats=num_thresholds, axis=-1) + classes_shift  # [B, L]
 
-    threshold_indices = np.expand_dims(threshold_indices * num_classes, axis=0)
-    index_shift = np.repeat(batch_indices, repeats=num_thresholds, axis=-1) + threshold_indices  # [B, L]
-    
-    print(index_shift)
-    predicted_indices = np.argmax(predicted_probs, axis=-1)  # [B, L]
-    shifted_predictions = index_shift + predicted_indices
-    print(shifted_predictions)
+    predicted_classes = np.argmax(predicted_probs, axis=-1)  # [B, L]
+    shifted_predictions = index_shift + predicted_classes
 
+    # Select the maximum probabilities
     max_probs = np.take(predicted_probs, indices=shifted_predictions)  # [B, L]
-    selected_thresholds = np.take(thresholds, indices=shifted_predictions)  # [B, L]
 
-    print(predicted_probs)
-    print(predicted_indices)
-    print(max_probs)
-    # print(selected_thresholds)
+    # Select the thresholds corresponding to the maximum indices
+    tiled_thresholds = np.tile(np.expand_dims(thresholds, axis=0), reps=(num_samples, 1, 1))  # [B, L, K]
+    selected_thresholds = np.take(tiled_thresholds, indices=shifted_predictions)  # [B, L]
 
-    # Find elements in which the computation can be truncated
-    threshold_indices = np.arange(start=0, stop=thresholds.shape[0])
+    # Find the number of computed thresholds
     threshold_comparison = np.greater(max_probs, selected_thresholds).astype(dtype=np.float32)  # [B, L]
-    threshold_indices = np.where(threshold_comparison == 1, threshold_indices, thresholds.shape[0])  # [B, L]
-    computed_levels = np.min(threshold_indices, axis=-1)
+    threshold_indices = np.where(threshold_comparison == 1, threshold_indices, num_thresholds - 1)  # [B, L]
+    computed_levels = np.min(threshold_indices, axis=-1)  # [B]
 
-    # print(computed_levels)
+    # Compute threshold predictions using the corresponding number of computed levels
+    threshold_predictions = np.where(threshold_comparison == 1, predicted_classes, -1)  # [B, L]
+    predictions_shift = np.arange(start=0, stop=num_samples * num_thresholds, step=num_thresholds)  # [B]
+    predictions = np.take(predicted_classes, indices=computed_levels + predictions_shift)  # [B]
 
-
-
-predicted_probs = np.array([[[0.8, 0.1, 0.1], [0.7, 0.2, 0.1]], [[0.3, 0.4, 0.3], [0.35, 0.2, 0.45]]])
-thresholds = np.array([[0.7, 0.6, 0.4], [0.8, 0.7, 0.6]])
-
-upper_threshold_predictions(predicted_probs, thresholds)
+    return ThresholdedOutput(predictions=predictions, indices=computed_levels)

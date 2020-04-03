@@ -85,7 +85,7 @@ class GeneticOptimizer(RandomizedThresholdOptimizer):
     def should_sort(self) -> bool:
         return self._should_sort
 
-    def init(self, num_features: int) -> List[TwoSidedThreshold]:
+    def init(self, num_features: int) -> List[List[TwoSidedThreshold]]:
         population = []
         for _ in range(self.population_size - 1):
             init = np.random.uniform(low=LOWER_BOUND, high=UPPER_BOUND, size=(num_features, 2))
@@ -100,17 +100,17 @@ class GeneticOptimizer(RandomizedThresholdOptimizer):
         return population
 
     def update(self, state: List[List[TwoSidedThreshold]], fitness: List[float], probabilities: np.ndarray, labels: np.ndarray) -> List[List[TwoSidedThreshold]]:
-        state = self._selection(state, fitness)
-        return self._mutation(state)
+        state = self.selection(state, fitness)
+        return self.mutation(state)
 
-    def _selection(self, population: List[List[TwoSidedThreshold]], fitness: List[float]) -> List[List[TwoSidedThreshold]]:
+    def selection(self, population: List[List[TwoSidedThreshold]], fitness: List[float]) -> List[List[TwoSidedThreshold]]:
         """
         Stochastic universal sampling using a linear ranking fitness technique
         """
         population_size = len(population)
  
         # Select next population using roulette wheel selection
-        next_indices = self._sample(fitness, count=population_size - self.steady_state_count)
+        next_indices = self.sample(fitness, count=population_size - self.steady_state_count)
         next_population = [deepcopy(population[i]) for i in next_indices]
 
         # Perform crossover
@@ -128,12 +128,12 @@ class GeneticOptimizer(RandomizedThresholdOptimizer):
             # Crossover on lower
             r = np.random.uniform(low=0.0, high=1.0)
             if r < self.crossover_rate:
-                first_lower, second_lower = self._crossover(first_lower, second_lower)
+                first_lower, second_lower = self.crossover(first_lower, second_lower)
 
             # Crossover on upper
             r = np.random.uniform(low=0.0, high=1.0)
             if r < self.crossover_rate:
-                first_upper, second_upper = self._crossover(first_upper, second_upper)
+                first_upper, second_upper = self.crossover(first_upper, second_upper)
 
             # Create new individuals
             first_offspring = order_threshold_lists(lower=first_lower, upper=first_upper, should_sort=self.should_sort)
@@ -153,7 +153,7 @@ class GeneticOptimizer(RandomizedThresholdOptimizer):
 
         return crossover_population
 
-    def _sample(self, fitness: List[float], count: int) -> List[int]:
+    def sample(self, fitness: List[float], count: int) -> List[int]:
         normalized_fitness = softmax(fitness)
         indices = list(range(len(fitness)))
 
@@ -164,7 +164,7 @@ class GeneticOptimizer(RandomizedThresholdOptimizer):
 
         return selected
 
-    def _mutation(self, population: List[List[TwoSidedThreshold]]) -> List[List[TwoSidedThreshold]]:
+    def mutation(self, population: List[List[TwoSidedThreshold]]) -> List[List[TwoSidedThreshold]]:
         for i in range(len(population)):
             # Get individual thresholds
             lower = [t.lower for t in population[i]]
@@ -198,7 +198,7 @@ class GeneticOptimizer(RandomizedThresholdOptimizer):
 
         return population
 
-    def _crossover(self, first_parent: np.ndarray, second_parent: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def crossover(self, first_parent: np.ndarray, second_parent: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
         num_features = len(first_parent)
 

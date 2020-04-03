@@ -5,14 +5,14 @@ from collections import namedtuple
 from typing import Dict, Union, List, Optional, Tuple, Any
 
 from models.adaptive_model import AdaptiveModel
-from dataset.dataset import DataSeries
-from dataset.rnn_sample_dataset import RNNSampleDataset
+from dataset.dataset import DataSeries, Dataset
+from dataset.dataset_factory import get_dataset
 from utils.hyperparameters import HyperParameters
 from utils.file_utils import extract_model_name, read_by_file_suffix, save_by_file_suffix
 from utils.rnn_utils import get_logits_name
 from utils.constants import HYPERS_PATH, TEST_LOG_PATH, TRAIN, VALID, TEST, METADATA_PATH, SMALL_NUMBER, BIG_NUMBER, OPTIMIZED_TEST_LOG_PATH
-from utils.constants import SCHEDULED_OPTIMIZED, OPTIMIZED_RESULTS, OUTPUT
-from utils.np_utils import f1_score, precision, recall, sigmoid
+from utils.constants import SCHEDULED_OPTIMIZED, OPTIMIZED_RESULTS, OUTPUT, SCHEDULED_MODEL
+from utils.np_utils import f1_score, precision, recall, sigmoid, softmax, multiclass_f1_score, multiclass_precision, multiclass_recall
 from utils.testing_utils import ClassificationMetric
 from utils.rnn_utils import get_prediction_name
 from utils.threshold_utils import adaptive_inference, InferenceMode, TwoSidedThreshold
@@ -38,21 +38,18 @@ def result_to_dict(result: EvaluationResult):
     return {key.upper(): value for key, value in result._asdict().items()}
 
 
-def get_dataset(model_name: str, save_folder: str, dataset_folder: Optional[str]) -> RNNSampleDataset:
+def make_dataset(model_name: str, save_folder: str, dataset_type: str, dataset_folder: Optional[str]) -> Dataset:
     metadata_file = os.path.join(save_folder, METADATA_PATH.format(model_name))
     metadata = read_by_file_suffix(metadata_file)
 
+    # Infer the dataset
     if dataset_folder is None:
-        train_folder = metadata['data_folders'][TRAIN.upper()]
-        valid_folder = metadata['data_folders'][VALID.upper()]
-        test_folder = metadata['data_folders'][TEST.upper()]
-    else:
-        assert os.path.exists(dataset_folder), f'The dataset folder {dataset_folder} does not exist!'
-        train_folder = os.path.join(dataset_folder, TRAIN)
-        valid_folder = os.path.join(dataset_folder, VALID)
-        test_folder = os.path.join(dataset_folder, TEST)
+        dataset_folder = os.path.dirname(metadata['data_folders'][TRAIN.upper()])
 
-    return RNNSampleDataset(train_folder, valid_folder, test_folder)
+    # Validate the dataset folder
+    assert os.path.exists(dataset_folder), f'The dataset folder {dataset_folder} does not exist!'
+
+    return get_dataset(dataset_type=dataset_type, data_folder=dataset_folder)
 
 
 def get_model(model_name: str, hypers: HyperParameters, save_folder: str) -> AdaptiveModel:
@@ -61,7 +58,7 @@ def get_model(model_name: str, hypers: HyperParameters, save_folder: str) -> Ada
     return model
 
 
-def get_serialized_info(model_path: str, dataset_folder: Optional[str]) -> Tuple[AdaptiveModel, RNNSampleDataset, Dict[str, Any]]:
+def get_serialized_info(model_path: str, dataset_folder: Optional[str]) -> Tuple[AdaptiveModel, Dataset, Dict[str, Any]]:
     save_folder, model_file = os.path.split(model_path)
 
     model_name = extract_model_name(model_file)
@@ -71,7 +68,7 @@ def get_serialized_info(model_path: str, dataset_folder: Optional[str]) -> Tuple
     hypers_path = os.path.join(save_folder, HYPERS_PATH.format(model_name))
     hypers = HyperParameters.create_from_file(hypers_path)
 
-    dataset = get_dataset(model_name, save_folder, dataset_folder)
+    dataset = make_dataset(model_name, save_folder, hypers.dataset_type, dataset_folder)
     model = get_model(model_name, hypers, save_folder)
 
     # Get test log
@@ -84,10 +81,14 @@ def get_serialized_info(model_path: str, dataset_folder: Optional[str]) -> Tuple
 
 def evaluate_thresholds(model: AdaptiveModel,
                         thresholds: List[TwoSidedThreshold],
-                        dataset: RNNSampleDataset,
+                        dataset: Dataset,
                         series: DataSeries,
                         mode: InferenceMode,
-                        test_log: Dict[str, Dict[str, float]]) -> EvaluationResult:
+                        test_log: Dict[str, Dict[str, float]],
+                        num_classes: Optional[int]) -> EvaluationResult:
+    if mode == InferenceMode.MULTICLASS:
+        assert num_classes is not None, 'Must provide the number of classes for multiclass problems'
+
     test_dataset = dataset.minibatch_generator(series,
                                                metadata=model.metadata,
                                                batch_size=model.hypers.batch_size,
@@ -107,10 +108,14 @@ def evaluate_thresholds(model: AdaptiveModel,
         logits = model.execute(feed_dict, logit_ops)
 
         # Concatenate logits into a 2D array (logit_ops is already ordered by level)
-        logits_concat = np.squeeze(np.concatenate([logits[op] for op in logit_ops], axis=-1))
-        probabilities = sigmoid(logits_concat)
+        if mode == InferenceMode.MULTICLASS:
+            logits_concat = np.concatenate([np.expand_dims(logits[op], axis=1) for op in logit_ops], axis=1)
+            probabilities = softmax(logits_concat, axis=-1)
+        else:
+            logits_concat = np.squeeze(np.concatenate([logits[op] for op in logit_ops], axis=-1))
+            probabilities = sigmoid(logits_concat)
+        
         labels = np.vstack(batch[OUTPUT])
-
         output = adaptive_inference(probabilities, thresholds, mode=mode)
         predictions = output.predictions
         computed_levels = output.indices
@@ -131,12 +136,27 @@ def evaluate_thresholds(model: AdaptiveModel,
     labels = np.vstack(labels_list)
 
     avg_levels = np.average(np.vstack(levels_list))
-    p = precision(predictions, labels)
-    r = recall(predictions, labels)
-    f1 = f1_score(predictions, labels)
-    accuracy = np.average(1.0 - np.abs(predictions - labels))
+
+    if mode == InferenceMode.MULTICLASS:
+        precision, precision_mask = multiclass_precision(predictions, labels, num_classes)
+        p = np.sum(precision * precision_mask) / (np.sum(precision_mask) + SMALL_NUMBER)
+
+        recall, recall_mask = multiclass_recall(predictions, labels, num_classes)
+        r = np.sum(recall * recall_mask) / (np.sum(recall_mask) + SMALL_NUMBER)
+
+        f1 = multiclass_f1_score(predictions, labels, num_classes)
+        thresholds = thresholds.astype(float).tolist()
+    else:
+        p = precision(predictions, labels)
+        r = recall(predictions, labels)
+        f1 = f1_score(predictions, labels)
+        thresholds = [t._asdict() for t in thresholds]
+
+    accuracy = np.average(np.equal(predictions, labels).astype(float))
     avg_latency = np.average(latencies)
     avg_flops = np.average(flops)
+
+    
 
     return EvaluationResult(precision=p,
                             recall=r,
@@ -145,11 +165,11 @@ def evaluate_thresholds(model: AdaptiveModel,
                             level=avg_levels,
                             latency=avg_latency,
                             all_latency=latencies,
-                            thresholds=[t._asdict() for t in thresholds],
+                            thresholds=thresholds,
                             flops=avg_flops)
 
 
-def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model: AdaptiveModel, dataset: RNNSampleDataset, test_log: Dict[str, Any]):
+def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model: AdaptiveModel, dataset: Dataset, test_log: Dict[str, Any]):
     # Get model save folder and name for later result saving
     save_folder, model_file = os.path.split(model_path)
     model_name = extract_model_name(model_file)
@@ -185,6 +205,7 @@ def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model
         print('==========')
 
     mode = InferenceMode[optimizer_params['mode'].upper()]
+    num_classes = optimizer_params['opt_params'].get('num_classes')
 
     print('Completed optimization. Choosing the best model...')
     if len(opt_outputs) == 1:
@@ -195,7 +216,8 @@ def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model
                                            dataset=dataset,
                                            series=DataSeries.TEST,
                                            mode=mode,
-                                           test_log=test_log)
+                                           test_log=test_log,
+                                           num_classes=num_classes)
         test_results = [final_result]
     else:
         best_thresholds, final_thresholds = None, None
@@ -209,14 +231,16 @@ def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model
                                                     dataset=dataset,
                                                     series=DataSeries.VALID,
                                                     mode=mode,
-                                                    test_log=test_log)
+                                                    test_log=test_log,
+                                                    num_classes=num_classes)
 
             test_result = evaluate_thresholds(model=model,
                                               thresholds=opt_output.thresholds,
                                               dataset=dataset,
                                               series=DataSeries.TEST,
                                               mode=mode,
-                                              test_log=test_log)
+                                              test_log=test_log,
+                                              num_classes=num_classes)
             test_results.append(test_result)
 
             # Evaluate models based on the validation set
@@ -227,20 +251,26 @@ def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model
 
     print('Completed selection and optimization testing. Starting baseline evaluation....')
 
-    baseline = [TwoSidedThreshold(lower=0.5, upper=1.0) for _ in output.thresholds]
-    result = evaluate_thresholds(model=model,
-                                 thresholds=baseline,
-                                 dataset=dataset,
-                                 series=DataSeries.TEST,
-                                 mode=InferenceMode.BINARY_ONE_SIDED,
-                                 test_log=test_log)
-    print_eval_result(result)
+    baseline_result = None
+    if mode != InferenceMode.MULTICLASS:
+        baseline = [TwoSidedThreshold(lower=0.5, upper=1.0) for _ in output.thresholds]
+        baseline_result = evaluate_thresholds(model=model,
+                                              thresholds=baseline,
+                                              dataset=dataset,
+                                              series=DataSeries.TEST,
+                                              mode=InferenceMode.BINARY_ONE_SIDED,
+                                              test_log=test_log,
+                                              num_classes=None)
+        print_eval_result(baseline_result)
 
-    print('===============')
+        print('===============')
 
     print_eval_result(final_result)
 
     # Save new results
+    if baseline_result is not None:
+        test_log[SCHEDULED_MODEL] = result_to_dict(baseline_result)
+
     test_log[SCHEDULED_OPTIMIZED] = result_to_dict(final_result)
     test_log[OPTIMIZED_RESULTS] = list(map(result_to_dict, test_results))
     optimized_test_log_path = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format(optimizer_params['name'], optimizer_params['level_weight'], model_name))

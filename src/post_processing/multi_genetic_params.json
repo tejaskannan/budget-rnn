@@ -1,0 +1,18 @@
+{
+    "name": "multiclass_genetic",
+    "batch_size": 256,
+    "iterations": 10,
+    "instances": 1,
+    "level_weight": 0.05,
+    "mode": "multiclass",
+    "opt_params": {
+        "population_size": 128,
+        "mutation_rate": 0.05,
+        "crossover_rate": 0.8,
+        "crossover_type": "one_point",
+        "mutation_type": "element",
+        "steady_state_count": 8,
+        "should_sort": false,
+        "num_classes": 13
+    }
+}

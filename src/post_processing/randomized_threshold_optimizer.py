@@ -1,13 +1,12 @@
 import numpy as np
 from collections import namedtuple
-from typing import List, Dict, Iterable, Any
+from typing import List, Dict, Iterable, Any, Optional
 
-from dataset.dataset import DataSeries
-from dataset.rnn_sample_dataset import RNNSampleDataset
+from dataset.dataset import DataSeries, Dataset
 from models.adaptive_model import AdaptiveModel
 from utils.rnn_utils import get_logits_name
 from utils.constants import SMALL_NUMBER, OUTPUT
-from utils.np_utils import f1_score, softmax, sigmoid, linear_normalize
+from utils.np_utils import f1_score, softmax, sigmoid, linear_normalize, multiclass_f1_score
 from utils.threshold_utils import adaptive_inference, TwoSidedThreshold, InferenceMode
 
 from .threshold_optimizer import ThresholdOptimizer, OptimizerOutput
@@ -26,7 +25,7 @@ class RandomizedThresholdOptimizer(ThresholdOptimizer):
     def level_weight(self) -> float:
         return self._level_weight
 
-    def optimize(self, model: AdaptiveModel, dataset: RNNSampleDataset) -> OptimizerOutput:
+    def optimize(self, model: AdaptiveModel, dataset: Dataset) -> OptimizerOutput:
         """
         Runs the genetic algorithm optimization.
         """
@@ -40,7 +39,7 @@ class RandomizedThresholdOptimizer(ThresholdOptimizer):
         logit_ops = [get_logits_name(i) for i in range(model.num_outputs)]
 
         best_score = 0.0
-        best_thresholds = [TwoSidedThreshold(upper=0.5, lower=0.5) for _ in range(model.num_outputs)]
+        best_thresholds = None
 
         # Compute optimization steps per batch
         batch = next(data_generator)
@@ -50,7 +49,14 @@ class RandomizedThresholdOptimizer(ThresholdOptimizer):
 
             # Concatenate logits into a 2D array (logit_ops is already ordered by level)
             logits_concat = np.concatenate([logits[op] for op in logit_ops], axis=-1)
-            probabilities = sigmoid(logits_concat)
+            
+            if self.inference_mode == InferenceMode.MULTICLASS:
+                logits_concat = np.concatenate([np.expand_dims(logits[op], axis=1) for op in logit_ops], axis=1)
+                probabilities = softmax(logits_concat, axis=-1)
+            else:
+                logits_concat = np.concatenate([logits[op] for op in logit_ops], axis=-1)
+                probabilities = sigmoid(logits_concat)
+ 
             labels = np.squeeze(np.vstack(batch[OUTPUT]), axis=-1)
 
             fitness = self.evaluate(state, probabilities, labels)
@@ -79,10 +85,10 @@ class RandomizedThresholdOptimizer(ThresholdOptimizer):
 
         return OptimizerOutput(score=best_score, thresholds=best_thresholds)
 
-    def init(self, num_features: int) -> List[List[TwoSidedThreshold]]:
+    def init(self, num_features: int) -> List[Any]:
         raise NotImplementedError()
 
-    def has_converged(self, state: List[List[TwoSidedThreshold]]) -> bool:
+    def has_converged(self, state: List[Any]) -> bool:
         state_array = np.array(state)
 
         if self.inference_mode == InferenceMode.BINARY_ONE_SIDED:
@@ -92,10 +98,10 @@ class RandomizedThresholdOptimizer(ThresholdOptimizer):
         else:
             return np.isclose(state_array, state_array[0]).all()
 
-    def update(self, state: List[TwoSidedThreshold], fitness: List[float], probabilities: np.ndarray, labels: np.ndarray) -> List[np.ndarray]:
+    def update(self, state: List[Any], fitness: List[float], probabilities: np.ndarray, labels: np.ndarray) -> List[Any]:
         raise NotImplementedError()
 
-    def evaluate(self, state: List[List[TwoSidedThreshold]], probabilities: np.ndarray, labels: np.ndarray) -> List[float]:
+    def evaluate(self, state: List[Any], probabilities: np.ndarray, labels: np.ndarray) -> List[float]:
         fitnesses: List[float] = []
 
         for element in state:
@@ -105,7 +111,11 @@ class RandomizedThresholdOptimizer(ThresholdOptimizer):
 
             num_levels = probabilities.shape[1]
             level_penalty = self.level_weight * np.average(levels / num_levels)
-            fitness = f1_score(predictions, labels) - level_penalty
+
+            if self.inference_mode == InferenceMode.MULTICLASS:
+                fitness = multiclass_f1_score(predictions, labels, num_classes=self.num_classes) - level_penalty
+            else:
+                fitness = f1_score(predictions, labels) - level_penalty
 
             fitnesses.append(fitness)
 
