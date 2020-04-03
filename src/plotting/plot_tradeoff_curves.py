@@ -89,7 +89,7 @@ def plot_tradeoff(model_results: Dict[str, List[MetricPair]], metric: str, cost:
             plt.show()
         else:
             make_dir(output_folder)
-            output_file = os.path.join(output_folder, f'{metric}.pdf')
+            output_file = os.path.join(output_folder, f'{metric}.png')
             plt.savefig(output_file)
 
 
