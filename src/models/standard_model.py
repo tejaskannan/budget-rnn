@@ -15,7 +15,7 @@ from utils.tfutils import pool_rnn_outputs, get_activation, tf_rnn_cell, get_rnn
 from utils.constants import ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS, PREDICTION, F1_SCORE, LOGITS, NODE_REGEX_FORMAT
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, INPUT_SCALER, OUTPUT_SCALER, SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, INPUT_NOISE
 from utils.constants import LABEL_MAP, REV_LABEL_MAP, NUM_CLASSES
-from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
+from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
 from utils.loss_utils import binary_classification_loss, f1_score_loss
 from .base_model import Model
 
@@ -325,7 +325,7 @@ class StandardModel(Model):
         result: DefaultDict[str, Dict[str, float]] = defaultdict(dict)
         for metric_name in ClassificationMetric:
             if self.output_type == OutputType.BINARY_CLASSIFICATION:
-                metric_value = get_classification_metric(metric_name, predictions, labels, avg_latency, 1, flops)
+                metric_value = get_binary_classification_metric(metric_name, predictions, labels, avg_latency, 1, flops)
             else:
                 metric_value = get_multi_classification_metric(metric_name, predictions, labels, avg_latency, 1, flops, self.metadata[NUM_CLASSES])
 

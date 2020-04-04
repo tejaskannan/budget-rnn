@@ -21,7 +21,7 @@ from utils.constants import NODE_REGEX_FORMAT, DROPOUT_KEEP_RATE, MODEL, SCHEDUL
 from utils.constants import INPUT_SCALER, OUTPUT_SCALER, INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE
 from utils.loss_utils import f1_score_loss, binary_classification_loss
 from utils.rnn_utils import *
-from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
+from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
 from utils.np_utils import sigmoid
 from utils.threshold_utils import lower_threshold_predictions, TwoSidedThreshold
 
@@ -282,7 +282,7 @@ class AdaptiveModel(Model):
 
             for metric_name in ClassificationMetric:
                 if self.output_type == OutputType.BINARY_CLASSIFICATION:
-                    metric_value = get_classification_metric(metric_name, predictions, labels, latency, levels, flops)
+                    metric_value = get_binary_classification_metric(metric_name, predictions, labels, latency, levels, flops)
                 else:
                     metric_value = get_multi_classification_metric(metric_name, predictions, labels, latency, levels, flops, self.metadata[NUM_CLASSES])
                 

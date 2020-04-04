@@ -12,7 +12,6 @@
         "crossover_type": "one_point",
         "mutation_type": "element",
         "steady_state_count": 8,
-        "should_sort": false,
-        "num_classes": 13
+        "should_sort": false
     }
 }

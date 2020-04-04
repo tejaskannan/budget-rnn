@@ -3,6 +3,7 @@ import numpy as np
 from argparse import ArgumentParser
 from collections import namedtuple
 from typing import Dict, Union, List, Optional, Tuple, Any
+from sklearn.metrics import f1_score, precision_score, recall_score
 
 from models.adaptive_model import AdaptiveModel
 from dataset.dataset import DataSeries, Dataset
@@ -11,8 +12,8 @@ from utils.hyperparameters import HyperParameters
 from utils.file_utils import extract_model_name, read_by_file_suffix, save_by_file_suffix
 from utils.rnn_utils import get_logits_name
 from utils.constants import HYPERS_PATH, TEST_LOG_PATH, TRAIN, VALID, TEST, METADATA_PATH, SMALL_NUMBER, BIG_NUMBER, OPTIMIZED_TEST_LOG_PATH
-from utils.constants import SCHEDULED_OPTIMIZED, OPTIMIZED_RESULTS, OUTPUT, SCHEDULED_MODEL
-from utils.np_utils import f1_score, precision, recall, sigmoid, softmax, multiclass_f1_score, multiclass_precision, multiclass_recall
+from utils.constants import SCHEDULED_OPTIMIZED, OPTIMIZED_RESULTS, OUTPUT, SCHEDULED_MODEL, NUM_CLASSES
+from utils.np_utils import sigmoid, softmax, multiclass_f1_score, multiclass_precision, multiclass_recall
 from utils.testing_utils import ClassificationMetric
 from utils.rnn_utils import get_prediction_name
 from utils.threshold_utils import adaptive_inference, InferenceMode, TwoSidedThreshold
@@ -84,11 +85,7 @@ def evaluate_thresholds(model: AdaptiveModel,
                         dataset: Dataset,
                         series: DataSeries,
                         mode: InferenceMode,
-                        test_log: Dict[str, Dict[str, float]],
-                        num_classes: Optional[int]) -> EvaluationResult:
-    if mode == InferenceMode.MULTICLASS:
-        assert num_classes is not None, 'Must provide the number of classes for multiclass problems'
-
+                        test_log: Dict[str, Dict[str, float]]) -> EvaluationResult:
     test_dataset = dataset.minibatch_generator(series,
                                                metadata=model.metadata,
                                                batch_size=model.hypers.batch_size,
@@ -138,28 +135,22 @@ def evaluate_thresholds(model: AdaptiveModel,
     avg_levels = np.average(np.vstack(levels_list))
 
     if mode == InferenceMode.MULTICLASS:
-        precision, precision_mask = multiclass_precision(predictions, labels, num_classes)
-        p = np.sum(precision * precision_mask) / (np.sum(precision_mask) + SMALL_NUMBER)
-
-        recall, recall_mask = multiclass_recall(predictions, labels, num_classes)
-        r = np.sum(recall * recall_mask) / (np.sum(recall_mask) + SMALL_NUMBER)
-
-        f1 = multiclass_f1_score(predictions, labels, num_classes)
+        precision = precision_score(labels, predictions, average='macro')
+        recall = recall_score(labels, predictions, average='macro')
+        f1 = f1_score(labels, predictions, average='macro')
         thresholds = thresholds.astype(float).tolist()
     else:
-        p = precision(predictions, labels)
-        r = recall(predictions, labels)
-        f1 = f1_score(predictions, labels)
+        precision = precision_score(labels, predictions, average='binary')
+        recall = recall_score(labels, predictions, average='binary')
+        f1 = f1_score(labels, predictions, average='binary')
         thresholds = [t._asdict() for t in thresholds]
 
     accuracy = np.average(np.equal(predictions, labels).astype(float))
     avg_latency = np.average(latencies)
     avg_flops = np.average(flops)
 
-    
-
-    return EvaluationResult(precision=p,
-                            recall=r,
+    return EvaluationResult(precision=precision,
+                            recall=recall,
                             f1_score=f1,
                             accuracy=accuracy,
                             level=avg_levels,
@@ -174,21 +165,6 @@ def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model
     save_folder, model_file = os.path.split(model_path)
     model_name = extract_model_name(model_file)
 
-   # model_name = extract_model_name(model_file)
-   # assert model_name is not None, f'Could not extract name from file: {model_file}'
-
-   # # Extract hyperparameters
-   # hypers_path = os.path.join(save_folder, HYPERS_PATH.format(model_name))
-   # hypers = HyperParameters.create_from_file(hypers_path)
-
-   # dataset = get_dataset(model_name, save_folder, dataset_folder)
-   # model = get_model(model_name, hypers, save_folder)
-
-   # # Get test log
-   # test_log_path = os.path.join(save_folder, TEST_LOG_PATH.format(model_name))
-   # assert os.path.exists(test_log_path), f'Must perform model testing before post processing'
-   # test_log = list(read_by_file_suffix(test_log_path))[0]
-
     print('Starting optimization')
 
     opt_outputs: List[OptimizerOutput] = []
@@ -198,6 +174,7 @@ def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model
                                   batch_size=optimizer_params['batch_size'],
                                   level_weight=optimizer_params['level_weight'],
                                   mode=optimizer_params['mode'],
+                                  num_classes=model.metadata[NUM_CLASSES],
                                   **optimizer_params['opt_params'])
         output = optimizer.optimize(model, dataset)
         
@@ -205,7 +182,6 @@ def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model
         print('==========')
 
     mode = InferenceMode[optimizer_params['mode'].upper()]
-    num_classes = optimizer_params['opt_params'].get('num_classes')
 
     print('Completed optimization. Choosing the best model...')
     if len(opt_outputs) == 1:
@@ -216,8 +192,7 @@ def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model
                                            dataset=dataset,
                                            series=DataSeries.TEST,
                                            mode=mode,
-                                           test_log=test_log,
-                                           num_classes=num_classes)
+                                           test_log=test_log)
         test_results = [final_result]
     else:
         best_thresholds, final_thresholds = None, None
@@ -231,16 +206,14 @@ def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model
                                                     dataset=dataset,
                                                     series=DataSeries.VALID,
                                                     mode=mode,
-                                                    test_log=test_log,
-                                                    num_classes=num_classes)
+                                                    test_log=test_log)
 
             test_result = evaluate_thresholds(model=model,
                                               thresholds=opt_output.thresholds,
                                               dataset=dataset,
                                               series=DataSeries.TEST,
                                               mode=mode,
-                                              test_log=test_log,
-                                              num_classes=num_classes)
+                                              test_log=test_log)
             test_results.append(test_result)
 
             # Evaluate models based on the validation set
@@ -259,8 +232,7 @@ def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model
                                               dataset=dataset,
                                               series=DataSeries.TEST,
                                               mode=InferenceMode.BINARY_ONE_SIDED,
-                                              test_log=test_log,
-                                              num_classes=None)
+                                              test_log=test_log)
         print_eval_result(baseline_result)
 
         print('===============')
