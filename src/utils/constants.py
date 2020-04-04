@@ -29,6 +29,9 @@ INPUT_SHAPE = 'input_shape'
 NUM_OUTPUT_FEATURES = 'num_output_features'
 SEQ_LENGTH = 'seq_length'
 INPUT_NOISE = 'input_noise'
+NUM_CLASSES = 'num_classes'
+LABEL_MAP = 'label_map'
+REV_LABEL_MAP = 'rev_label_map'
 
 # Model type names
 MODEL = 'model'

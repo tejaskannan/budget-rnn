@@ -2,9 +2,9 @@ import numpy as np
 from enum import Enum, auto
 from collections import namedtuple, defaultdict
 from typing import DefaultDict, Dict, Union, List, Optional, Tuple
+from sklearn.metrics import f1_score, recall_score, precision_score
 
 from utils.constants import SMALL_NUMBER
-from utils.np_utils import precision, recall, f1_score
 
 
 class ClassificationMetric(Enum):
@@ -38,13 +38,38 @@ def get_classification_metric(metric_name: ClassificationMetric, model_output: n
     if metric_name == ClassificationMetric.ACCURACY:
         return float(np.average(np.equal(model_output, expected_output).astype(float)))
     elif metric_name == ClassificationMetric.RECALL:
-        return float(recall(model_output, expected_output))
+        return float(recall_score(expected_output, model_output, average='binary'))
     elif metric_name == ClassificationMetric.PRECISION:
-        return float(precision(model_output, expected_output))
+        return float(precision_score(expected_output, model_output, average='binary'))
     elif metric_name == ClassificationMetric.F1_SCORE:
-        return float(f1_score(model_output, expected_output))
+        return float(f1_score(expected_output, model_output, average='binary'))
     elif metric_name == ClassificationMetric.LATENCY:
-        return latency
+        return float(latency)
+    elif metric_name == ClassificationMetric.LEVEL:
+        return float(level)
+    elif metric_name == ClassificationMetric.FLOPS:
+        return float(flops)
+    else:
+        raise ValueError(f'Unknown metric name {metric_name}')
+
+
+def get_multi_classification_metric(metric_name: ClassificationMetric,
+                                    model_output: np.ndarray,
+                                    expected_output: np.ndarray,
+                                    latency: float,
+                                    level: int,
+                                    flops: Union[int, float],
+                                    num_classes: int) -> float:
+    if metric_name == ClassificationMetric.ACCURACY:
+        return float(np.average(np.equal(model_output, expected_output).astype(float)))
+    elif metric_name == ClassificationMetric.RECALL:
+        return float(recall_score(expected_output, model_output, average='macro'))
+    elif metric_name == ClassificationMetric.PRECISION:
+        return float(precision_score(expected_output, model_output, average='macro'))
+    elif metric_name == ClassificationMetric.F1_SCORE:
+        return float(f1_score(expected_output, model_output, average='macro'))
+    elif metric_name == ClassificationMetric.LATENCY:
+        return float(latency)
     elif metric_name == ClassificationMetric.LEVEL:
         return float(level)
     elif metric_name == ClassificationMetric.FLOPS:

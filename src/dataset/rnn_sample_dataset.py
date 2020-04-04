@@ -5,6 +5,7 @@ from datetime import datetime
 
 from utils.constants import DATE_FORMAT, INPUTS, OUTPUT, SAMPLE_ID, INPUT_NOISE, SMALL_NUMBER
 from utils.constants import INPUT_SHAPE, INPUT_SCALER, OUTPUT_SCALER, NUM_OUTPUT_FEATURES
+from utils.constants import NUM_CLASSES, LABEL_MAP
 
 
 class RNNSampleDataset(Dataset):
@@ -29,14 +30,20 @@ class RNNSampleDataset(Dataset):
             input_noise = np.random.normal(loc=0.0, scale=metadata[INPUT_NOISE], size=normalized_input.shape)
             normalized_input = np.array(normalized_input) + input_noise
 
+        # Re-map labels for classification problems
+        output = sample[OUTPUT]
+        if metadata[NUM_CLASSES] > 0:
+            label_map = metadata[LABEL_MAP]
+            output = label_map[output]
+
         # Normalize outputs (Scaler expects a 2D input)
         output_scaler = metadata[OUTPUT_SCALER]
         if output_scaler is None:
-            normalized_output = [sample[OUTPUT]]
-        elif not isinstance(sample[OUTPUT], list) and not isinstance(sample[OUTPUT], np.ndarray):
-            normalized_output = output_scaler.transform([[sample[OUTPUT]]])
+            normalized_output = [output]
+        elif not isinstance(output, list) and not isinstance(output, np.ndarray):
+            normalized_output = output_scaler.transform([[output]])
         else:
-            normalized_output = output_scaler.transform([sample[OUTPUT]])
+            normalized_output = output_scaler.transform([output])
 
         # Shape output into batch
         normalized_output = np.reshape(normalized_output, (-1, metadata[NUM_OUTPUT_FEATURES]))

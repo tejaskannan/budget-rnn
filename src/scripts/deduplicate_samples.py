@@ -93,7 +93,7 @@ def deduplicate_samples(input_folder: str, output_folder: str, file_prefix: str,
 
 
 if __name__ == '__main__':
-    parser = ArgumentParser('Script to deduplicate feature-extracted collision datasets.')
+    parser = ArgumentParser('Script to deduplicate feature-extracted datasets.')
     parser.add_argument('--input-folder', type=str, required=True)
     parser.add_argument('--output-folder', type=str, required=True)
     parser.add_argument('--threshold', type=float, required=True)

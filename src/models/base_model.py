@@ -6,6 +6,7 @@ import gc
 from datetime import datetime
 from collections import defaultdict
 from typing import Optional, Iterable, Dict, Any, Union, List, DefaultDict, Set
+from sklearn.preprocessing import StandardScaler
 
 from dataset.dataset import Dataset, DataSeries
 from layers.output_layers import OutputType
@@ -14,8 +15,10 @@ from utils.tfutils import get_optimizer, variables_for_loss_op
 from utils.file_utils import read_by_file_suffix, save_by_file_suffix, make_dir
 from utils.constants import BIG_NUMBER, NAME_FMT, HYPERS_PATH, GLOBAL_STEP
 from utils.constants import METADATA_PATH, MODEL_PATH, TRAIN_LOG_PATH
-from utils.constants import LOSS, ACCURACY, OPTIMIZER_OP, F1_SCORE
-from utils.constants import TRAIN, VALID
+from utils.constants import LOSS, ACCURACY, OPTIMIZER_OP, F1_SCORE, INPUTS, OUTPUT, SAMPLE_ID
+from utils.constants import TRAIN, VALID, LABEL_MAP, NUM_CLASSES, REV_LABEL_MAP
+from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, INPUT_SCALER, OUTPUT_SCALER
+from utils.constants import SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, INPUT_NOISE
 
 
 class Model:
@@ -96,11 +99,66 @@ class Model:
 
     def load_metadata(self, dataset: Dataset):
         """
-        Loads metadata from the dataset. For example, this function
-        may construct the token vocabulary. Results are stored
+        Loads metadata from the dataset. Results are stored
         directly into self.metadata.
         """
-        pass
+        input_samples: List[List[float]] = []
+        output_samples: List[List[float]] = []
+
+        # Fetch training samples to prepare for normalization
+        unique_labels: Set[Any] = set()
+        for sample in dataset.iterate_series(series=DataSeries.TRAIN):
+            input_sample = np.array(sample[INPUTS])
+            input_samples.append(input_sample)
+
+            if not isinstance(sample[OUTPUT], list) and \
+                    not isinstance(sample[OUTPUT], np.ndarray):
+                output_samples.append([sample[OUTPUT]])
+            elif isinstance(sample[OUTPUT], np.ndarray) and len(sample[OUTPUT].shape) == 0:
+                output_samples.append([sample[OUTPUT]])
+            else:
+                output_samples.append(sample[OUTPUT])
+
+            if self.output_type == OutputType.MULTI_CLASSIFICATION:
+                unique_labels.add(sample[OUTPUT])
+
+        # Infer the number of input and output features
+        first_sample = np.array(input_samples[0])
+        input_shape = first_sample.shape[1:]  # Skip the sequence length
+        seq_length = len(input_samples[0])
+
+        input_scaler = None
+        if self.hypers.model_params['normalize_inputs']:
+            assert len(input_shape) == 1
+            input_samples = np.reshape(input_samples, newshape=(-1, input_shape[0]))
+            input_scaler = StandardScaler()
+            input_scaler.fit(input_samples)
+
+        output_scaler = None
+        num_output_features = len(output_samples[0])
+        if self.output_type == OutputType.REGRESSION:
+            output_scaler = StandardScaler()
+            output_scaler.fit(output_samples)
+
+        # Make the label maps for classification problems
+        label_map: Dict[Any, int] = dict()
+        reverse_label_map: Dict[int, Any] = dict()
+        if self.output_type == OutputType.MULTI_CLASSIFICATION:
+            for index, label in enumerate(sorted(unique_labels)):
+                label_map[label] = index
+                reverse_label_map[index] = label
+
+        self.metadata[INPUT_SCALER] = input_scaler
+        self.metadata[OUTPUT_SCALER] = output_scaler
+        self.metadata[INPUT_SHAPE] = input_shape
+        self.metadata[NUM_OUTPUT_FEATURES] = num_output_features
+        self.metadata[SEQ_LENGTH] = seq_length
+        self.metadata[INPUT_NOISE] = self.hypers.input_noise
+        
+        # Metadata for multiclass classification problems
+        self.metadata[NUM_CLASSES] = len(label_map)
+        self.metadata[LABEL_MAP] = label_map
+        self.metadata[REV_LABEL_MAP] = reverse_label_map
 
     def make_placeholders(self):
         """

@@ -17,11 +17,11 @@ from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
 from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS
-from utils.constants import NODE_REGEX_FORMAT, DROPOUT_KEEP_RATE, MODEL, SCHEDULED_MODEL
+from utils.constants import NODE_REGEX_FORMAT, DROPOUT_KEEP_RATE, MODEL, SCHEDULED_MODEL, NUM_CLASSES
 from utils.constants import INPUT_SCALER, OUTPUT_SCALER, INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE
 from utils.loss_utils import f1_score_loss, binary_classification_loss
 from utils.rnn_utils import *
-from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric, ALL_LATENCY
+from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
 from utils.np_utils import sigmoid
 from utils.threshold_utils import lower_threshold_predictions, TwoSidedThreshold
 
@@ -78,48 +78,6 @@ class AdaptiveModel(Model):
         if self.model_type == RNNModelType.VANILLA and not self.hypers.model_params['share_cell_weights']:
             return [get_loss_name(i) for i in range(self.num_outputs)]
         return [LOSS]
-
-    def load_metadata(self, dataset: Dataset):
-        input_samples: List[List[float]] = []
-        output_samples: List[List[float]] = []
-
-        # Fetch training samples to prepare for normalization
-        for sample in dataset.iterate_series(series=DataSeries.TRAIN):
-            input_sample = np.array(sample[INPUTS])
-            input_samples.append(input_sample)
-
-            if not isinstance(sample[OUTPUT], list) and \
-                    not isinstance(sample[OUTPUT], np.ndarray):
-                output_samples.append([sample[OUTPUT]])
-            elif isinstance(sample[OUTPUT], np.ndarray) and len(sample[OUTPUT].shape) == 0:
-                output_samples.append([sample[OUTPUT]])
-            else:
-                output_samples.append(sample[OUTPUT])
-
-        # Infer the number of input and output features
-        first_sample = np.array(input_samples[0])
-        input_shape = first_sample.shape[1:]  # Skip the sequence length
-        seq_length = len(input_samples[0])
-
-        input_scaler = None
-        if self.hypers.model_params['normalize_inputs']:
-            assert len(input_shape) == 1
-            input_samples = np.reshape(input_samples, newshape=(-1, input_shape[0]))
-            input_scaler = StandardScaler()
-            input_scaler.fit(input_samples)
-
-        output_scaler = None
-        num_output_features = len(output_samples[0])
-        if self.output_type == OutputType.REGRESSION:
-            output_scaler = StandardScaler()
-            output_scaler.fit(output_samples)
-
-        self.metadata[INPUT_SCALER] = input_scaler
-        self.metadata[OUTPUT_SCALER] = output_scaler
-        self.metadata[INPUT_SHAPE] = input_shape
-        self.metadata[NUM_OUTPUT_FEATURES] = num_output_features
-        self.metadata[SEQ_LENGTH] = seq_length
-        self.metadata[INPUT_NOISE] = self.hypers.input_noise
 
     def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
         dropout = self.hypers.dropout_keep_rate if is_train else 1.0
@@ -313,7 +271,7 @@ class AdaptiveModel(Model):
 
         # Stack all labels into a single array
         labels = np.vstack(labels)
-
+        
         result = defaultdict(dict)
         for model_name in predictions_dict.keys():
 
@@ -323,7 +281,11 @@ class AdaptiveModel(Model):
             flops = flops_dict[model_name]
 
             for metric_name in ClassificationMetric:
-                metric_value = get_classification_metric(metric_name, predictions, labels, latency, levels, flops)
+                if self.output_type == OutputType.BINARY_CLASSIFICATION:
+                    metric_value = get_classification_metric(metric_name, predictions, labels, latency, levels, flops)
+                else:
+                    metric_value = get_multi_classification_metric(metric_name, predictions, labels, latency, levels, flops, self.metadata[NUM_CLASSES])
+                
                 result[model_name][metric_name.name] = metric_value
 
             # Remove first latency to remove outliers due to startup costs
@@ -411,7 +373,7 @@ class AdaptiveModel(Model):
             rnn_output = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
 
             # [B, K]
-            output_size = num_output_features if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[SEQ_LENGTH] + 1
+            output_size = num_output_features if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[NUM_CLASSES]
             output = mlp(inputs=rnn_output,
                          output_size=output_size,
                          hidden_sizes=self.hypers.model_params.get('output_hidden_units'),

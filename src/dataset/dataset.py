@@ -102,9 +102,27 @@ class Dataset:
             num_samples = 0
             for sample in minibatch:
                 tensorized_sample = self.tensorize(sample, metadata, is_train=is_train)
-                for key, tensor in tensorized_sample.items():
-                    feed_dict[key].append(tensor)
-                num_samples += 1
+
+                # Ensure that there are no NoneType or NaN values in the tensorized sample
+                should_include = True
+                for tensor in tensorized_sample.values():
+                    if isinstance(tensor, list) or isinstance(tensor, np.ndarray):
+                        tensor_array = np.array(tensor)
+
+                        if np.any(np.isnan(tensor_array)) or np.any(tensor_array == None):
+                            should_include = False
+                    else:
+                        if tensor is None or np.isnan(tensor):
+                            should_include = False
+
+                    if not should_include:
+                        break
+
+                # Only include validated samples
+                if should_include:
+                    for key, tensor in tensorized_sample.items():
+                        feed_dict[key].append(tensor)
+                    num_samples += 1
 
             if drop_incomplete_batches and num_samples < batch_size:
                 continue

@@ -14,7 +14,8 @@ from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs, get_activation, tf_rnn_cell, get_rnn_state
 from utils.constants import ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS, PREDICTION, F1_SCORE, LOGITS, NODE_REGEX_FORMAT
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, INPUT_SCALER, OUTPUT_SCALER, SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, INPUT_NOISE
-from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric, ALL_LATENCY
+from utils.constants import LABEL_MAP, REV_LABEL_MAP, NUM_CLASSES
+from utils.testing_utils import ClassificationMetric, RegressionMetric, get_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
 from utils.loss_utils import binary_classification_loss, f1_score_loss
 from .base_model import Model
 
@@ -63,48 +64,6 @@ class StandardModel(Model):
     @property
     def output_ops(self) -> List[str]:
         return self.prediction_ops
-
-    def load_metadata(self, dataset: Dataset):
-        input_samples: List[List[float]] = []
-        output_samples: List[List[float]] = []
-
-        # Fetch training samples to prepare for normalization
-        for sample in dataset.iterate_series(series=DataSeries.TRAIN):
-            input_sample = np.array(sample[INPUTS])
-            input_samples.append(input_sample)
-
-            if not isinstance(sample[OUTPUT], list) and \
-                    not isinstance(sample[OUTPUT], np.ndarray):
-                output_samples.append([sample[OUTPUT]])
-            elif isinstance(sample[OUTPUT], np.ndarray) and len(sample[OUTPUT].shape) == 0:
-                output_samples.append([sample[OUTPUT]])
-            else:
-                output_samples.append(sample[OUTPUT])
-
-        # Infer the number of input and output features
-        first_sample = np.array(input_samples[0])
-        input_shape = first_sample.shape[1:]  # Skip the sequence length
-        seq_length = len(input_samples[0])
-
-        input_scaler = None
-        if self.hypers.model_params['normalize_inputs']:
-            assert len(input_shape) == 1
-            input_samples = np.reshape(input_samples, newshape=(-1, input_shape[0]))
-            input_scaler = StandardScaler()
-            input_scaler.fit(input_samples)
-
-        output_scaler = None
-        num_output_features = len(output_samples[0])
-        if self.output_type == OutputType.REGRESSION:
-            output_scaler = StandardScaler()
-            output_scaler.fit(output_samples)
-
-        self.metadata[INPUT_SCALER] = input_scaler
-        self.metadata[OUTPUT_SCALER] = output_scaler
-        self.metadata[INPUT_SHAPE] = input_shape
-        self.metadata[NUM_OUTPUT_FEATURES] = num_output_features
-        self.metadata[SEQ_LENGTH] = seq_length
-        self.metadata[INPUT_NOISE] = self.hypers.input_noise
 
     def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
         dropout = self.hypers.dropout_keep_rate if is_train else 1.0
@@ -248,7 +207,7 @@ class StandardModel(Model):
             raise ValueError(f'Unknown transformation type: {self.model_type}')
 
         # Create the output layer
-        output_size = self.metadata[NUM_OUTPUT_FEATURES] if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[SEQ_LENGTH] + 1
+        output_size = self.metadata[NUM_OUTPUT_FEATURES] if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[NUM_CLASSES]
         output = mlp(inputs=aggregated,
                      output_size=output_size,
                      hidden_sizes=self.hypers.model_params['output_hidden_units'],
@@ -297,6 +256,7 @@ class StandardModel(Model):
         elif self.output_type == OutputType.MULTI_CLASSIFICATION:
             logits = self._ops[LOGITS]
             labels = tf.squeeze(expected_output, axis=-1)
+
             sample_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=labels)
             self._ops[LOSS] = tf.reduce_mean(sample_loss)
         else:
@@ -357,14 +317,18 @@ class StandardModel(Model):
             latencies.append(elapsed)
 
         predictions = np.vstack(predictions_list)
-
         labels = np.vstack(labels_list)
+
         avg_latency = np.average(latencies[1:])  # Skip first due to outliers in caching
         flops = flops_dict[self.output_ops[0]]
 
         result: DefaultDict[str, Dict[str, float]] = defaultdict(dict)
         for metric_name in ClassificationMetric:
-            metric_value = get_classification_metric(metric_name, predictions, labels, avg_latency, 1, flops)
+            if self.output_type == OutputType.BINARY_CLASSIFICATION:
+                metric_value = get_classification_metric(metric_name, predictions, labels, avg_latency, 1, flops)
+            else:
+                metric_value = get_multi_classification_metric(metric_name, predictions, labels, avg_latency, 1, flops, self.metadata[NUM_CLASSES])
+
             result[MODEL][metric_name.name] = metric_value
 
         result[MODEL][ALL_LATENCY] = latencies[1:]
