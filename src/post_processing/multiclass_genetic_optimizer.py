@@ -2,7 +2,9 @@ import numpy as np
 
 from typing import List, Tuple, Any
 
-from .genetic_optimizer import GeneticOptimizer, CrossoverType, MutationType, LOWER_BOUND, UPPER_BOUND
+from utils.np_utils import clip_by_norm
+from utils.constants import ONE_HALF
+from .genetic_optimizer import GeneticOptimizer, CrossoverType, MutationType, LOWER_BOUND, UPPER_BOUND, MAX_NORM
 
 
 class MulticlassGeneticOptimizer(GeneticOptimizer):
@@ -79,6 +81,11 @@ class MulticlassGeneticOptimizer(GeneticOptimizer):
 
                 mutated_element = np.where(r < self.mutation_rate, random_elements, individual)
                 individual = mutated_element
+            elif self.mutation_type == MutationType.NORM:
+                r = np.random.uniform(low=0.0, high=1.0)
+                if r < self.mutation_rate:
+                    random_move = clip_by_norm(np.random.normal(loc=0.0, scale=1.0, size=individual.shape), MAX_NORM, axis=-1)
+                    individual = np.clip(individual + random_move, a_min=0.0, a_max=1.0)
             else:
                 raise ValueError(f'Unknown mutation type: {self.mutation_type}')
                 
@@ -98,6 +105,39 @@ class MulticlassGeneticOptimizer(GeneticOptimizer):
             temp = np.copy(first_parent[crossover_point:, :])
             first_parent[crossover_point:, :] = second_parent[crossover_point:, :]
             second_parent[crossover_point:, :] = temp
-            return first_parent, second_parent
+        elif self.crossover_type == CrossoverType.TWO_POINT:
+            lower_point = np.random.randint(low=0, high=num_levels - 2)
+            upper_point = np.random.randint(low=lower_point + 1, high=num_levels) + 1
+
+            temp = np.copy(first_parent[lower_point:upper_point, :])
+            first_parent[lower_point:upper_point, :] = second_parent[lower_point:upper_point, :]
+            second_parent[lower_point:upper_point, :] = temp
+        elif self.crossover_type == CrossoverType.DIFFERENTIAL:
+            weights = np.random.uniform(low=0.0, high=1.0, size=(2, ))
+
+            next_first_parent = first_parent + weights[0] * (second_parent - first_parent)
+            next_second_parent = second_parent + weights[1] * (first_parent - second_parent)
+
+            first_parent = np.clip(next_first_parent, a_min=0.0, a_max=1.0)
+            second_parent = np.clip(next_second_parent, a_min=0.0, a_max=1.0)
+        elif self.crossover_type == CrossoverType.WEIGHTED_AVG:
+            weights = np.random.uniform(low=0.0, high=1.0, size=(2, ))
+
+            next_first_parent = weights[0] * first_parent + (1.0 - weights[0]) * second_parent
+            next_second_parent = weights[1] * first_parent + (1.0 - weights[1]) * second_parent
+
+            first_parent = np.clip(next_first_parent, a_min=0.0, a_max=1.0)
+            second_parent = np.clip(next_second_parent, a_min=0.0, a_max=1.0)
+        elif self.crossover_type == CrossoverType.UNIFORM:
+            probs = np.random.uniform(low=0.0, high=1.0, size=(num_levels, )) 
+            threshold_probs = np.expand_dims(np.less(probs, ONE_HALF), axis=-1)  # [L, 1]
+            crossover_locations = np.tile(threshold_probs, reps=(1, num_classes))  # [L, K]
+
+            next_first_parent = np.where(crossover_locations, first_parent, second_parent)
+            next_second_parent = np.where(crossover_locations, second_parent, first_parent)
+
+            first_parent, second_parent = next_first_parent, next_second_parent
         else:
             raise ValueError(f'Unknown crossover type: {self.crossover_type}')
+
+        return first_parent, second_parent

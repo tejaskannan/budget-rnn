@@ -160,7 +160,7 @@ def evaluate_thresholds(model: AdaptiveModel,
                             flops=avg_flops)
 
 
-def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model: AdaptiveModel, dataset: Dataset, test_log: Dict[str, Any]):
+def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model: AdaptiveModel, dataset: Dataset, test_log: Dict[str, Any], label: str):
     # Get model save folder and name for later result saving
     save_folder, model_file = os.path.split(model_path)
     model_name = extract_model_name(model_file)
@@ -245,7 +245,7 @@ def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model
 
     test_log[SCHEDULED_OPTIMIZED] = result_to_dict(final_result)
     test_log[OPTIMIZED_RESULTS] = list(map(result_to_dict, test_results))
-    optimized_test_log_path = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format(optimizer_params['name'], optimizer_params['level_weight'], model_name))
+    optimized_test_log_path = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format(optimizer_params['name'], optimizer_params['level_weight'], label, model_name))
     save_by_file_suffix([test_log], optimized_test_log_path)
 
 
@@ -253,6 +253,7 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--model-path', type=str, required=True)
     parser.add_argument('--optimizer-params', type=str, nargs='+')
+    parser.add_argument('--label', type=str, required=True)
     parser.add_argument('--dataset-folder', type=str)
     args = parser.parse_args()
 
@@ -275,4 +276,5 @@ if __name__ == '__main__':
                             model_path=args.model_path,
                             model=model,
                             dataset=dataset,
-                            test_log=test_log)
+                            test_log=test_log,
+                            label=args.label)

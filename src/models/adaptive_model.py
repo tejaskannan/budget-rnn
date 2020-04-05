@@ -458,14 +458,26 @@ class AdaptiveModel(Model):
         with self.sess.graph.as_default():
             num_levels = max(self.num_outputs, max_num_levels) if max_num_levels is not None else self.num_outputs
 
+            # Setup the partial run with the output operations and input placeholders
+            prediction_ops = [self.ops[get_prediction_name(i)] for i in range(num_levels)]
+            logit_ops = [self.ops[get_logits_name(i)] for i in range(num_levels)]
+
+            input_names = set((get_input_name(i) for i in range(num_levels)))
+            placeholders = [ph for name, ph in self.placeholders.items() if name in input_names or name == DROPOUT_KEEP_RATE]
+
+            handle = self.sess.partial_run_setup(prediction_ops + logit_ops, placeholders)
+
             for level in range(num_levels):
-                prediction_ops = [get_prediction_name(i) for i in range(level + 1)]
-                logit_ops = [get_logits_name(i) for i in range(level + 1)]
+                prediction_op = self.ops[get_prediction_name(level)]
+                logit_op = self.ops[get_logits_name(level)]
 
-                ops_to_run = prediction_ops + logit_ops
-                output_dict = self.execute(feed_dict, ops_to_run)
+                # Form input dictionary with this level's input sequence
+                input_dict = {ph: val for ph, val in feed_dict.items() if ph.name.startswith(get_input_name(level))}
 
-                prediction_name = get_prediction_name(level)
-                logits_name = get_logits_name(level)
+                # Specify dropout at level 0 to avoid feeding multiple times. We explicitly turn off dropout
+                # at inference time.
+                if level == 0:
+                    input_dict[self.placeholders[DROPOUT_KEEP_RATE]] = 1.0
 
-                yield output_dict[prediction_name], output_dict[logits_name]
+                predictions, logits = self.sess.partial_run(handle, fetches=[prediction_op, logit_op], feed_dict=input_dict)
+                yield predictions, logits

@@ -35,16 +35,25 @@ def l2_normalize(arr: np.ndarray) -> np.ndarray:
     return arr / (l2_norm + SMALL_NUMBER)
 
 
-def clip_by_norm(arr: np.ndarray, clip: float) -> np.ndarray:
+def clip_by_norm(arr: np.ndarray, clip: float, axis: Optional[int] = None) -> np.ndarray:
     assert clip > 0, 'The clip value must be positive'
-    norm = np.linalg.norm(arr, ord=2)
+
+    norm = np.linalg.norm(arr, ord=2, axis=axis, keepdims=True)
+
+    n_dims = len(arr.shape)
+    reps = [1 for _ in range(n_dims - 1)] + [arr.shape[-1]]
+    tiled_norm = np.tile(norm, reps=reps)
+
+    # Don't clip elements that already satisfy the constraint
+    clipped_arr = arr * clip / (norm + SMALL_NUMBER)
+    return np.where(tiled_norm < clip, arr, clipped_arr)
 
     # Don't clip arrays that already satisfy the constraint
-    if norm < clip:
-        return arr
+    #if norm < clip:
+    #    return arr
 
-    factor = clip / norm
-    return arr * factor
+   # factor = clip / norm
+   # return arr * factor
 
 
 def multiclass_precision(predictions: np.ndarray, labels: np.ndarray, num_classes: int) -> Tuple[np.ndarray, np.ndarray]:

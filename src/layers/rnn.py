@@ -47,23 +47,17 @@ def dynamic_rnn(inputs: tf.Tensor,
         combine_layer_name = get_combine_states_name(name)
 
         for i in range(rnn_layers):
-            prev_state_transform = tf.layers.Dense(units=state_size,
-                                                   activation=None,
-                                                   use_bias=False,
-                                                   kernel_initializer=tf.initializers.glorot_uniform(),
-                                                   name=combine_layer_name + f'-prev-{i}')
-            curr_state_transform = tf.layers.Dense(units=state_size,
-                                                   activation=None,
-                                                   use_bias=False,
-                                                   kernel_initializer=tf.initializers.glorot_uniform(),
-                                                   name=combine_layer_name + f'-curr-{i}')
+            state_transform = tf.layers.Dense(units=state_size,
+                                              activation=None,
+                                              use_bias=False,
+                                              kernel_initializer=tf.initializers.glorot_uniform(),
+                                              name=combine_layer_name + f'-state-{i}')
             state_transform_bias = tf.Variable(initial_value=tf.random.normal(shape=(1, state_size)),
                                                trainable=True,
                                                name=combine_layer_name + f'-bias-{i}')
 
             # Collect the fusion layer
-            layer = FusionLayer(prev=prev_state_transform,
-                                curr=curr_state_transform,
+            layer = FusionLayer(dense=state_transform,
                                 bias=state_transform_bias)
             fusion_layers.append(layer)
 

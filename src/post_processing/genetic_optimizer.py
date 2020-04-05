@@ -173,21 +173,21 @@ class GeneticOptimizer(RandomizedThresholdOptimizer):
             # Apply desired mutation operation
             if self.mutation_rate == MutationType.ELEMENT:
                 r = np.random.uniform(low=0.0, high=1.0, size=(len(individual), ))
-                random_elements = np.random.uniform(low=LOWER_BOUND, high=UPPER_BOUND, size=(len(individual), ))
+                random_elements = np.random.uniform(low=LOWER_BOUND, high=UPPER_BOUND, size=(len(lower), ))
                 lower = np.where(r < self.mutation_rate, random_elements, lower)
 
                 r = np.random.uniform(low=0.0, high=1.0, size=(len(individual), ))
-                random_elements = np.random.uniform(low=LOWER_BOUND, high=UPPER_BOUND, size=(len(individual), ))
+                random_elements = np.random.uniform(low=LOWER_BOUND, high=UPPER_BOUND, size=(len(upper), ))
                 upper = np.where(r < self.mutation_rate, random_elements, upper)
             elif self.mutation_rate == MutationType.NORM:
                 r = np.random.uniform(low=0.0, high=1.0)
                 if r < self.mutation_rate:
-                    random_move = clip_by_norm(np.random.uniform(low=0.0, high=MAX_NORM), MAX_NORM)
+                    random_move = clip_by_norm(np.random.normal(loc=0.0, scale=1.0, size=(len(lower), )), MAX_NORM)
                     lower = np.clip(lower + random_move, a_min=0.0, a_max=1.0)
 
                 r = np.random.uniform(low=0.0, high=1.0)
                 if r < self.mutation_rate:
-                    random_move = clip_by_norm(np.random.uniform(low=0.0, high=MAX_NORM), MAX_NORM)
+                    random_move = clip_by_norm(np.random.normal(loc=0.0, scale=1.0, size=(len(uppper), )), MAX_NORM)
                     upper = np.clip(upper + random_move, a_min=0.0, a_max=1.0)
 
             # Re-order the mutated individual
