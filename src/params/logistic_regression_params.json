@@ -5,14 +5,14 @@
 	"gradient_clip": 1,
 	"epochs": 150,
 	"patience": 25,
-    "model": "decision_tree",
+    "model": "logistic_regression",
     "dataset_type": "single",
     "input_noise": 0.001,
 	"model_params": {
-	    "tree_type": "random_forest",
-        "num_estimators": 5,
-        "max_depth": 6,
-        "criterion": "gini",
+        "penalty": "l2",
+        "regularization_strength": 1.0,
+        "solver": "saga",
+        "max_iters": 250,
         "output_type": "multi_classification"
     }
 }
