@@ -11,6 +11,7 @@ from utils.data_writer import DataWriter
 
 TIMESTAMP = 'timestamp'
 LABEL = 'label'
+LABELS = 'labels'
 FREQ = 0.01  # This is a parameter of the dataset
 
 
@@ -32,6 +33,13 @@ def get_data_iterator(input_folder: str, sensors: List[str]) -> Iterable[Dict[st
             data_dict[INPUTS] = [val for key, val in sorted(sample.items()) if from_sensor(key, sensors)]
             data_dict[TIMESTAMP] = sample[TIMESTAMP]
             yield data_dict
+
+
+def majority(labels: List[int]) -> int:
+    label_counter: Counter = Counter()
+    for label in labels:
+        label_counter[label] += 1
+    return label_counter.most_common(1)[0][0]
 
 
 def tokenize_data(input_folder: str,
@@ -70,12 +78,14 @@ def tokenize_data(input_folder: str,
                 data_window.append(data_sample)
 
             if len(data_window) == window:
-                label = data_window[-1][OUTPUT]
+                labels = [elem[OUTPUT] for elem in data_window]
+                label = majority(labels)
 
                 element = {
                     SAMPLE_ID: sample_id,
                     INPUTS: [sample[INPUTS] for sample in data_window],
-                    OUTPUT: label
+                    OUTPUT: label,
+                    LABELS: labels
                 }
 
                 # Perform sample filtering
