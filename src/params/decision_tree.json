@@ -10,9 +10,9 @@
     "input_noise": 0.001,
 	"model_params": {
 	    "tree_type": "random_forest",
-        "num_estimators": 5,
-        "max_depth": 6,
+        "num_estimators": 50,
+        "max_depth": 10,
         "criterion": "gini",
-        "output_type": "multi_classification"
+        "output_type": "binary_classification"
     }
 }
