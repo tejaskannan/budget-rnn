@@ -14,7 +14,7 @@
 		"rnn_cell_type": "gru",
 		"rnn_activation": "tanh",
 		"rnn_layers": 1,
-		"layer_weight": 1.0,
+		"layer_weight": [1, 1.5, 2, 2.5],
 		"output_hidden_units": [16],
 		"output_hidden_activation": "tanh",
         "output_type": "multi_classification",
