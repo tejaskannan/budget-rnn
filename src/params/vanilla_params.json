@@ -9,7 +9,7 @@
     "dataset_type": "standard",
     "input_noise": 0.001,
 	"model_params": {
-		"state_size": 8,
+		"state_size": 16,
 		"sample_frac": 0.25,
 		"rnn_cell_type": "gru",
 		"rnn_activation": "tanh",
@@ -17,7 +17,7 @@
 		"layer_weight": 1.0,
 		"output_hidden_units": [16],
 		"output_hidden_activation": "tanh",
-        "output_type": "multi_classification",
+        "output_type": "binary_classification",
 		"pool_mode": "final_state",
 		"model_type": "vanilla",
 		"share_cell_weights": true,

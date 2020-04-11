@@ -18,7 +18,6 @@ def merge_datasets(folders: List[str], output_folder: str, file_prefix: str, fil
                 sample[SAMPLE_ID] = sample_id
                 writer.add(sample)
                 sample_id += 1
-
                 
                 if (sample_id + 1) % chunk_size == 0:
                     print(f'Completed {sample_id + 1} samples.', end='\r')

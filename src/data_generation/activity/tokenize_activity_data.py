@@ -4,12 +4,11 @@ from typing import Iterable, Dict, Any, List
 from random import random
 from collections import Counter
 
-from utils.constants import INPUTS, SAMPLE_ID, OUTPUT, SMALL_NUMBER
+from utils.constants import INPUTS, SAMPLE_ID, OUTPUT, SMALL_NUMBER, TIMESTAMP
 from utils.file_utils import iterate_files, read_by_file_suffix
 from utils.data_writer import DataWriter
 
 
-TIMESTAMP = 'timestamp'
 LABEL = 'label'
 LABELS = 'labels'
 FREQ = 0.01  # This is a parameter of the dataset
@@ -26,8 +25,6 @@ def get_data_iterator(input_folder: str, sensors: List[str]) -> Iterable[Dict[st
     data_files = iterate_files(input_folder, pattern='.*jsonl.gz')
     for data_file in data_files:
         for sample in read_by_file_suffix(data_file):
-
-            # Create data by filtering sensor measurements
             data_dict: Dict[str, Any] = dict()
             data_dict[OUTPUT] = sample[LABEL]
             data_dict[INPUTS] = [val for key, val in sorted(sample.items()) if from_sensor(key, sensors)]
@@ -85,12 +82,13 @@ def tokenize_data(input_folder: str,
                     SAMPLE_ID: sample_id,
                     INPUTS: [sample[INPUTS] for sample in data_window],
                     OUTPUT: label,
-                    LABELS: labels
+                    LABELS: labels,
+                    TIMESTAMP: data_window[-1][TIMESTAMP]
                 }
 
                 # Perform sample filtering
                 r = random()
-                if label not in skip_labels and r < sample_frac:
+                if (skip_labels is None or label not in skip_labels) and r < sample_frac:
                     writer.add(element)
                     sample_id += 1
                     stride_counter = 0
@@ -116,7 +114,7 @@ if __name__ == '__main__':
     parser.add_argument('--output-folder', type=str, required=True)
     parser.add_argument('--window', type=int, required=True)
     parser.add_argument('--stride', type=int, required=True)
-    parser.add_argument('--skip-labels', type=int, nargs='+')
+    parser.add_argument('--skip-labels', type=int, nargs='*')
     parser.add_argument('--sensors', type=str, nargs='+', choices=['hand', 'chest', 'ankle'])
     parser.add_argument('--file-prefix', type=str, default='data')
     parser.add_argument('--chunk-size', type=int, default=5000)
