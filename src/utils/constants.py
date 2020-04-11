@@ -19,6 +19,7 @@ SAMPLE_ID = 'sample_id'
 DATA_FIELD_FORMAT = '{0}-{1}'
 INPUTS = 'inputs'
 OUTPUT = 'output'
+TIMESTAMP = 'timestamp'
 DATA_FIELDS = [INPUTS, OUTPUT]
 INDEX_FILE = 'index.pkl.gz'
 

@@ -1,9 +1,10 @@
 import os.path
 import numpy as np
-import json
+import matplotlib.pyplot as plt
 
 from argparse import ArgumentParser
 from sklearn.metrics import f1_score
+from collections import namedtuple
 from typing import Iterable, Dict, Any, List, Tuple
 
 from dataset.dataset import Dataset, DataSeries
@@ -13,13 +14,16 @@ from models.adaptive_model import AdaptiveModel
 from models.standard_model import StandardModel
 from utils.testing_utils import ClassificationMetric
 from utils.constants import MODEL, PREDICTION, LOGITS, OUTPUT
+from utils.file_utils import save_by_file_suffix, read_by_file_suffix, make_dir
 from simulation_utils import get_serialized_info
 
 
-MEGA_FACTOR = 1e-6
 MICRO_FACTOR = 1e-6
 MILLI_FACTOR = 1e-3
 F1_SCORE_TYPE = 'micro'
+
+
+PredictionOutput = namedtuple('PredictionOutput', ['prediction', 'logits', 'flops', 'energy'])
 
 
 def create_data_generator(model: Model, dataset: Dataset) -> Iterable[Dict[str, Any]]:
@@ -33,7 +37,7 @@ def create_data_generator(model: Model, dataset: Dataset) -> Iterable[Dict[str, 
 
 def consumed_energy(params: Dict[str, float], flop: float) -> float:
     noise = np.random.normal(loc=0.0, scale=params['noise'])
-    return params['current'] * MILLI_FACTOR * (flop / params['processor']) + noise
+    return (params['current'] + noise) * MILLI_FACTOR * params['system_voltage'] * (flop / params['processor'])
 
 
 def standard_model_inference(sample: Dict[str, Any], model: Model, test_log: Dict[str, Any], params: Dict[str, float]) -> Tuple[np.ndarray, np.ndarray, float]:
@@ -45,7 +49,6 @@ def standard_model_inference(sample: Dict[str, Any], model: Model, test_log: Dic
 
 
 def adaptive_model_inference(sample: Dict[str, Any], model: Model, test_log: Dict[str, Any], available_energy: float, params: Dict[str, float]) -> Tuple[np.ndarray, np.ndarray, float]:
-
     feed_dict = model.batch_to_feed_dict(sample, is_train=False)
     prediction_generator = model.anytime_generator(feed_dict, model.num_outputs)
 
@@ -87,10 +90,12 @@ def run_simulation(model: Model, dataset: Dataset, test_log: Dict[str, Any], par
     data_generator = create_data_generator(model, dataset)
 
     processed_batches = 0
-    available_energy = 0.5 * params['capacitor'] * (params['system_voltage'] * params['system_voltage'])
+    available_energy = 0.5 * (params['capacitor']) * (params['system_voltage'] * params['system_voltage'])
 
     predictions: List[np.ndarray] = []
     labels: List[np.ndarray] = []
+
+    # print('Available: {0}'.format(available_energy))
 
     for step in range(params['num_steps']):
         try:
@@ -120,17 +125,33 @@ def run_simulation(model: Model, dataset: Dataset, test_log: Dict[str, Any], par
     return processed_batches, f1
 
 
+def plot_results(result_dict: Dict[str, Dict[str, float]], output_file: str):
+    with plt.style.context('fast'):
+        fig, ax = plt.subplots()
+
+        for label, results in sorted(result_dict.items()):
+            score, success = results['f1_score'], results['success_frac']
+
+            ax.scatter(score, success, label=label)
+            
+        ax.legend()
+        ax.set_xlabel('F1 Score')
+        ax.set_ylabel('Success Fraction')
+        ax.set_title('Model Error versus Inference Success')
+
+        plt.savefig(output_file)
+
 
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--model-paths', type=str, nargs='+')
     parser.add_argument('--params-file', type=str, required=True)
+    parser.add_argument('--output-folder', type=str, required=True)
     parser.add_argument('--data-folder', type=str)
     args = parser.parse_args()
 
-    assert os.path.exists(args.params_file), f'The file {args.params_file} does not exist!'
-    with open(args.params_file) as f:
-        params = json.load(f)
+    # Fetch the parameters
+    params = read_by_file_suffix(args.params_file)
 
     # Extract all models before starting
     model_info = []
@@ -140,12 +161,28 @@ if __name__ == '__main__':
 
     processed_batches: List[int] = []
     scores: List[float] = []
-    for model, dataset, test_log in model_info:
+    for i, (model, dataset, test_log) in enumerate(model_info):
         num_batches, f1 = run_simulation(model, dataset, test_log, params)
 
         processed_batches.append(num_batches)
         scores.append(f1)
 
+        print(f'Completed model {i+1}/{len(model_info)}', end='\r')
+    print()
 
-    print(scores)
-    print(processed_batches)
+    # Save results and generate plots
+    result_dict: Dict[str, Dict[str, float]] = dict()
+    for i in range(len(model_info)):
+        score = scores[i]
+        num_batches = processed_batches[i]
+        model, _, _ = model_info[i]
+
+        frac = num_batches / params['num_steps']
+        result_dict[model.name] = dict(f1_score=score, num_batches=num_batches, success_frac=frac)
+
+    make_dir(args.output_folder)
+    results_file = os.path.join(args.output_folder, 'results.json')
+    save_by_file_suffix(result_dict, results_file)
+
+    plot_file = os.path.join(args.output_folder, 'plots.png')
+    plot_results(result_dict, output_file=plot_file)
