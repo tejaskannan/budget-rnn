@@ -120,7 +120,7 @@ class TFModel(Model):
         # Infer the number of input and output features
         first_sample = np.array(input_samples[0])
         input_shape = first_sample.shape[1:]  # Skip the sequence length
-        seq_length = len(input_samples[0])
+        seq_length = len(input_samples[0]) if self.hypers.seq_length is None else self.hypers.seq_length
 
         input_scaler = None
         if self.hypers.model_params['normalize_inputs']:
@@ -149,7 +149,7 @@ class TFModel(Model):
         self.metadata[NUM_OUTPUT_FEATURES] = num_output_features
         self.metadata[SEQ_LENGTH] = seq_length
         self.metadata[INPUT_NOISE] = self.hypers.input_noise
-        
+
         # Metadata for multiclass classification problems
         self.metadata[NUM_CLASSES] = len(label_map)
         self.metadata[LABEL_MAP] = label_map

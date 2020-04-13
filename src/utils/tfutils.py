@@ -221,6 +221,8 @@ def tf_rnn_cell(cell_type: str, num_units: int, activation: str, layers: int, dr
 
     return tf.nn.rnn_cell.MultiRNNCell(cells)
 
+
+
 def get_rnn_state(state: Union[tf.Tensor, tf.nn.rnn_cell.LSTMStateTuple, Tuple[tf.Tensor, ...], Tuple[tf.nn.rnn_cell.LSTMStateTuple, ...]]) -> tf.Tensor:
     if isinstance(state, tf.nn.rnn_cell.LSTMStateTuple):
         return state.c

@@ -16,6 +16,7 @@ from layers.embedding_layer import embedding_layer
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
+from utils.misc import sample_sequence_batch
 from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS
 from utils.constants import NODE_REGEX_FORMAT, DROPOUT_KEEP_RATE, MODEL, SCHEDULED_MODEL, NUM_CLASSES
 from utils.constants import INPUT_SCALER, OUTPUT_SCALER, INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE
@@ -88,12 +89,16 @@ class AdaptiveModel(TFModel):
             input_batch = np.squeeze(input_batch, axis=1)
 
         input_shape = self.metadata[INPUT_SHAPE]
-        num_output_features = self.metadata['num_output_features']
+        num_output_features = self.metadata[NUM_OUTPUT_FEATURES]
+        seq_lenth = self.metadata[SEQ_LENGTH]
 
         feed_dict = {
             self._placeholders[OUTPUT]: output_batch.reshape(-1, num_output_features),
             self._placeholders[DROPOUT_KEEP_RATE]: dropout
         }
+
+        # Sample the batch down to the correct sequence length
+        input_batch = sample_sequence_batch(input_batch, seq_length=self.metadata[SEQ_LENGTH])
 
         # Extract parameters
         seq_length = self.metadata[SEQ_LENGTH]
@@ -195,10 +200,10 @@ class AdaptiveModel(TFModel):
         rm = tf.RunMetadata()
         with self.sess.graph.as_default():
             cell = get_cell_level_name(level, self.hypers.model_params['share_cell_weights'])
-            output = get_output_layer_name(level)
+            output = get_output_layer_name(level, self.hypers.model_params['share_output_weights'])
             rnn = get_rnn_level_name(level)
             embedding = get_embedding_name()
-            combine_states = get_combine_states_name(rnn)
+            combine_states = get_combine_states_name(rnn, self.hypers.model_params['share_rnn_weights'])
 
             # Compute FLOPS from RNN operations
             rnn_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), [cell, rnn, combine_states]))
@@ -309,7 +314,7 @@ class AdaptiveModel(TFModel):
             input_name = get_input_name(i)
             cell_name = get_cell_level_name(i, self.hypers.model_params['share_cell_weights'])
             rnn_level_name = get_rnn_level_name(i)
-            output_layer_name = get_output_layer_name(i)
+            output_layer_name = get_output_layer_name(i, self.hypers.model_params['share_output_weights'])
             logits_name = get_logits_name(i)
             prediction_name = get_prediction_name(i)
             loss_name = get_loss_name(i)
@@ -356,6 +361,7 @@ class AdaptiveModel(TFModel):
                                   previous_states=prev_states,
                                   initial_state=initial_state,
                                   name=rnn_level_name,
+                                  should_share_weights=self.hypers.model_params['share_rnn_weights'],
                                   fusion_mode=self.hypers.model_params.get('fusion_mode'))
             rnn_outputs = rnn_out.outputs
             rnn_states = rnn_out.states
@@ -367,7 +373,8 @@ class AdaptiveModel(TFModel):
             # Get the final state
             last_index = tf.shape(inputs)[1] - 1
             final_output = rnn_outputs.read(index=last_index)
-            final_state = tf.squeeze(rnn_states.read(index=last_index), axis=0)  # [B, D]
+            final_state = rnn_states.read(index=last_index)  # [L, B, D] where L is the number of RNN layers
+            final_state = tf.concat(tf.unstack(final_state, axis=0), axis=-1)  # [B, D * L]
 
             # [B, D]
             rnn_output = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])

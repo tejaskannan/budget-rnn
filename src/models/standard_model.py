@@ -12,6 +12,7 @@ from layers.output_layers import OutputType, compute_binary_classification_outpu
 from layers.embedding_layer import embedding_layer
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
+from utils.misc import sample_sequence_batch
 from utils.tfutils import pool_rnn_outputs, get_activation, tf_rnn_cell, get_rnn_state
 from utils.constants import ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS, PREDICTION, F1_SCORE, LOGITS, NODE_REGEX_FORMAT
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, INPUT_SCALER, OUTPUT_SCALER, SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, INPUT_NOISE
@@ -76,6 +77,10 @@ class StandardModel(TFModel):
 
         input_shape = self.metadata[INPUT_SHAPE]
         num_output_features = self.metadata[NUM_OUTPUT_FEATURES]
+        seq_length = self.metadata[SEQ_LENGTH]
+
+        # Sample the input batch down to the correct length
+        input_batch = sample_sequence_batch(input_batch, seq_length=seq_length)
 
         feed_dict = {
             self._placeholders[INPUTS]: input_batch,

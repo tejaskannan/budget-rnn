@@ -24,7 +24,7 @@ def get_label(test_log_path: str) -> str:
 def plot_opt_results(test_logs: List[List[Dict[str, Any]]], labels: List[str], model_name: str, output_file: Optional[str]):
     with plt.style.context(STYLE):
 
-        metrics = [ClassificationMetric.F1_SCORE.name, ClassificationMetric.ACCURACY.name, ClassificationMetric.LEVEL.name]
+        metrics = [ClassificationMetric.MICRO_F1_SCORE.name, ClassificationMetric.ACCURACY.name, ClassificationMetric.LEVEL.name]
         fig, axes = plt.subplots(nrows=1, ncols=len(metrics), figsize=(9, 6))
 
         for ax, metric in zip(axes, metrics):

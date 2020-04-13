@@ -22,6 +22,7 @@ class HyperParameters:
         self.model_params = parameters.get('model_params', dict())
         self.input_noise = parameters.get('input_noise', 0.0)
         self.dataset_type = parameters.get('dataset_type', 'standard')
+        self.seq_length = parameters.get('seq_length')
 
     def __dict__(self) -> Dict[str, Any]:
         return {
@@ -37,7 +38,8 @@ class HyperParameters:
             'model': self.model,
             'model_params': self.model_params,
             'input_noise': self.input_noise,
-            'dataset_type': self.dataset_type
+            'dataset_type': self.dataset_type,
+            'seq_length': self.seq_length
         }
 
     def __str__(self) -> str:

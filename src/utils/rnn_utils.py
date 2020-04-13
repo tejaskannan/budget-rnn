@@ -38,7 +38,9 @@ def get_input_name(level_index: int) -> str:
     return f'{INPUT_NAME}_{level_index}'
 
 
-def get_output_layer_name(level_index: int) -> str:
+def get_output_layer_name(level_index: int, should_share_weights: bool) -> str:
+    if should_share_weights:
+        return OUTPUT_LAYER_NAME
     return f'{OUTPUT_LAYER_NAME}_{level_index}'
 
 
@@ -78,10 +80,11 @@ def get_embedding_name() -> str:
     return EMBEDDING_NAME
 
 
-def get_combine_states_name(name_prefix: Optional[str]) -> str:
-    if name_prefix is None:
+def get_combine_states_name(name_prefix: Optional[str], should_share_weights: bool) -> str:
+    if name_prefix is None or should_share_weights:
         return COMBINE_STATES_NAME
     return f'{name_prefix}-{COMBINE_STATES_NAME}'
+
 
 def get_rnn_while_loop_name(name_prefix: Optional[str]) -> str:
     if name_prefix is None:

@@ -16,6 +16,7 @@ def dynamic_rnn(inputs: tf.Tensor,
                 previous_states: Optional[tf.TensorArray] = None,
                 skip_width: Optional[int] = None,
                 name: Optional[str] = None,
+                should_share_weights: bool = False,
                 fusion_mode: Optional[str] = None) -> RnnOutput:
     """
     Implementation of a recurrent neural network which allows for complex state passing.
@@ -27,6 +28,7 @@ def dynamic_rnn(inputs: tf.Tensor,
         previous_states: Optional array of states to feed integrate into the current layer
         skip_width: Optional width of skip connections
         name: Optional name of this RNN
+        should_share_weights: Whether or not to share weights for any added trainable parameters
         fusion_mode: Optional fusion mode for combining states between levels
     Returns:
         A tuple of 3 tensor arrays
@@ -44,7 +46,7 @@ def dynamic_rnn(inputs: tf.Tensor,
 
     fusion_layers: List[FusionLayer] = []
     if previous_states is not None and fusion_mode.lower() == 'gate':
-        combine_layer_name = get_combine_states_name(name)
+        combine_layer_name = get_combine_states_name(name, should_share_weights)
 
         for i in range(rnn_layers):
             state_transform = tf.layers.Dense(units=state_size,
