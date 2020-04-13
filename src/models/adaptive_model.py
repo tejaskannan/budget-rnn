@@ -7,7 +7,7 @@ from collections import namedtuple, defaultdict, OrderedDict
 from typing import List, Optional, Tuple, Dict, Any, Set, Union, DefaultDict, Iterable
 from sklearn.preprocessing import StandardScaler
 
-from models.base_model import Model
+from models.tf_model import TFModel
 from layers.basic import rnn_cell, mlp
 from layers.cells.cells import make_rnn_cell, MultiRNNCell
 from layers.rnn import dynamic_rnn, dropped_rnn, RnnOutput
@@ -26,7 +26,7 @@ from utils.np_utils import sigmoid
 from utils.threshold_utils import lower_threshold_predictions, TwoSidedThreshold
 
 
-class AdaptiveModel(Model):
+class AdaptiveModel(TFModel):
 
     def __init__(self, hyper_parameters: HyperParameters, save_folder: str, is_train: bool):
         super().__init__(hyper_parameters, save_folder, is_train)

@@ -8,6 +8,7 @@ from collections import defaultdict
 from typing import Optional, Iterable, Dict, Any, Union, List, DefaultDict, Set
 from sklearn.preprocessing import StandardScaler
 
+from models.base_model import Model
 from dataset.dataset import Dataset, DataSeries
 from layers.output_layers import OutputType
 from utils.hyperparameters import HyperParameters
@@ -24,7 +25,7 @@ from utils.constants import SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, INPUT_NOISE
 class TFModel(Model):
 
     def __init__(self, hyper_parameters: HyperParameters, save_folder: str, is_train: bool):
-        super.__init__(hyper_parameters, save_folder, is_train)
+        super().__init__(hyper_parameters, save_folder, is_train)
         
         # We turn of parallelism during testing to simulate a single-threaded, low-power environment
         num_threads = 0 if is_train else 1
