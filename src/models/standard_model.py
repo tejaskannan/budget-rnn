@@ -6,6 +6,7 @@ from enum import Enum, auto
 from collections import defaultdict
 from typing import Optional, Dict, List, Any, DefaultDict, Iterable
 
+from models.tf_model import TFModel
 from layers.basic import mlp, pool_sequence
 from layers.output_layers import OutputType, compute_binary_classification_output, compute_multi_classification_output
 from layers.embedding_layer import embedding_layer
@@ -35,7 +36,7 @@ class StandardModelType(Enum):
     BIRNN = auto()
 
 
-class StandardModel(Model):
+class StandardModel(TFModel):
 
     def __init__(self, hyper_parameters: HyperParameters, save_folder: str, is_train: bool):
         super().__init__(hyper_parameters, save_folder, is_train)
