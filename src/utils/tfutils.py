@@ -115,8 +115,9 @@ def fuse_states(curr_state: tf.Tensor, prev_state: Optional[tf.Tensor], fusion_l
         concat = tf.concat([tf.expand_dims(curr_state, axis=-1), tf.expand_dims(prev_state, axis=-1)], axis=-1)  # [B, D, 2]
         return tf.reduce_max(concat, axis=-1)  # [B, D]
     elif mode in ('gate', 'gate_layer', 'gate-layer'):
-        transform = fusion_layer.dense(tf.concat([curr_state, prev_state], axis=-1))  # [B, D]
-        update_weight = tf.math.sigmoid(transform + fusion_layer.bias)
+        concat_states = tf.concat([curr_state, prev_state], axis=-1)  # [B, 2 * D]
+        transform = tf.matmul(concat_states, fusion_layer.dense) + fusion_layer.bias  # [B, D]
+        update_weight = tf.math.sigmoid(transform)  # [B, D]
         return update_weight * curr_state + (1.0 - update_weight) * prev_state
     else:
         raise ValueError(f'Unknown fusion mode: {mode}')

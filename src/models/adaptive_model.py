@@ -206,7 +206,11 @@ class AdaptiveModel(TFModel):
             combine_states = get_combine_states_name(rnn, self.hypers.model_params['share_rnn_weights'])
 
             # Compute FLOPS from RNN operations
-            rnn_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), [cell, rnn, combine_states]))
+            op_names = [cell, rnn]
+            if not self.hypers.model_params['share_rnn_weights'] or level > 0:
+                op_names.append(combine_states)
+
+            rnn_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), op_names))
             rnn_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
                                 .with_node_names(show_name_regexes=rnn_operations) \
                                 .order_by('flops').build()
