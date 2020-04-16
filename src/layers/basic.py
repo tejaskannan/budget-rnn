@@ -5,7 +5,7 @@ from utils.tfutils import get_activation
 from utils.constants import BIG_NUMBER
 
 
-def pool_sequence(embeddings: tf.Tensor, pool_mode: str) -> tf.Tensor:
+def pool_sequence(embeddings: tf.Tensor, pool_mode: str, name: str = 'pool-layer') -> tf.Tensor:
     """
     Args:
         embeddings: A [B, T, K] tensor
@@ -15,21 +15,21 @@ def pool_sequence(embeddings: tf.Tensor, pool_mode: str) -> tf.Tensor:
     """
     pool_mode = pool_mode.lower()
     if pool_mode == 'sum':
-        return tf.reduce_sum(embeddings, axis=-2)
+        return tf.reduce_sum(embeddings, axis=-2, name=name)
     elif pool_mode == 'average':
-        return tf.reduce_mean(embeddings, axis=-2)
+        return tf.reduce_mean(embeddings, axis=-2, name=name)
     elif pool_mode == 'max':
-        return tf.reduce_max(embeddings, axis=-2)
+        return tf.reduce_max(embeddings, axis=-2, name=name)
     elif pool_mode=='attention':
         attention_weights = tf.layers.dense(inputs=embeddings,
                                             units=1,
                                             activation=tf.nn.leaky_relu,
                                             use_bias=True,
                                             kernel_initializer=tf.glorot_uniform_initializer(),
-                                            name='attention-layer')
-        normalized_weights = tf.nn.softmax(attention_weights, axis=-2)  # [B, T, 1]
-        weighted_vectors = embeddings * normalized_weights  # [B, T, K]
-        return tf.reduce_sum(weighted_vectors, axis=-2)  # [B, K]
+                                            name='{0}-dense'.format(name))
+        normalized_weights = tf.nn.softmax(attention_weights, axis=-2, name='{0}-normalize'.format(name))  # [B, T, 1]
+        weighted_vectors = tf.math.multiply(embeddings, normalized_weights, name='{0}-scale'.format(name))  # [B, T, K]
+        return tf.reduce_sum(weighted_vectors, axis=-2, name='{0}-aggregate'.format(name))  # [B, K]
     else:
         raise ValueError(f'Unknown pool mode {pool_mode}!')
 

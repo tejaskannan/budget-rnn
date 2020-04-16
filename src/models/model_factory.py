@@ -2,6 +2,7 @@ from utils.hyperparameters import HyperParameters
 from .base_model import Model
 from .adaptive_model import AdaptiveModel
 from .standard_model import StandardModel
+from .majority_model import MajorityModel
 from .decision_tree_model import DecisionTreeModel
 from .logistic_regression_model import LogisticRegressionModel
 from .linear_svm import LinearSVMModel
@@ -14,6 +15,8 @@ def get_model(hypers: HyperParameters, save_folder: str, is_train: bool) -> Mode
         return AdaptiveModel(hypers, save_folder, is_train)
     elif model_type == 'standard':
         return StandardModel(hypers, save_folder, is_train)
+    elif model_type == 'majority':
+        return MajorityModel(hypers, save_folder, is_train)
     elif model_type == 'decision_tree':
         return DecisionTreeModel(hypers, save_folder, is_train)
     elif model_type == 'logistic_regression':

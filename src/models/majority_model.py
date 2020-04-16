@@ -1,44 +1,37 @@
 import tensorflow as tf
 import numpy as np
 import time
-from sklearn.preprocessing import StandardScaler
+
 from enum import Enum, auto
 from collections import defaultdict
 from typing import Optional, Dict, List, Any, DefaultDict, Iterable
 
-from models.tf_model import TFModel
+from models.standard_model import StandardModel, StandardModelType
 from layers.basic import mlp, pool_sequence
 from layers.output_layers import OutputType, compute_binary_classification_output, compute_multi_classification_output
 from layers.embedding_layer import embedding_layer
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.misc import sample_sequence_batch
-from utils.tfutils import pool_rnn_outputs, get_activation, tf_rnn_cell, get_rnn_state
+from utils.tfutils import pool_rnn_outputs, get_activation, tf_rnn_cell, get_rnn_state, majority_vote
 from utils.constants import ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS, PREDICTION, F1_SCORE, LOGITS, NODE_REGEX_FORMAT
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, INPUT_SCALER, OUTPUT_SCALER, SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, INPUT_NOISE
+from utils.rnn_utils import get_prediction_name
 from utils.constants import LABEL_MAP, REV_LABEL_MAP, NUM_CLASSES
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
 from utils.loss_utils import binary_classification_loss, f1_score_loss
-from .base_model import Model
+from utils.np_utils import np_majority
 
 
 # Layer name constants
 EMBEDDING_LAYER_NAME = 'embedding-layer'
 TRANSFORM_LAYER_NAME = 'transform-layer'
-AGGREGATION_LAYER_NAME = 'aggregation-layer'
 OUTPUT_LAYER_NAME = 'output-layer'
 RNN_NAME = 'rnn'
 BIRNN_NAME = 'birnn'
 
 
-class StandardModelType(Enum):
-    NBOW = auto()
-    CNN = auto()
-    RNN = auto()
-    BIRNN = auto()
-
-
-class StandardModel(TFModel):
+class MajorityModel(StandardModel):
 
     def __init__(self, hyper_parameters: HyperParameters, save_folder: str, is_train: bool):
         super().__init__(hyper_parameters, save_folder, is_train)
@@ -46,77 +39,7 @@ class StandardModel(TFModel):
         model_type = self.hypers.model_params['model_type'].upper()
         self._model_type = StandardModelType[model_type]
 
-        self.name = model_type
-
-    @property
-    def model_type(self) -> StandardModelType:
-        return self._model_type
-
-    @property
-    def prediction_ops(self) -> List[str]:
-        return [PREDICTION]
-
-    @property
-    def accuracy_op_names(self) -> List[str]:
-        return [ACCURACY]
-
-    @property
-    def loss_op_names(self) -> List[str]:
-        return [LOSS]
-
-    @property
-    def output_ops(self) -> List[str]:
-        return self.prediction_ops
-
-    def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
-        dropout = self.hypers.dropout_keep_rate if is_train else 1.0
-        input_batch = np.array(batch[INPUTS])
-        output_batch = np.array(batch[OUTPUT])
-
-        if input_batch.shape[1] == 1:
-            input_batch = np.squeeze(input_batch, axis=1)
-
-        input_shape = self.metadata[INPUT_SHAPE]
-        num_output_features = self.metadata[NUM_OUTPUT_FEATURES]
-        seq_length = self.metadata[SEQ_LENGTH]
-
-        # Sample the input batch down to the correct length
-        input_batch = sample_sequence_batch(input_batch, seq_length=seq_length)
-
-        feed_dict = {
-            self._placeholders[INPUTS]: input_batch,
-            self._placeholders[OUTPUT]: output_batch.reshape(-1, num_output_features),
-            self._placeholders[DROPOUT_KEEP_RATE]: dropout
-        }
-
-        return feed_dict
-
-    def make_placeholders(self, is_frozen: bool = False):
-        input_features_shape = self.metadata[INPUT_SHAPE]
-        num_output_features = self.metadata[NUM_OUTPUT_FEATURES]
-        seq_length = self.metadata[SEQ_LENGTH]
-
-        input_shape = (None, seq_length) + input_features_shape
-        output_dtype = tf.int32 if self.output_type == OutputType.MULTI_CLASSIFICATION else tf.float32
-
-        if not is_frozen:
-            self._placeholders[INPUTS] = tf.placeholder(shape=input_shape,
-                                                        dtype=tf.float32,
-                                                        name=INPUTS)
-            self._placeholders[OUTPUT] = tf.placeholder(shape=(None, num_output_features),
-                                                        dtype=output_dtype,
-                                                        name=OUTPUT)
-            self._placeholders[DROPOUT_KEEP_RATE] = tf.placeholder(shape=(),
-                                                                   dtype=tf.float32,
-                                                                   name=DROPOUT_KEEP_RATE)
-        else:
-            self._placeholders[INPUTS] = tf.ones(shape=(1,) + input_shape[1:], dtype=tf.float32, name=INPUTS)
-            self._placeholders[OUTPUT] = tf.ones(shape=(1, num_output_features), dtype=output_dtype, name=OUTPUT)
-            self._placeholders[DROPOUT_KEEP_RATE] = tf.ones(shape=(), dtype=tf.float32, name=DROPOUT_KEEP_RATE)
-
-    def make_model(self, is_train: bool):
-        with tf.variable_scope(MODEL, reuse=tf.AUTO_REUSE):
-            self._make_model(is_train)
+        self.name = 'MAJORITY-' + model_type
 
     def _make_model(self, is_train: bool):
         # Embed the input sequence into a [B, T, D] tensor
@@ -141,8 +64,6 @@ class StandardModel(TFModel):
                               should_bias_final=True,
                               should_dropout_final=True,
                               name=TRANSFORM_LAYER_NAME)
-
-            aggregated = pool_sequence(transformed, pool_mode=self.hypers.model_params['pool_mode'], name=AGGREGATION_LAYER_NAME)
         elif self.model_type == StandardModelType.CNN:
             # Apply the 1 dimensional CNN transformation. Outputs a [B, T, D] tensor
             transformed = tf.layers.conv1d(inputs=input_sequence,
@@ -154,10 +75,8 @@ class StandardModel(TFModel):
                                            use_bias=True,
                                            kernel_initializer=tf.glorot_uniform_initializer(),
                                            name=TRANSFORM_LAYER_NAME)
-            # Apply dropout
+            # Apply dropout, [B, T, D]
             transformed = tf.nn.dropout(transformed, keep_rate=self._placeholders[DROPOUT_KEEP_RATE])
-
-            aggregated = pool_sequence(transformed, pool_mode=self.hypers.model_params['pool_mode'], name=AGGREGATION_LAYER_NAME)
         elif self.model_type == StandardModelType.RNN:
             cell = tf_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
                                num_units=self.hypers.model_params['state_size'],
@@ -172,9 +91,6 @@ class StandardModel(TFModel):
                                                    initial_state=initial_state,
                                                    dtype=tf.float32,
                                                    scope=RNN_NAME)
-            final_state = get_rnn_state(state)
-
-            aggregated = pool_rnn_outputs(transformed, final_state, pool_mode=self.hypers.model_params['pool_mode'], name=AGGREGATION_LAYER_NAME)
         elif self.model_type == StandardModelType.BIRNN:
             fw_cell = tf_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
                                   num_units=self.hypers.model_params['state_size'],
@@ -201,47 +117,53 @@ class StandardModel(TFModel):
                                                                  initial_state_bw=bw_initial_state,
                                                                  dtype=tf.float32,
                                                                  scope=BIRNN_NAME)
-            # Concatenate forward and backward states
+            # Concatenate forward and backward states  # [B, T, 2 * D]
             transformed = tf.concat(transformed, axis=-1)
-
-            fw_state, bw_state = state
-            final_state_fw = get_rnn_state(fw_state)
-            final_state_bw = get_rnn_state(bw_state)
-            final_state = tf.concat([final_state_fw, final_state_bw], axis=-1)
-
-            aggregated = pool_rnn_outputs(transformed, final_state, pool_mode=self.hypers.model_params['pool_mode'], name=AGGREGATION_LAYER_NAME)
         else:
             raise ValueError(f'Unknown transformation type: {self.model_type}')
 
-        # Create the output layer
+        # Create the output layer. Outputs a [B, T, M] tensor.
         output_size = self.metadata[NUM_OUTPUT_FEATURES] if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[NUM_CLASSES]
-        output = mlp(inputs=aggregated,
+        output = mlp(inputs=transformed,
                      output_size=output_size,
                      hidden_sizes=self.hypers.model_params['output_hidden_units'],
                      activations=self.hypers.model_params['output_hidden_activation'],
                      dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
                      name=OUTPUT_LAYER_NAME)
+        
+        # Create [B, T, M] tensor of the expected output to align with the sequence elements
+        expected_output = tf.tile(tf.expand_dims(self._placeholders[OUTPUT], axis=1),
+                                  multiples=(1, tf.shape(output)[1], 1))
+        output_shape = tf.shape(output)
 
         if self.output_type == OutputType.BINARY_CLASSIFICATION:
-            classification_output = compute_binary_classification_output(model_output=output,
-                                                                         labels=self._placeholders[OUTPUT])
+            reshaped_expected = tf.reshape(expected_output, shape=(-1, 1))  # [B * T, D]
+            reshaped_output = tf.reshape(output, shape=(-1, output_shape[-1]))  # [B * T, D]
 
-            self._ops[LOGITS] = classification_output.logits
-            self._ops[PREDICTION] = classification_output.predictions
-            self._ops[ACCURACY] = classification_output.accuracy
-            self._ops[F1_SCORE] = classification_output.f1_score
+            classification_output = compute_binary_classification_output(model_output=reshaped_output,
+                                                                         labels=reshaped_expected)
+
+            self._ops[LOGITS] = tf.reshape(classification_output.logits, shape=(-1, output_shape[1], output_shape[2]))  # [B, T, M]
+            self._ops[PREDICTION] = majority_vote(self._ops[LOGITS])  # [B]
+            self._ops[ACCURACY] = classification_output.accuracy  # Scalar
+            self._ops[F1_SCORE] = classification_output.f1_score  # Scalar
         elif self.output_type == OutputType.MULTI_CLASSIFICATION:
-            classification_output = compute_multi_classification_output(model_output=output,
-                                                                        labels=self._placeholders[OUTPUT])
-            self._ops[LOGITS] = classification_output.logits
-            self._ops[PREDICTION] = classification_output.predictions
-            self._ops[ACCURACY] = classification_output.accuracy
-            self._ops[F1_SCORE] = classification_output.f1_score
+            reshaped_expected = tf.reshape(expected_output, shape=(-1, 1))  # [B * T, D]
+            reshaped_output = tf.reshape(output, shape=(-1, output_shape[-1]))  # [B * T, D]
+
+            classification_output = compute_multi_classification_output(model_output=reshaped_output,
+                                                                        labels=reshaped_expected)
+            self._ops[LOGITS] = tf.reshape(classification_output.logits, shape=(-1, output_shape[1], output_shape[2]))  # [B, T, M]
+            self._ops[PREDICTION] = majority_vote(self._ops[LOGITS])  # [B]
+            self._ops[ACCURACY] = classification_output.accuracy  # Scalar
+            self._ops[F1_SCORE] = classification_output.f1_score  # Scalar
         else:
             self._ops[PREDICTION] = output
 
     def make_loss(self):
-        expected_output = self._placeholders[OUTPUT]
+        # Reshape expected output to account for sequence length
+        expected_output = tf.tile(tf.expand_dims(self._placeholders[OUTPUT], axis=1),
+                                  multiples=(1, tf.shape(self._placeholders[INPUTS])[1], 1))
         predictions = self._ops[PREDICTION]
 
         if self.output_type == OutputType.BINARY_CLASSIFICATION:
@@ -261,54 +183,23 @@ class StandardModel(TFModel):
                 raise ValueError(f'Unknown loss mode: {loss_mode}')
 
         elif self.output_type == OutputType.MULTI_CLASSIFICATION:
-            logits = self._ops[LOGITS]
-            labels = tf.squeeze(expected_output, axis=-1)
+            logits = tf.reshape(self._ops[LOGITS], shape=(-1, tf.shape(self._ops[LOGITS])[-1]))
+            labels = tf.reshape(expected_output, shape=(-1, ))
 
             sample_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=labels)
             self._ops[LOSS] = tf.reduce_mean(sample_loss)
         else:
             self._ops[LOSS] = tf.reduce_mean(tf.square(predictions - expected_output))
 
-
-    def compute_flops(self, level: int) -> int:
-        """
-        Returns the total number of floating point operations to produce the final output.
-        """
-        total_flops = 0
-
-        with self.sess.graph.as_default():
-
-            # Get FLOPS for operations that are applied to each sequence element
-            seq_operations = [TRANSFORM_LAYER_NAME, RNN_NAME, BIRNN_NAME]
-            seq_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), seq_operations))
-
-            seq_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
-                                        .with_node_names(show_name_regexes=seq_operations) \
-                                        .order_by('flops').build()
-            flops = tf.profiler.profile(self.sess.graph, options=seq_options)
-
-            if self.model_type == StandardModelType.NBOW:
-                total_flops += flops.total_float_ops
-            else:
-                total_flops += flops.total_float_ops * self.metadata[SEQ_LENGTH]
-
-            # Get FLOPS for operations that are applied to the entire sequence. We include the embedding layer
-            # here because it has a well-defined sequence length so Tensorflow will automatically account for 
-            # the multiplier
-            single_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), [OUTPUT_LAYER_NAME, EMBEDDING_LAYER_NAME, AGGREGATION_LAYER_NAME]))
-            single_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
-                                            .with_node_names(show_name_regexes=single_operations) \
-                                            .order_by('flops').build()
-            flops = tf.profiler.profile(self.sess.graph, options=single_options)
-            total_flops += flops.total_float_ops
-
-        return total_flops
-
     def predict_classification(self, test_batch_generator: Iterable[Any],
                                batch_size: int,
                                max_num_batches: Optional[int],
                                flops_dict: Dict[str, int]) -> DefaultDict[str, Dict[str, Any]]:
-        predictions_list: List[np.ndarray] = []
+        sample_frac = self.hypers.model_params['sample_frac']
+        num_sequences = int(1.0 / sample_frac)
+        samples_per_seq = int(self.metadata[SEQ_LENGTH] * sample_frac)
+
+        predictions_dict: DefaultDict[str, List[np.ndarray]] = defaultdict(list)
         labels_list: List[np.ndarray] = []
         latencies: List[float] = []
 
@@ -316,28 +207,42 @@ class StandardModel(TFModel):
             feed_dict = self.batch_to_feed_dict(batch, is_train=False)
 
             start = time.time()
-            prediction = self.sess.run(self._ops[PREDICTION], feed_dict=feed_dict)
+            logits = self.sess.run(self._ops[LOGITS], feed_dict=feed_dict)
             elapsed = time.time() - start
 
             labels_list.append(np.vstack(batch[OUTPUT]))
-            predictions_list.append(np.vstack(prediction))
             latencies.append(elapsed)
 
-        predictions = np.vstack(predictions_list)
-        labels = np.vstack(labels_list)
+            for level in range(num_sequences):
+                start, end = level * samples_per_seq, (level + 1) * samples_per_seq
 
-        avg_latency = np.average(latencies[1:])  # Skip first due to outliers in caching
-        flops = flops_dict[self.output_ops[0]]
+                sub_sequence_logits = logits[:, start:end, :]
+                level_predictions = np_majority(sub_sequence_logits)
+
+                predictions_dict[get_prediction_name(level)].append(np.vstack(level_predictions))
+
+            if (max_num_batches is not None) and (batch_num >= max_num_batches):
+                break
+
+        labels = np.vstack(labels_list)
+        avg_latency = np.average(latencies[1:])
 
         result: DefaultDict[str, Dict[str, float]] = defaultdict(dict)
-        for metric_name in ClassificationMetric:
-            if self.output_type == OutputType.BINARY_CLASSIFICATION:
-                metric_value = get_binary_classification_metric(metric_name, predictions, labels, avg_latency, 1, flops)
-            else:
-                metric_value = get_multi_classification_metric(metric_name, predictions, labels, avg_latency, 1, flops, self.metadata[NUM_CLASSES])
+        flops = 0
+        for level in range(num_sequences):
+            flops += sample_frac * flops_dict[PREDICTION]
 
-            result[MODEL][metric_name.name] = metric_value
+            level_name = get_prediction_name(level)
+            predictions = np.vstack(predictions_dict[level_name])
 
-        result[MODEL][ALL_LATENCY] = latencies[1:]
+            for metric_name in ClassificationMetric:
+                if self.output_type == OutputType.BINARY_CLASSIFICATION:
+                    metric_value = get_binary_classification_metric(metric_name, predictions, labels, avg_latency, 1, flops)
+                else:
+                    metric_value = get_multi_classification_metric(metric_name, predictions, labels, avg_latency, 1, flops, self.metadata[NUM_CLASSES])
+
+                result[level_name][metric_name.name] = metric_value
+
+            result[level_name][ALL_LATENCY] = latencies[1:]
 
         return result

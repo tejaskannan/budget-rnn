@@ -34,7 +34,6 @@ def l2_normalize(arr: np.ndarray) -> np.ndarray:
     l2_norm = np.linalg.norm(arr, ord=2)
     return arr / (l2_norm + SMALL_NUMBER)
 
-
 def clip_by_norm(arr: np.ndarray, clip: float, axis: Optional[int] = None) -> np.ndarray:
     assert clip > 0, 'The clip value must be positive'
 
@@ -54,6 +53,27 @@ def clip_by_norm(arr: np.ndarray, clip: float, axis: Optional[int] = None) -> np
 
    # factor = clip / norm
    # return arr * factor
+
+
+def np_majority(logits: np.ndarray) -> np.ndarray:
+    """
+    Returns the majority label across all sequence elements.
+
+    Args:
+        logits: A [B, T, D] array of class logits (D) for each sequence element (T) in the batch (B)
+    Returns:
+        A [B] array of predictions per sample
+    """
+    predicted_probs = softmax(logits, axis=-1)  # [B, T, D]
+    predicted_labels = np.argmax(predicted_probs, axis=-1)  # [B, T]
+
+    predictions: List[int] = []
+    for sample_labels in predicted_labels:
+        label_counts = np.bincount(sample_labels)
+        pred = np.argmax(label_counts)
+        predictions.append(pred)
+
+    return np.array(predictions)
 
 
 def multiclass_precision(predictions: np.ndarray, labels: np.ndarray, num_classes: int) -> Tuple[np.ndarray, np.ndarray]:

@@ -462,7 +462,7 @@ class AdaptiveModel(TFModel):
         # Apply level-wise layer penalty to get better results at higher layers
         rolled_losses = tf.roll(losses, shift=1, axis=0)  # [N]
         mask = tf.cast(tf.range(start=0, limit=tf.shape(losses)[0]) > 0, dtype=tf.float32)  # [N]
-        penalty = tf.reduce_sum(tf.nn.elu(mask * (losses - rolled_losses)))
+        penalty = tf.reduce_sum(tf.nn.leaky_relu(mask * (losses - rolled_losses), alpha=0.01))
 
         self._ops[LOSS] = weighted_losses + penalty
 

@@ -36,7 +36,7 @@ class ThresholdOptimizer:
         raise NotImplementedError()
 
     def get_data_generator(self, dataset: RNNSampleDataset, metadata: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
-        return dataset.minibatch_generator(DataSeries.VALID,
+        return dataset.minibatch_generator(DataSeries.TEST,
                                            batch_size=self.batch_size,
                                            metadata=metadata,
                                            should_shuffle=True,

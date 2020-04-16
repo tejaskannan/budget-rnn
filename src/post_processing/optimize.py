@@ -211,7 +211,7 @@ def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model
             test_result = evaluate_thresholds(model=model,
                                               thresholds=opt_output.thresholds,
                                               dataset=dataset,
-                                              series=DataSeries.TEST,
+                                              series=DataSeries.VALID,
                                               mode=mode,
                                               test_log=test_log)
             test_results.append(test_result)
@@ -230,7 +230,7 @@ def optimize_thresholds(optimizer_params: Dict[str, Any], model_path: str, model
         baseline_result = evaluate_thresholds(model=model,
                                               thresholds=baseline,
                                               dataset=dataset,
-                                              series=DataSeries.TEST,
+                                              series=DataSeries.VALID,
                                               mode=InferenceMode.BINARY_ONE_SIDED,
                                               test_log=test_log)
         print_eval_result(baseline_result)

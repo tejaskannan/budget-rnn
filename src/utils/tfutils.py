@@ -2,7 +2,7 @@ import tensorflow as tf
 from typing import Dict, Optional, List, Callable, Union, Tuple
 from collections import namedtuple
 
-from .constants import SMALL_NUMBER
+from utils.constants import SMALL_NUMBER
 
 
 FusionLayer = namedtuple('FusionLayer', ['dense', 'bias'])
@@ -55,7 +55,7 @@ def get_activation(fn_name: Optional[str]) -> Optional[Callable[[tf.Tensor], tf.
         raise ValueError(f'Unknown activation name {fn_name}.')
 
 
-def pool_rnn_outputs(outputs: tf.Tensor, final_state: tf.Tensor, pool_mode: str):
+def pool_rnn_outputs(outputs: tf.Tensor, final_state: tf.Tensor, pool_mode: str, name: str = 'pool-layer'):
     """
     Pools the outputs of an RNN using the given strategy.
 
@@ -63,17 +63,18 @@ def pool_rnn_outputs(outputs: tf.Tensor, final_state: tf.Tensor, pool_mode: str)
         outputs: A [B, T, D] tensor containing the RNN outputs
         final_state: A [B, D] tensor with the final RNN state
         pool_mode: Pooling strategy
+        name: Name prefix for this operation
     Returns:
         A [B, D] tensor which represents an aggregation of the RNN outputs.
     """
     pool_mode = pool_mode.lower()
 
     if pool_mode == 'sum':
-        return tf.reduce_sum(outputs, axis=-2)
+        return tf.reduce_sum(outputs, axis=-2, name=name)
     elif pool_mode == 'max':
-        return tf.reduce_max(outputs, axis=-2)
+        return tf.reduce_max(outputs, axis=-2, name=name)
     elif pool_mode == 'mean':
-        return tf.reduce_mean(outputs, axis=-2)
+        return tf.reduce_mean(outputs, axis=-2, name=name)
     elif pool_mode == 'final_state':
         return final_state
     elif pool_mode == 'weighted_average':
@@ -82,9 +83,10 @@ def pool_rnn_outputs(outputs: tf.Tensor, final_state: tf.Tensor, pool_mode: str)
                                           units=1,
                                           activation=get_activation('leaky_relu'),
                                           kernel_initializer=tf.initializers.glorot_uniform(),
-                                          name='attention-layer')
-        normalized_attn_weights = tf.nn.softmax(attention_layer, axis=-2)  # [B, T, 1]
-        return tf.reduce_sum(outputs * normalized_attn_weights, axis=-2)  # [B, D]
+                                          name='{0}-attention'.format(name))
+        normalized_attn_weights = tf.nn.softmax(attention_layer, axis=-2, name='{0}-normalize'.format(name))  # [B, T, 1]
+        scaled_outputs = tf.math.multiply(outputs, normalized_attn_weights, name='{0}-scale'.format(name))
+        return tf.reduce_sum(scaled_outputs, axis=-2, name='{0}-aggregate'.format(name))  # [B, D]
     else:
         raise ValueError(f'Unknown pool mode {pool_mode}.')
 
@@ -121,6 +123,43 @@ def fuse_states(curr_state: tf.Tensor, prev_state: Optional[tf.Tensor], fusion_l
         return update_weight * curr_state + (1.0 - update_weight) * prev_state
     else:
         raise ValueError(f'Unknown fusion mode: {mode}')
+
+def majority_vote(logits: tf.Tensor) -> tf.Tensor:
+    """
+    Outputs a prediction based on a majority-voting scheme.
+
+    Args:
+        logits: A [B, T, D] tensor containing the output logits for each sequence element (T)
+    Returns:
+        A [B] tensor containing the predictions for each batch sample (D)
+    """
+    predicted_probs = tf.nn.softmax(logits, axis=-1)  # [B, T, D]
+    predicted_classes = tf.argmax(predicted_probs, axis=-1)  # [B, T]
+
+    batch_size, seq_length = tf.shape(predicted_probs)[0], tf.shape(predicted_probs)[1]
+    sample_classes = tf.TensorArray(size=batch_size, dtype=tf.int32, clear_after_read=True, name='predictions')
+
+    seq_length = tf.shape(predicted_classes)[-1]
+
+    def body(index, predictions_array):
+        sample_classes = tf.gather(predicted_classes, index)  # [T]
+
+        label_counts = tf.bincount(tf.cast(sample_classes, dtype=tf.int32))  # [T]
+        predicted_label = tf.cast(tf.argmax(label_counts), dtype=tf.int32)
+
+        predictions_array = predictions_array.write(index=index, value=predicted_label)
+        return [index + 1, predictions_array]
+
+    def cond(index, _):
+        return index < batch_size
+
+    i = tf.constant(0)
+    _, predictions_array = tf.while_loop(cond=cond, body=body,
+                                         loop_vars=[i, sample_classes],
+                                         parallel_iterations=1,
+                                         maximum_iterations=batch_size,
+                                         name='majority-while-loop')
+    return predictions_array.stack()
 
 
 def variables_for_loss_op(variables: List[tf.Variable], loss_op: str) -> List[tf.Variable]:
