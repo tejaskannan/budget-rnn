@@ -459,7 +459,12 @@ class AdaptiveModel(TFModel):
         losses = tf.stack(losses)  # [N], N is the number of sequences
         weighted_losses = tf.reduce_sum(losses * self._placeholders['loss_weights'], axis=-1)  # Scalar
 
-        self._ops[LOSS] = weighted_losses
+        # Apply level-wise layer penalty to get better results at higher layers
+        rolled_losses = tf.roll(losses, shift=1, axis=0)  # [N]
+        mask = tf.cast(tf.range(start=0, limit=tf.shape(losses)[0]) > 0, dtype=tf.float32)  # [N]
+        penalty = tf.reduce_sum(tf.nn.elu(mask * (losses - rolled_losses)))
+
+        self._ops[LOSS] = weighted_losses + penalty
 
     def anytime_generator(self, feed_dict: Dict[tf.Tensor, List[Any]],
                           max_num_levels: int) -> Optional[Iterable[np.ndarray]]:
