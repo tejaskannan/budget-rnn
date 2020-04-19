@@ -125,8 +125,9 @@ class TFModel(Model):
         input_scaler = None
         if self.hypers.model_params['normalize_inputs']:
             assert len(input_shape) == 1
-            input_samples = np.reshape(input_samples, newshape=(-1, input_shape[0]))
+            input_samples = np.vstack(input_samples)
             input_scaler = StandardScaler()
+
             input_scaler.fit(input_samples)
 
         output_scaler = None

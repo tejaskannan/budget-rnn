@@ -13,15 +13,18 @@ STATES_NAME = 'states'
 ALL_PREDICTIONS_NAME = 'predictions'
 PREDICTION_PROB_NAME = 'prediction_probs'
 EMBEDDING_NAME = 'embedding'
+TRANSFORM_NAME = 'transform'
+AGGREGATION_NAME = 'aggregation'
 COMBINE_STATES_NAME = 'combine-states'
 WHILE_LOOP_NAME = 'while-loop'
 
 
-class RNNModelType(Enum):
+class AdaptiveModelType(Enum):
     VANILLA = auto()
     SAMPLE = auto()
     CASCADE = auto()
     LINKED = auto()
+    BOW = auto()
 
 
 def get_cell_level_name(level_index: int, should_share_weights: bool) -> str:
@@ -74,6 +77,18 @@ def get_states_name(level_index: int) -> str:
 
 def get_f1_score_name(level_index: int) -> str:
     return f'{F1_SCORE}_{level_index}'
+
+
+def get_transform_name(level_index: int, should_share_weights: bool) -> str:
+    if should_share_weights:
+        return TRANSFORM_NAME
+    return f'{TRANSFORM_NAME}_{level_index}'
+
+
+def get_aggregation_name(level_index: int, should_share_weights: bool) -> str:
+    if should_share_weights:
+        return AGGREGATION_NAME
+    return f'{AGGREGATION_NAME}_{level_index}'
 
 
 def get_embedding_name() -> str:

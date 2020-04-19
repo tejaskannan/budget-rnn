@@ -33,7 +33,7 @@ class AdaptiveModel(TFModel):
         super().__init__(hyper_parameters, save_folder, is_train)
 
         model_type = self.hypers.model_params['model_type'].upper()
-        self.model_type = RNNModelType[model_type]
+        self.model_type = AdaptiveModelType[model_type]
 
         self.name = model_type
 
@@ -76,7 +76,7 @@ class AdaptiveModel(TFModel):
 
     @property
     def loss_op_names(self) -> List[str]:
-        if self.model_type == RNNModelType.VANILLA and not self.hypers.model_params['share_cell_weights']:
+        if self.model_type == AdaptiveModelType.VANILLA and not self.hypers.model_params['share_cell_weights']:
             return [get_loss_name(i) for i in range(self.num_outputs)]
         return [LOSS]
 
@@ -126,12 +126,12 @@ class AdaptiveModel(TFModel):
         for i in range(num_sequences):
             input_ph = self.placeholders[get_input_name(i)]
 
-            if self.model_type == RNNModelType.VANILLA:
+            if self.model_type == AdaptiveModelType.VANILLA:
                 seq_indexes.extend(range(i, seq_length, num_sequences))
                 seq_indexes = list(sorted(seq_indexes))
                 sample_tensor = input_batch[:, seq_indexes]
                 feed_dict[input_ph] = sample_tensor
-            elif self.model_type in (RNNModelType.SAMPLE, RNNModelType.LINKED):
+            elif self.model_type in (AdaptiveModelType.SAMPLE, AdaptiveModelType.LINKED, AdaptiveModelType.BOW):
                 seq_indexes = list(range(i, seq_length, num_sequences))
                 sample_tensor = input_batch[:, seq_indexes]
                 feed_dict[input_ph] = sample_tensor
@@ -169,7 +169,7 @@ class AdaptiveModel(TFModel):
                                                                 dtype=tf.float32,
                                                                 name=get_input_name(i))
 
-            if self.model_type == RNNModelType.VANILLA:
+            if self.model_type == AdaptiveModelType.VANILLA:
                 samples_per_seq += self.samples_per_seq
 
         if not is_frozen:
@@ -192,6 +192,64 @@ class AdaptiveModel(TFModel):
         """
         Computes the total floating point operations for the given prediction level
         """
+        if self.model_type == AdaptiveModelType.BOW:
+            return self.compute_bow_flops(level)
+        return self.compute_rnn_flops(level)
+
+    def compute_bow_flops(self, level: int) -> int:
+        if level < 0:
+            return 0
+
+        total_flops = 0
+        rm = tf.RunMetadata()
+        with self.sess.graph.as_default():
+            transform_name = get_transform_name(level, self.hypers.model_params['share_transform_weights'])
+            aggregation_name = get_aggregation_name(level, self.hypers.model_params['share_transform_weights'])
+            embedding_name = get_embedding_name()
+            output_name = get_output_layer_name(level, self.hypers.model_params['share_output_weights'])
+
+            # Compute FLOPS for the transformation layer and aggregation dense layer
+            if self.hypers.model_params['share_transform_weights']:
+                if level == 0:
+                    transform_regex = '^.*{0}([^_]+)$'.format(transform_name)
+                    agg_dense_regex = '^.*{0}/.*$'.format(aggregation_name)
+                else:
+                    transform_regex = '.*{0}.*_{1}.*'.format(transform_name, level)
+                    agg_dense_regex = '.*{0}_{1}/.*'.format(aggregation_name, level)
+            else:
+                transform_regex = NODE_REGEX_FORMAT.format(transform_name)
+                agg_dense_regex = '.*{0}-([^0-9]+).*'.format(aggregation_name)
+
+            if self.hypers.model_params['share_output_weights']:
+                if level == 0:
+                    output_regex = '^.*{0}([^_]+)$'.format(output_name)
+                else:
+                    output_regex = '.*{0}.*_{1}.*'.format(output_name, level)
+            else:
+                output_regex = NODE_REGEX_FORMAT.format(ouput_name)
+
+            agg_ops_regex = '.*{0}-{1}.*'.format(aggregation_name, level)
+
+            op_names = [transform_regex, agg_dense_regex, output_regex, agg_ops_regex]
+            options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
+                            .with_node_names(show_name_regexes=op_names) \
+                            .order_by('flops').build()
+            level_flops = tf.profiler.profile(self.sess.graph, options=options)
+            total_flops += level_flops.total_float_ops
+
+            # Get FLOPS for the embedding layer. We do this in a `marginal' way because there is no need to ever re-compute
+            # an embedding (they are all independent). Thus, the number of additional embedding computations is equal
+            # to the number of operations on the first level.
+            embedding_regex = ['.*{0}-dense/.*'.format(get_embedding_name()), '.*{0}-filter-[0-9]+/.*'.format(get_embedding_name())]
+            embedding_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
+                                    .with_node_names(show_name_regexes=embedding_regex) \
+                                    .order_by('flops').build()
+            flops = tf.profiler.profile(self.sess.graph, options=embedding_options)
+            total_flops += flops.total_float_ops
+
+        return total_flops
+
+    def compute_rnn_flops(self, level: int) -> int:
         if level < 0:
             return 0
 
@@ -216,13 +274,20 @@ class AdaptiveModel(TFModel):
                                 .order_by('flops').build()
             flops = tf.profiler.profile(self.sess.graph, options=rnn_options)
 
-            flops_factor = level + 1 if self.model_type == RNNModelType.VANILLA else 1
+            flops_factor = level + 1 if self.model_type == AdaptiveModelType.VANILLA else 1
             total_flops += flops.total_float_ops * flops_factor * self.samples_per_seq
 
             # Compute FLOPS for the output layer
-            single_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), [output]))
+            if self.hypers.model_params['share_output_weights']:
+                if level == 0:
+                    output_regex = '^.*{0}([^_]+)$'.format(output_name)
+                else:
+                    output_regex = '.*{0}.*_{1}.*'.format(output_name, level)
+            else:
+                output_regex = NODE_REGEX_FORMAT.format(ouput_name)
+
             single_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
-                                .with_node_names(show_name_regexes=single_operations) \
+                                .with_node_names(show_name_regexes=output_regex) \
                                 .order_by('flops').build()
             flops = tf.profiler.profile(self.sess.graph, options=single_options)
             total_flops += flops.total_float_ops
@@ -304,9 +369,115 @@ class AdaptiveModel(TFModel):
 
     def make_model(self, is_train: bool):
         with tf.variable_scope(MODEL, reuse=tf.AUTO_REUSE):
-            self.make_rnn_model(is_train)
+            if self.model_type == AdaptiveModelType.BOW:
+                self._make_bow_model(is_train)
+            else:
+                self._make_rnn_model(is_train)
 
-    def make_rnn_model(self, is_train: bool):
+    def _make_bow_model(self, is_train: bool):
+        outputs: List[tf.Tensor] = []
+        prev_attn_weights: List[tf.Tensor] = []  # List of [B, T, 1] tensors
+        prev_samples: List[tf.Tensor] = []  # List of [B, T, D] tensors
+
+        for i in range(self.num_sequences):
+            # Get relevant variable names
+            input_name = get_input_name(i)
+            transform_name = get_transform_name(i, self.hypers.model_params['share_transform_weights'])
+            aggregation_name = get_aggregation_name(i, self.hypers.model_params['share_transform_weights'])
+            output_layer_name = get_output_layer_name(i, self.hypers.model_params['share_output_weights'])
+            logits_name = get_logits_name(i)
+            prediction_name = get_prediction_name(i)
+            loss_name = get_loss_name(i)
+            gate_name = get_gates_name(i)
+            state_name = get_states_name(i)
+            accuracy_name = get_accuracy_name(i)
+            f1_score_name = get_f1_score_name(i)
+
+            # Create the embedding layer, [B, T, D]
+            input_sequence = embedding_layer(inputs=self._placeholders[input_name],
+                                             units=self.hypers.model_params['state_size'],
+                                             dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                                             use_conv=self.hypers.model_params['use_conv_embedding'],
+                                             params=self.hypers.model_params['embedding_layer_params'],
+                                             seq_length=self.samples_per_seq,
+                                             input_shape=self.metadata[INPUT_SHAPE],
+                                             name_prefix=get_embedding_name())
+
+            # Transform the input sequence, [B, T, D]
+            transformed_sequence = mlp(inputs=input_sequence,
+                                       output_size=self.hypers.model_params['state_size'],
+                                       hidden_sizes=self.hypers.model_params['transform_units'],
+                                       activations=self.hypers.model_params['transform_activation'],
+                                       dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                                       should_activate_final=True,
+                                       should_bias_final=True,
+                                       should_dropout_final=True,
+                                       name=transform_name)
+
+            # Compute attention weights for aggregation. We do this explicitly here
+            # to save the normalized weights. This avoids redundant computation.
+            attn_weights = tf.layers.dense(inputs=transformed_sequence,
+                                           units=1,
+                                           activation=self.hypers.model_params['attn_activation'],
+                                           use_bias=True,
+                                           kernel_initializer=tf.glorot_uniform_initializer(),
+                                           name=aggregation_name)
+        
+            # For the first sequence, we have no already-processed samples to integrate.
+            if i  == 0:
+                normalized_attn_weights = tf.nn.softmax(attn_weights, axis=1, name='{0}-{1}-softmax'.format(aggregation_name, i))
+                weighted_sequence = tf.math.multiply(transformed_sequence, normalized_attn_weights, name='{0}-{1}-multiply'.format(aggregation_name, i))
+
+                aggregated_sequence = tf.reduce_sum(weighted_sequence, axis=1, name='{0}-{1}-aggregate'.format(aggregation_name, i))  # [B, D]
+            else:
+                # [B, L * T, 1] where L is the current level number (starting at 1)
+                attn_weights_concat = tf.concat(prev_attn_weights + [attn_weights], axis=1)
+                normalized_attn_weights = tf.nn.softmax(attn_weights_concat, axis=1, name='{0}-{1}-softmax'.format(aggregation_name, i))
+
+                # [B, L * T, D] tensor of previous transformed inputs
+                seq_concat = tf.concat(prev_samples + [transformed_sequence], axis=1)
+                weighted_sequence = tf.math.multiply(seq_concat, normalized_attn_weights, name='{0}-{1}-multiply'.format(aggregation_name, i))
+
+                aggregated_sequence = tf.reduce_sum(weighted_sequence, axis=1, name='{0}-{1}-aggregate'.format(aggregation_name, i))  # [B, D]
+
+            # Save results of this level to avoid redundant computation
+            prev_attn_weights.append(attn_weights)
+            prev_samples.append(transformed_sequence)
+
+            # [B, K]
+            output_size = num_output_features if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[NUM_CLASSES]
+            output = mlp(inputs=aggregated_sequence,
+                         output_size=output_size,
+                         hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
+                         activations=self.hypers.model_params['output_hidden_activation'],
+                         dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                         name=output_layer_name)
+
+            if self.output_type == OutputType.BINARY_CLASSIFICATION:
+                classification_output = compute_binary_classification_output(model_output=output,
+                                                                             labels=self._placeholders[OUTPUT])
+
+                self._ops[logits_name] = classification_output.logits
+                self._ops[prediction_name] = classification_output.predictions
+                self._ops[accuracy_name] = classification_output.accuracy
+                self._ops[f1_score_name] = classification_output.f1_score
+            elif self.output_type == OutputType.MULTI_CLASSIFICATION:
+                classification_output = compute_multi_classification_output(model_output=output,
+                                                                            labels=self._placeholders[OUTPUT])
+                self._ops[logits_name] = classification_output.logits
+                self._ops[prediction_name] = classification_output.predictions
+                self._ops[accuracy_name] = classification_output.accuracy
+                self._ops[f1_score_name] = classification_output.f1_score
+            else:
+                self._ops[prediction_name] = output
+
+            outputs.append(output)
+
+        combined_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), outputs), axis=1)
+        self._ops[ALL_PREDICTIONS_NAME] = combined_outputs
+
+
+    def _make_rnn_model(self, is_train: bool):
         outputs: List[tf.Tensor] = []
         states_list: List[tf.TensorArray] = []
         prev_state: Optional[tf.Tensor] = None
@@ -351,12 +522,12 @@ class AdaptiveModel(TFModel):
 
             # Set the initial state for chunked model types
             if prev_state is not None:
-                if self.model_type == RNNModelType.CASCADE or self.hypers.model_params['link_levels']:
+                if self.model_type == AdaptiveModelType.CASCADE or self.hypers.model_params['link_levels']:
                     initial_state = prev_state
 
             # Set previous states for the Sample model type
             prev_states = None
-            if self.model_type == RNNModelType.SAMPLE and i > 0:
+            if self.model_type == AdaptiveModelType.SAMPLE and i > 0:
                 prev_states = states_list[i-1]
 
             # Run RNN and collect outputs
