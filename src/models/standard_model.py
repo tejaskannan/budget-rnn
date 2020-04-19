@@ -250,7 +250,7 @@ class StandardModel(TFModel):
             logits = self._ops[LOGITS]
             predicted_probs = tf.math.sigmoid(logits)
 
-            if loss_mode in ('binary-cross-entropy', 'binary_cross_entropy'):
+            if loss_mode in ('cross-entropy', 'cross_entropy'):
                 sample_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=expected_output,
                                                                       logits=logits)
                 self._ops[LOSS] = tf.reduce_mean(sample_loss)
