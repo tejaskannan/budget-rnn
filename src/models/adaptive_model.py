@@ -280,14 +280,14 @@ class AdaptiveModel(TFModel):
             # Compute FLOPS for the output layer
             if self.hypers.model_params['share_output_weights']:
                 if level == 0:
-                    output_regex = '^.*{0}([^_]+)$'.format(output_name)
+                    output_regex = '^.*{0}([^_]+)$'.format(output)
                 else:
-                    output_regex = '.*{0}.*_{1}.*'.format(output_name, level)
+                    output_regex = '.*{0}.*_{1}.*'.format(output, level)
             else:
-                output_regex = NODE_REGEX_FORMAT.format(ouput_name)
+                output_regex = NODE_REGEX_FORMAT.format(ouput)
 
             single_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
-                                .with_node_names(show_name_regexes=output_regex) \
+                                .with_node_names(show_name_regexes=[output_regex]) \
                                 .order_by('flops').build()
             flops = tf.profiler.profile(self.sess.graph, options=single_options)
             total_flops += flops.total_float_ops
