@@ -183,7 +183,8 @@ class TFModel(Model):
     def predict(self, dataset: Dataset,
                 test_batch_size: Optional[int],
                 max_num_batches: Optional[int],
-                flops_dict: Optional[Dict[str, int]]) -> DefaultDict[str, Dict[str, Any]]:
+                flops_dict: Optional[Dict[str, int]],
+                series: DataSeries = DataSeries.TEST) -> DefaultDict[str, Dict[str, Any]]:
         """
         Execute the model to produce a prediction for the given input sample.
 
@@ -192,11 +193,12 @@ class TFModel(Model):
             test_batch_size: Batch size to use during testing
             max_num_batches: Maximum number of batches to perform testing on
             flops_dict: Dictionary of FLOPS for each output operation
+            series: Series on which to perform classification. Defaults to the testing set.
         Returns:
             The predicted output produced by the model.
         """
         test_batch_size = test_batch_size if test_batch_size is not None else self.hypers.batch_size
-        test_batch_generator = dataset.minibatch_generator(series=DataSeries.TEST,
+        test_batch_generator = dataset.minibatch_generator(series=series,
                                                            batch_size=test_batch_size,
                                                            metadata=self.metadata,
                                                            should_shuffle=False,

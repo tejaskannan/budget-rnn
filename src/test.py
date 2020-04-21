@@ -6,12 +6,13 @@ from typing import Optional
 
 from models.model_factory import get_model
 from dataset.dataset_factory import get_dataset
+from dataset.dataset import DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.file_utils import extract_model_name, read_by_file_suffix, save_by_file_suffix
-from utils.constants import HYPERS_PATH, TEST_LOG_PATH, TRAIN, VALID, TEST, METADATA_PATH
+from utils.constants import HYPERS_PATH, TEST_LOG_PATH, TRAIN, VALID, TEST, METADATA_PATH, FINAL_TRAIN_LOG_PATH, FINAL_VALID_LOG_PATH
 
 
-def model_test(path: str, batch_size: Optional[int], max_num_batches: Optional[int], dataset_folder: Optional[str]):
+def model_test(path: str, batch_size: Optional[int], max_num_batches: Optional[int], dataset_folder: Optional[str], series: str):
     save_folder, model_file = os.path.split(path)
 
     model_name = extract_model_name(model_file)
@@ -36,10 +37,11 @@ def model_test(path: str, batch_size: Optional[int], max_num_batches: Optional[i
          save_folder=save_folder,
          hypers=hypers,
          batch_size=batch_size,
-         max_num_batches=max_num_batches)
+         max_num_batches=max_num_batches,
+         series=DataSeries[series.upper()])
 
 
-def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperParameters, batch_size: Optional[int], max_num_batches: Optional[int]):
+def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperParameters, batch_size: Optional[int], max_num_batches: Optional[int], series: DataSeries = DataSeries.TEST):
     # Create the dataset
     dataset = get_dataset(hypers.dataset_type, dataset_folder)
 
@@ -63,13 +65,20 @@ def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperPa
     test_results = model.predict(dataset=dataset,
                                  test_batch_size=batch_size,
                                  max_num_batches=max_num_batches,
-                                 flops_dict=flops_dict)
+                                 flops_dict=flops_dict,
+                                 series=series)
 
     # Close the dataset
     dataset.close()
 
-    test_result_file = os.path.join(save_folder, TEST_LOG_PATH.format(model_name))
-    save_by_file_suffix([test_results], test_result_file)
+    if series == DataSeries.TRAIN:
+        result_file = os.path.join(save_folder, FINAL_TRAIN_LOG_PATH.format(model_name))
+    elif series == DataSeries.VALID:
+        result_file = os.path.join(save_folder, FINAL_VALID_LOG_PATH.format(model_name))
+    else:
+        result_file = os.path.join(save_folder, TEST_LOG_PATH.format(model_name))
+
+    save_by_file_suffix([test_results], result_file)
     print('Completed model testing.')
 
 
@@ -79,6 +88,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch-size', type=int)
     parser.add_argument('--max-num-batches', type=int)
     parser.add_argument('--dataset-folder', type=str)
+    parser.add_argument('--series', type=str, default='test')
     args = parser.parse_args()
 
-    model_test(args.model_path, batch_size=args.batch_size, max_num_batches=args.max_num_batches, dataset_folder=args.dataset_folder)
+    model_test(args.model_path, batch_size=args.batch_size, max_num_batches=args.max_num_batches, dataset_folder=args.dataset_folder, series=args.series)
