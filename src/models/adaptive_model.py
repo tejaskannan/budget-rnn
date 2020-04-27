@@ -304,6 +304,60 @@ class AdaptiveModel(TFModel):
 
         return total_flops
 
+    def predict_regression(self, test_batch_generator: Iterable[Any],
+                           batch_size: int,
+                           max_num_batches: Optional[int],
+                           flops_dict: Optional[Dict[str, int]]) -> DefaultDict[str, Dict[str, Any]]:
+        predictions_dict = defaultdict(list)
+        latencies_dict = defaultdict(list)
+        levels_dict = defaultdict(list)
+        outputs: List[np.ndarray] = []
+
+        for batch_num, batch in enumerate(test_batch_generator):
+            feed_dict = self.batch_to_feed_dict(batch, is_train=False)
+
+            # Execute predictions and time results
+            latencies: List[float] = []
+            level = 0
+
+            start = time.time()
+            prediction_generator = self.anytime_generator(feed_dict, self.num_outputs)
+            for prediction_op, (prediction, _) in zip(self.prediction_ops, prediction_generator):
+                predictions_dict[prediction_op].append(np.vstack(prediction))  # [B]
+
+                elapsed = time.time() - start
+
+                latencies.append(elapsed)
+                latencies_dict[prediction_op].append(elapsed)
+
+                levels_dict[prediction_op].append(level + 1)
+                level += 1
+
+                start = time.time()
+
+            outputs.append(np.vstack(batch[OUTPUT]))
+
+            if max_num_batches is not None and batch_num >= max_num_batches:
+                break
+
+        outputs = np.vstack(outputs)
+
+        result = defaultdict(dict)
+        for model_name in predictions_dict.keys():
+
+            predictions = np.vstack(predictions_dict[model_name])
+            latency = float(np.average(latencies_dict[model_name][1:]))
+            levels = float(np.average(levels_dict[model_name]))
+            flops = flops_dict[model_name]
+
+            for metric_name in RegressionMetric:
+                metric_value = get_regression_metric(metric_name, predictions, outputs, latency, levels, flops)
+                result[model_name][metric_name.name] = metric_value
+
+            # Remove first latency to remove outliers due to startup costs
+            result[model_name][ALL_LATENCY] = latencies_dict[model_name][1:]
+
+        return result
 
     def predict_classification(self, test_batch_generator: Iterable[Any],
                                batch_size: int,
@@ -647,7 +701,11 @@ class AdaptiveModel(TFModel):
 
             # Setup the partial run with the output operations and input placeholders
             prediction_ops = [self.ops[get_prediction_name(i)] for i in range(num_levels)]
-            logit_ops = [self.ops[get_logits_name(i)] for i in range(num_levels)]
+            
+            if self.output_type == OutputType.REGRESSION:
+                logit_ops = []
+            else:
+                logit_ops = [self.ops[get_logits_name(i)] for i in range(num_levels)]
 
             input_names = set((get_input_name(i) for i in range(num_levels)))
             placeholders = [ph for name, ph in self.placeholders.items() if name in input_names or name == DROPOUT_KEEP_RATE]
@@ -656,7 +714,7 @@ class AdaptiveModel(TFModel):
 
             for level in range(num_levels):
                 prediction_op = self.ops[get_prediction_name(level)]
-                logit_op = self.ops[get_logits_name(level)]
+                logit_op = self.ops.get(get_logits_name(level))
 
                 # Form input dictionary with this level's input sequence
                 input_dict = {ph: val for ph, val in feed_dict.items() if ph.name.startswith(get_input_name(level))}
@@ -666,5 +724,10 @@ class AdaptiveModel(TFModel):
                 if level == 0:
                     input_dict[self.placeholders[DROPOUT_KEEP_RATE]] = 1.0
 
-                predictions, logits = self.sess.partial_run(handle, fetches=[prediction_op, logit_op], feed_dict=input_dict)
+                logits = None
+                if self.output_type == OutputType.REGRESSION:
+                    predictions = self.sess.partial_run(handle, fetches=[prediction_op], feed_dict=input_dict)
+                else:
+                    predictions, logits = self.sess.partial_run(handle, fetches=[prediction_op, logit_op], feed_dict=input_dict)
+
                 yield predictions, logits

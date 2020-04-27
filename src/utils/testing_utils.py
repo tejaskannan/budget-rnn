@@ -20,6 +20,8 @@ class ClassificationMetric(Enum):
 
 class RegressionMetric(Enum):
     MSE = auto()
+    MAE = auto()
+    MAPE = auto()
     LATENCY = auto()
     LEVEL = auto()
     FLOPS = auto()
@@ -84,6 +86,10 @@ def get_multi_classification_metric(metric_name: ClassificationMetric,
 def get_regression_metric(metric_name: RegressionMetric, model_output: np.ndarray, expected_output: np.ndarray, latency: float, level: int, flops: Union[int, float]) -> float:
     if metric_name == RegressionMetric.MSE:
         return np.average(np.square(model_output - expected_output))
+    elif metric_name == RegressionMetric.MAE:
+        return np.average(np.abs(model_output - expected_output))
+    elif metric_name == RegressionMetric.MAPE:
+        return np.average(np.abs((model_output - expected_output) / expected_output))
     elif metric_name == RegressionMetric.LATENCY:
         return latency
     elif metric_name == RegressionMetric.LEVEL:

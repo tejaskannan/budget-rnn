@@ -1,7 +1,7 @@
 import numpy as np
 from enum import Enum, auto
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import AdaBoostClassifier, RandomForestClassifier
+from sklearn.ensemble import AdaBoostClassifier, RandomForestClassifier, GradientBoostingClassifier
 
 from utils.hyperparameters import HyperParameters
 from .traditional_model import TraditionalModel
@@ -11,6 +11,7 @@ class DecisionTreeType(Enum):
     STANDARD = auto()
     RANDOM_FOREST = auto()
     ADA_BOOST = auto()
+    GRADIENT_BOOSTED = auto()
 
 
 class DecisionTreeModel(TraditionalModel):
@@ -44,5 +45,10 @@ class DecisionTreeModel(TraditionalModel):
             self._model = AdaBoostClassifier(base_estimator=base_estimator,
                                              n_estimators=self.hypers.model_params['num_estimators'],
                                              learning_rate=self.hypers.learning_rate)
+        elif self.tree_type == DecisionTreeType.GRADIENT_BOOSTED:
+            self._model = GradientBoostingClassifier(n_estimators=self.hypers.model_params['num_estimators'],
+                                                     learning_rate=self.hypers.learning_rate,
+                                                     max_depth=self.hypers.model_params['max_depth'])
+
         else:
             raise ValueError(f'Unknown tree type {self.tree_type}')
