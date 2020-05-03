@@ -42,8 +42,8 @@ void free(void *ptr) {
 }
 
 
-int16_t allocBytes(void) {
-    int16_t bytes = 0;
+uint16_t allocBytes(void) {
+    uint16_t bytes = 0;
     
     // Traverse the block headers to determine the number of allocated bytes
     int16_t i = 0;
@@ -60,12 +60,6 @@ int16_t allocBytes(void) {
 }
 
 
-int16_t freeBytes(void) {
+uint16_t freeBytes(void) {
     return MEMORY_BYTES - allocBytes();
 }
-
-
-
-
-
-
