@@ -15,6 +15,7 @@
     matrix *scalar_product(matrix *result, matrix *mat, int16_t scalar, int16_t precision);
     matrix *scalar_add(matrix *result, matrix *mat, int16_t scalar);
     matrix *apply_elementwise(matrix *result, matrix *mat, int16_t (*fn)(int16_t, int16_t), int16_t precision);
+    matrix *matrix_set(matrix *mat, int16_t value);
     matrix *transpose(matrix *result, matrix *mat);
     matrix *matrix_replace(matrix *dst, matrix *src);
 

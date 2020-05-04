@@ -210,3 +210,15 @@ matrix *matrix_replace(matrix *dst, matrix *src) {
 
     return dst;
 }
+
+
+matrix *matrix_set(matrix *mat, int16_t value) {
+    /**
+     * Sets all values in the matrix to the given value (already in fixed point form).
+     */
+    for (int16_t i = 0; i < mat->numRows * mat->numCols; i++) {
+        mat->data[i] = value;
+    }
+
+    return mat;
+}

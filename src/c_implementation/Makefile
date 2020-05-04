@@ -6,8 +6,8 @@ CC=$(CCBIN) -Wall -Wextra -std=c99 -pedantic -g -Wno-unused-variable
 
 default: model
 
-model: matrix.h memory.h params.h sample_model.h tensor.h utils.h utils.c activations.h memory.c tensor.c layers.h models.h models.c main.c
-	$(CC) -o rnnmodel memory.c activations.c tensor.c utils.c layers.c models.c main.c -lm
+model: math/matrix.h memory.h math/fixed_point_ops.h math/matrix_ops.h layers/cells.h layers/layers.h memory.c math/fixed_point_ops.c math/matrix_ops.c layers/layers.c
+	$(CC) -o model memory.c math/fixed_point_ops.c math/matrix_ops.c layers/layers.c
 
 matrix_test: math/matrix.h memory.h math/fixed_point_ops.h math/matrix_ops.h tests/matrix_tests.h memory.c math/fixed_point_ops.c math/matrix_ops.c tests/matrix_tests.c
 	$(CC) -o matrix_test memory.c math/fixed_point_ops.c math/matrix_ops.c tests/matrix_tests.c

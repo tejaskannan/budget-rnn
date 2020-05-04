@@ -6,8 +6,8 @@ int8_t isNull(void *ptr) {
 }
 
 
-int8_t *alloc(int8_t numBytes) {
-    if (numBytes <= 0) {
+int8_t *alloc(uint8_t numBytes) {
+    if (numBytes == 0) {
         return NULL_PTR;
     }
 
@@ -21,7 +21,7 @@ int8_t *alloc(int8_t numBytes) {
     }
 
     // We have reached a free block. We allocate it using the header - data structure.
-    MEMORY[i] = numBytes;
+    MEMORY[i] = (int8_t) numBytes;
     return MEMORY + i + HEADER_SIZE;  // The data block starts one byte after the header.
 }
 
@@ -31,7 +31,7 @@ void free(void *ptr) {
     // byte behind this. We use this to mark the block as freed by setting the number of allocated.
     // bytes to zero.
     int8_t *bytePtr = (int8_t *) ptr;
-    int8_t numBytes = *(bytePtr - HEADER_SIZE);
+    uint8_t numBytes = (uint8_t) *(bytePtr - HEADER_SIZE);
     *(bytePtr - HEADER_SIZE) = 0;
     
     // For convenience, we zero out the freed memory.
@@ -48,9 +48,11 @@ uint16_t allocBytes(void) {
     // Traverse the block headers to determine the number of allocated bytes
     int16_t i = 0;
     while (i < MEMORY_BYTES) {
-        if (MEMORY[i]) {
-            bytes += MEMORY[i] + HEADER_SIZE;  // Account for the header
-            i += MEMORY[i] + HEADER_SIZE;
+        uint8_t headerValue = (uint8_t) MEMORY[i];
+
+        if (headerValue) {
+            bytes += headerValue + HEADER_SIZE;  // Account for the header
+            i += headerValue + HEADER_SIZE;
         } else {
             i += 1;
         }
