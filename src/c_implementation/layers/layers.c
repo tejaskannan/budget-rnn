@@ -5,7 +5,7 @@ matrix *dense(matrix *result, matrix *input, matrix *W, matrix *b, int16_t (*act
     /**
      * Implementation of a dense feed-forward layer using matrix operations.
      */
-    result = matrix_multiply(result, input, W, precision);
+    result = matrix_multiply(result, W, input, precision);
 
     if (!isNull(b)) {
         result = matrix_add(result, result, b);
@@ -33,7 +33,7 @@ matrix *apply_gru(matrix *result, matrix *input, matrix *state, GRU *gru, int16_
     /**
      * Implementation of a GRU Cell.
      */
-    // Allocate matrices for the intermediate state
+    // Allocate matrices for the intermediate states
     matrix *update = matrix_allocate(state->numRows, state->numCols);
     matrix *reset = matrix_allocate(state->numRows, state->numCols);
     matrix *candidate = matrix_allocate(state->numRows, state->numCols);
@@ -68,6 +68,55 @@ matrix *apply_gru(matrix *result, matrix *input, matrix *state, GRU *gru, int16_
     return result;
 }
 
+matrix *apply_tf_gru(matrix *result, matrix *input, matrix *state, TFGRU *gru, int16_t precision) {
+    /**
+     * Implementation of a GRU Cell.
+     */
+    // Allocate matrices for the intermediate state
+    matrix *stacked = matrix_allocate(input->numRows + state->numRows, state->numCols);
+    matrix *gates = matrix_allocate(state->numRows * 2, state->numCols);
+    matrix *candidate = matrix_allocate(state->numRows, state->numCols);
+    matrix *update = matrix_allocate(state->numRows, state->numCols);
+    matrix *reset = matrix_allocate(state->numRows, state->numCols);
+   
+    // Create the gates
+    stacked = stack(stacked, input, state);
+    gates = matrix_multiply(gates, gru->wGates, stacked, precision);
+    gates = matrix_add(gates, gates, gru->bGates);
+    gates = apply_elementwise(gates, gates, &fp_sigmoid, precision);
+
+    // Split the gates into reset and update components
+    int16_t index = 0;
+    for (; index < state->numRows; index++) {
+        reset->data[index] = gates->data[index];
+    }
+
+    int16_t offset = index;
+    for (; index < gates->numRows; index++) {
+        update->data[index - offset] = gates->data[index];
+    }
+
+    // Create the candidate state
+    reset = matrix_hadamard(reset, state, reset, precision);
+    stacked = stack(stacked, input, reset);
+
+    candidate = matrix_multiply(candidate, gru->wCandidates, stacked, precision);
+    candidate = matrix_add(candidate, candidate, gru->bCandidates);
+    candidate = apply_elementwise(candidate, candidate, &fp_tanh, precision);
+
+    // Construct the result
+    result = apply_gate(result, update, state, candidate, precision);
+ 
+    // Free intermediate states
+    matrix_free(update);
+    matrix_free(reset);
+    matrix_free(candidate);
+    matrix_free(stacked);
+    matrix_free(gates);
+ 
+    return result;
+}
+
 
 matrix *rnn(matrix *result, matrix **inputs, void *cell, enum CellType cellType, int16_t seqLength, int16_t precision) {
     /**
@@ -83,6 +132,8 @@ matrix *rnn(matrix *result, matrix **inputs, void *cell, enum CellType cellType,
 
         if (cellType == GRUCell) {
             state = apply_gru(state, input, state, ((GRU *) cell), precision);
+        } else if (cellType == TFGRUCell) {
+            state = apply_tf_gru(state, input, state, ((TFGRU *) cell), precision);
         } else {
             return NULL_PTR;
         }

@@ -16,7 +16,17 @@ struct GRU {
 };
 typedef struct GRU GRU;
 
+
+struct TFGRU {
+    matrix *wGates;
+    matrix *bGates;
+    matrix *wCandidates;
+    matrix *bCandidates;
+};
+typedef struct TFGRU TFGRU;
+
+
 // Supported Cell Types
-enum CellType { GRUCell = 0 };
+enum CellType { GRUCell = 0, TFGRUCell = 1 };
 
 #endif

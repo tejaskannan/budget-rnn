@@ -222,3 +222,27 @@ matrix *matrix_set(matrix *mat, int16_t value) {
 
     return mat;
 }
+
+
+matrix *stack(matrix *result, matrix *vec1, matrix *vec2) {
+    /**
+     * Stacks the two vectors into a larger vector.
+     */
+    // Validate the input shapes.
+    if ((vec1->numRows + vec2->numRows != result->numRows) || (vec1->numCols != 1) ||
+        (vec2->numCols != 1) || (result->numCols != 1)) {
+        return NULL_PTR;
+    }
+
+    int16_t index = 0;
+    for (; index < vec1->numRows; index++) {
+        result->data[index] = vec1->data[index];
+    }
+
+    int16_t offset = index;
+    for (; index < result->numRows; index++) {
+        result->data[index] = vec2->data[index - offset];
+    }
+
+    return result;
+}

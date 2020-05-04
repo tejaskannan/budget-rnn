@@ -18,5 +18,6 @@
     matrix *matrix_set(matrix *mat, int16_t value);
     matrix *transpose(matrix *result, matrix *mat);
     matrix *matrix_replace(matrix *dst, matrix *src);
+    matrix *stack(matrix *result, matrix *vec1, matrix *vec2);
 
 #endif
