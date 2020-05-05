@@ -5,8 +5,8 @@
 #include "../memory.h"
 #include "cells.h"
 
-#define LAYERS_GUARD
 #ifndef LAYERS_GUARD
+#define LAYERS_GUARD
 
 matrix *dense(matrix *result, matrix *input, matrix *W, matrix *b, int16_t (*activation)(int16_t, int16_t), int16_t precision);
 

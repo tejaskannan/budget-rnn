@@ -36,5 +36,6 @@
     void test_transpose_wrong_dims(void);
     void test_replace(void);
     void test_replace_wrong_dims(void);
+    void test_argmax(void);
 
 #endif

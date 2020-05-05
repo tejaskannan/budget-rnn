@@ -19,5 +19,7 @@
     matrix *transpose(matrix *result, matrix *mat);
     matrix *matrix_replace(matrix *dst, matrix *src);
     matrix *stack(matrix *result, matrix *vec1, matrix *vec2);
+    int16_t argmax(matrix *vec);
+    matrix *normalize(matrix *vec, int16_t *mean, int16_t *std, int16_t precision);
 
 #endif

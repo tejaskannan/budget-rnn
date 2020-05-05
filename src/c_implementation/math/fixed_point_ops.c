@@ -41,6 +41,12 @@ int16_t int_to_fp(int16_t x, int16_t precision) {
 }
 
 
+int16_t fp_linear(int16_t x, int16_t precision) {
+    UNUSED(precision);
+    return x;
+}
+
+
 int16_t fp_exp(int16_t x, int16_t precision) {
     /**
      * Approximates e^x using the Power Series

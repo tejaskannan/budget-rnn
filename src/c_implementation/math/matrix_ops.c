@@ -246,3 +246,43 @@ matrix *stack(matrix *result, matrix *vec1, matrix *vec2) {
 
     return result;
 }
+
+
+int16_t argmax(matrix *vec) {
+    /**
+     * Computes the argmax of the 1d vector.
+     */
+    if (vec->numCols != 1 || vec->numRows <= 0) {
+        return -1;
+    }
+
+    int16_t max = vec->data[0];
+    int16_t max_index = 0;
+    for (int16_t i = 1; i < vec->numRows; i++) {
+        if (vec->data[i] > max) {
+            max_index = i;
+            max = vec->data[i];
+        }
+    }
+
+    return max_index;
+}
+
+
+matrix *normalize(matrix *vec, int16_t *mean, int16_t *std, int16_t precision) {
+    /**
+     * Normalizes the vector to a standard normal distribution. This operation is in-place,
+     * so the original vector is mutated.
+     */
+    if (vec->numCols != 1) {
+        return NULL_PTR;
+    }
+
+    int16_t shifted;
+    for (int16_t i = 0; i < vec->numRows; i++) {
+        shifted = fp_sub(vec->data[i], mean[i]);
+        vec->data[i] = fp_div(shifted, std[i], precision);
+    }
+
+    return vec;
+}

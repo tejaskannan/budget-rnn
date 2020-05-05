@@ -59,6 +59,11 @@ int main(void) {
     test_transpose_wrong_dims();
     printf("\tPassed transpose tests.\n");
 
+    // Vector Argmax
+    printf("---- Testing Vector Argmax ----\n");
+    test_argmax();
+    printf("\tPassed argmax tests.\n");
+
     printf("--------------------\n");
     printf("Completed all tests.\n");
     return 0;
@@ -485,6 +490,18 @@ void test_transpose(void) {
     matrix_free(expected);
     matrix_free(result);
     matrix_free(mat);
+    assert(0 == allocBytes());
+}
+
+
+void test_argmax(void) {
+    int16_t vecData[] = { 2, 3, 1, 4, 5, 2 };
+    matrix *vec = matrix_allocate(6, 1);
+    load_data(vec, vecData, PRECISION);
+
+    assert(4 == argmax(vec));
+    
+    matrix_free(vec);
     assert(0 == allocBytes());
 }
 

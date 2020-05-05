@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include "../utils/utils.h"
 
 #ifndef FIXED_POINT_OPS_GUARD
 #define FIXED_POINT_OPS_GUARD
@@ -13,6 +14,7 @@
     int16_t fp_exp(int16_t x, int16_t precision);
     int16_t fp_tanh(int16_t x, int16_t precision);
     int16_t fp_sigmoid(int16_t x, int16_t precision);
+    int16_t fp_linear(int16_t x, int16_t precision);
     int16_t convert_fp(int16_t x, int16_t old_precision, int16_t new_precision);
     int16_t float_to_fp(float x, int16_t precision);
     int16_t int_to_fp(int16_t x, int16_t precision);
