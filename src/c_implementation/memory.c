@@ -12,16 +12,16 @@ int8_t *alloc(uint8_t numBytes) {
     }
 
     // Use the header elements to track the length of allocated blocks.
-    int16_t i = 0;
+    uint16_t i = 0;
     while (MEMORY[i]) {
-        i += MEMORY[i] + HEADER_SIZE;  // Add one to account for the header
+        i += ((uint8_t) MEMORY[i]) + HEADER_SIZE;  // Account for the size of the header
         if (i >= MEMORY_BYTES) {
             return NULL_PTR;
         }
     }
 
     // We have reached a free block. We allocate it using the header - data structure.
-    MEMORY[i] = (int8_t) numBytes;
+    MEMORY[i] = (uint8_t) numBytes;
     return MEMORY + i + HEADER_SIZE;  // The data block starts one byte after the header.
 }
 
