@@ -24,6 +24,7 @@
     void test_mult_two(void);
     void test_mult_three(void);
     void test_mult_diff(void);
+    void test_mult_vec(void);
     void test_mult_wrong_dims(void);
     void test_hadamard_two(void);
     void test_hadamard_three(void);

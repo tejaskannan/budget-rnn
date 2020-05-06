@@ -8,6 +8,7 @@ int main(void) {
     test_pair();
     test_triple();
     test_struct();
+    test_nested();
 
     printf("Passed All Tests\n\n");
     return 0;
@@ -101,6 +102,48 @@ void test_triple(void) {
     free(ptr3);
     assert(0 == allocBytes());
 }
+
+void test_nested(void) {
+    int8_t numBytesOne = 1;
+    int8_t x1 = 10;
+    int8_t *ptr1 = alloc(numBytesOne);
+    *ptr1 = x1;
+    assert(x1 == *ptr1);
+    assert(numBytesOne + 1 == allocBytes());
+
+    int8_t numBytesTwo = 1;
+    int8_t x2 = -128;
+    int8_t *ptr2 = alloc(numBytesTwo);
+    *ptr2 = x2;
+    assert(x2 == *ptr2);
+    assert(numBytesOne + numBytesTwo + 2 == allocBytes());
+
+    int8_t numBytesThree = 1;
+    int8_t x3 = -1;
+    int8_t *ptr3 = alloc(numBytesThree);
+    *ptr3 = x3;
+    assert(x3 == *ptr3);
+    assert(numBytesOne + numBytesTwo + numBytesThree + 3 == allocBytes());
+
+    // Free ptr2 and allocate an array that is too large to fit in this space
+    free(ptr2);
+    assert(numBytesOne + numBytesThree + 2 == allocBytes());
+
+    int8_t numBytesFour = 2;
+    int16_t x4 = -1;
+    int16_t *ptr4 = (int16_t *) alloc(numBytesFour);
+    *ptr4 = x4;
+    assert(x4 == *ptr4);
+    assert(x3 == *ptr3);
+    assert(numBytesOne + numBytesThree + numBytesFour + 3 == allocBytes());
+    
+    free(ptr1);
+    free(ptr3);
+    free(ptr4);
+    assert(0 == allocBytes());
+
+}
+
 
 
 void test_struct(void) {

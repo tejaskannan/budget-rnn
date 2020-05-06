@@ -9,6 +9,7 @@
 void test_mul_basic();
 void test_div_basic();
 void test_exp_basic();
+void test_exp_neg();
 void test_tanh_basic();
 void test_sigmoid_basic();
 

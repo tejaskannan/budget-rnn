@@ -77,23 +77,26 @@ matrix *matrix_multiply(matrix *result, matrix *mat1, matrix *mat2, int16_t prec
         return NULL_PTR;
     }
 
-    int16_t n = result->numRows;
-    int16_t m = result->numCols;
+    // The result will be a [n, p] matrix
+    int16_t n = mat1->numRows;
+    int16_t m = mat1->numCols;
+    int16_t p = mat2->numCols;
 
-    for (int16_t i = 0; i < result->numRows; i++) {
-        int16_t outerRow = i * result->numCols;  // Offset for the i^th row
+    for (int16_t i = 0; i < n; i++) {
+        int16_t outerRow = i * m;  // Offset for the i^th row
 
-        for (int16_t j = 0; j < result->numCols; j++) {
+        for (int16_t j = 0; j < p; j++) {
             int16_t sum = 0;
 
-            for (int16_t k = 0; k < mat1->numCols; k++) {
-                int16_t innerRow = k * mat2->numCols;  // Offset for the k^th row
+            for (int16_t k = 0; k < m; k++) {
+                int16_t innerRow = k * p;  // Offset for the k^th row
                 
                 int16_t prod = fp_mul(mat1->data[outerRow + k], mat2->data[innerRow + j], precision);
                 sum = fp_add(sum, prod);
             }
-            
-            result->data[outerRow + j] = sum;
+     
+            int16_t resultRow = i * p;
+            result->data[resultRow + j] = sum;
         }
     }
 

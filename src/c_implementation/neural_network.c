@@ -1,5 +1,5 @@
 #include "neural_network.h"
-int16_t execute_model(matrix **inputs, int16_t seqLength) {
+int16_t execute_model(matrix *inputs[SEQ_LENGTH]) {
 	TFGRU rnn_cell = { TRANSFORM_LAYER_CELL_GATES_KERNEL_0_0_MAT, TRANSFORM_LAYER_CELL_GATES_BIAS_0_0_MAT, TRANSFORM_LAYER_CELL_CANDIDATE_KERNEL_0_0_MAT, TRANSFORM_LAYER_CELL_CANDIDATE_BIAS_0_0_MAT };
 
 	matrix *transformed = matrix_allocate(16, 1);
@@ -7,7 +7,7 @@ int16_t execute_model(matrix **inputs, int16_t seqLength) {
 	matrix_set(state, 0);
 	matrix *temp_state = matrix_allocate(16, 1);
 
-	for (int16_t i = 0; i < seqLength; i++) {
+	for (int16_t i = 0; i < SEQ_LENGTH; i++) {
 		matrix *input = inputs[i];
 		transformed = dense(transformed, input, EMBEDDING_KERNEL_0_MAT, EMBEDDING_BIAS_0_MAT, &fp_tanh, FIXED_POINT_PRECISION);
 		temp_state = apply_tf_gru(temp_state, transformed, state, &rnn_cell, FIXED_POINT_PRECISION);

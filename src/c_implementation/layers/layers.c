@@ -19,7 +19,7 @@ matrix *dense(matrix *result, matrix *input, matrix *W, matrix *b, int16_t (*act
 matrix *apply_gate(matrix *result, matrix *gate, matrix *first, matrix *second, int16_t precision) {
     // Create the vector for 1 - gate
     matrix *opp_gate = matrix_allocate(gate->numRows, gate->numCols);
-    opp_gate = scalar_add(opp_gate, scalar_product(opp_gate, opp_gate, int_to_fp(-1, precision), precision), int_to_fp(1, precision));
+    opp_gate = scalar_add(opp_gate, scalar_product(opp_gate, gate, int_to_fp(-1, precision), precision), int_to_fp(1, precision));
 
     opp_gate = matrix_hadamard(opp_gate, second, opp_gate, precision);
     result = matrix_add(result, matrix_hadamard(result, first, gate, precision), opp_gate);
@@ -156,6 +156,3 @@ matrix *rnn(matrix *result, matrix **inputs, void *cell, enum CellType cellType,
 
     return state;
 }
-
-
-

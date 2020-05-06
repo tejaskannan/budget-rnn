@@ -21,6 +21,7 @@ int main(void) {
     test_mult_two();
     test_mult_three();
     test_mult_diff();
+    test_mult_vec();
     test_mult_wrong_dims();
     printf("\tPassed multiplication tests.\n");
 
@@ -265,6 +266,31 @@ void test_mult_diff(void) {
     matrix_free(mat2);
     matrix_free(result);
     matrix_free(expected);
+    assert(0 == allocBytes());
+}
+
+
+void test_mult_vec(void) {
+    int16_t matData[] = { 2, 3, 4, 5, 1, 2 };
+    matrix *mat = matrix_allocate(2, 3);
+    load_data(mat, matData, PRECISION);
+
+    int16_t vecData[] = { 2, 3, 4 };
+    matrix *vec = matrix_allocate(3, 1);
+    load_data(vec, vecData, PRECISION);
+
+    int16_t expectedData[] = { 29, 21 };
+    matrix *expected = matrix_allocate(2, 1);
+    load_data(expected, expectedData, PRECISION);
+
+    matrix *result = matrix_allocate(2, 1);
+    result = matrix_multiply(result, mat, vec, PRECISION);
+    assert(matrix_equal(expected, result));
+
+    matrix_free(mat);
+    matrix_free(vec);
+    matrix_free(expected);
+    matrix_free(result);
     assert(0 == allocBytes());
 }
 

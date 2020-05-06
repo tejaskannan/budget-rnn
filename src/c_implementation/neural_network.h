@@ -16,11 +16,11 @@ enum OutputType { REGRESSION = 0, BINARY_CLASSIFICATION = 1, MULTI_CLASSIFICATIO
 static enum ModelClass MODEL_CLASS = STANDARD;
 static enum ModelType MODEL_TYPE = RNN;
 static enum OutputType OUTPUT_TYPE = MULTI_CLASSIFICATION;
-static int16_t STATE_SIZE = 16;
-static int16_t SEQ_LENGTH = 20;
-static int16_t SAMPLES_PER_SEQ = 20;
-static int16_t NUM_INPUT_FEATURES = 3;
-static int16_t NUM_OUTPUT_FEATURES = 6;
+#define STATE_SIZE 16
+#define SEQ_LENGTH 20
+#define SAMPLES_PER_SEQ 20
+#define NUM_INPUT_FEATURES 3
+#define NUM_OUTPUT_FEATURES 6
 static int16_t INPUT_MEAN[3] = { 168,1855,106 };
 static int16_t INPUT_STD[3] = { 1753,1727,1218 };
 static int16_t OUTPUT_MEAN[6] = { 0,0,0,0,0,0 };
@@ -92,6 +92,6 @@ static int16_t TRANSFORM_LAYER_CELL_GATES_KERNEL_0_0[1024] = { 51,22,69,106,-26,
 static matrix TRANSFORM_LAYER_CELL_GATES_KERNEL_0_0_MAT_VAR = { 32, 32, TRANSFORM_LAYER_CELL_GATES_KERNEL_0_0 };
 static matrix * TRANSFORM_LAYER_CELL_GATES_KERNEL_0_0_MAT = &TRANSFORM_LAYER_CELL_GATES_KERNEL_0_0_MAT_VAR;
 
-int16_t execute_model(matrix **inputs, int16_t seqLength);
 
+int16_t execute_model(matrix *inputs[SEQ_LENGTH]);
 #endif

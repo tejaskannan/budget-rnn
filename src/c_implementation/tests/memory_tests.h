@@ -18,5 +18,6 @@ void test_store_byte(void);
 void test_pair(void);
 void test_triple(void);
 void test_struct(void);
+void test_nested(void);
 
 #endif

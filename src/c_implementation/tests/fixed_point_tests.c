@@ -6,6 +6,7 @@ int main(void) {
     test_mul_basic();
     test_div_basic();
     test_exp_basic();
+    test_exp_neg();
     test_tanh_basic();
     test_sigmoid_basic();
 
@@ -51,6 +52,17 @@ void test_exp_basic(void) {
     assert(233 == fp_exp(two, fixed_point_bits));
 }
 
+
+void test_exp_neg(void) {
+    int fixed_point_bits = 8;
+    int16_t one = 1 << fixed_point_bits; 
+    int16_t two = 1 << (fixed_point_bits + 1);
+
+    assert(95 == fp_exp(fp_neg(one), fixed_point_bits));
+    assert(43 == fp_exp(fp_neg(two), fixed_point_bits));
+}
+
+
 void test_tanh_basic(void) {
     int fixed_point_bits = 5;
     int16_t zero = 0;
@@ -60,8 +72,8 @@ void test_tanh_basic(void) {
     assert(0 == fp_tanh(zero, fixed_point_bits));
     assert(24 == fp_tanh(one, fixed_point_bits));
     assert(-24 == fp_tanh(fp_neg(one), fixed_point_bits));
-    assert(29 == fp_tanh(two, fixed_point_bits));
-    assert(-29 == fp_tanh(fp_neg(two), fixed_point_bits));
+    assert(32 == fp_tanh(two, fixed_point_bits));
+    assert(-32 == fp_tanh(fp_neg(two), fixed_point_bits));
 }
 
 
@@ -73,8 +85,8 @@ void test_sigmoid_basic(void) {
     int16_t two = 1 << (fixed_point_bits + 1);
 
     assert(one_half == fp_sigmoid(zero, fixed_point_bits));
-    assert(23 == fp_sigmoid(one, fixed_point_bits));
-    assert(-23 == fp_sigmoid(fp_neg(one), fixed_point_bits));
-    assert(27 == fp_sigmoid(two, fixed_point_bits));
-    assert(-27 == fp_sigmoid(fp_neg(two), fixed_point_bits));
+    assert(24 == fp_sigmoid(one, fixed_point_bits));
+    assert(8 == fp_sigmoid(fp_neg(one), fixed_point_bits));
+    assert(26 == fp_sigmoid(two, fixed_point_bits));
+    assert(6 == fp_sigmoid(fp_neg(two), fixed_point_bits));
 }
