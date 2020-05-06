@@ -1,11 +1,12 @@
 import tensorflow as tf
 from typing import Dict, Optional, List, Callable, Union, Tuple
 from collections import namedtuple
+from functools import partial
 
 from utils.constants import SMALL_NUMBER
 
 
-FusionLayer = namedtuple('FusionLayer', ['dense', 'bias'])
+FusionLayer = namedtuple('FusionLayer', ['dense', 'bias', 'activation'])
 NODES_TO_SKIP = ['initializer', 'dropout']
 
 
@@ -49,10 +50,26 @@ def get_activation(fn_name: Optional[str]) -> Optional[Callable[[tf.Tensor], tf.
         return tf.nn.elu
     elif fn_name == 'crelu':
         return tf.nn.crelu
+    elif fn_name == 'linear_sigmoid':
+        return partial(bounded_leaky_relu, factor=0.25, size=1, shift=2, alpha=0)
+    elif fn_name == 'linear_tanh':
+        return partial(bounded_leaky_relu, factor=0.5, size=2, shift=1, alpha=0.0625)
     elif fn_name == 'linear':
         return None
     else:
         raise ValueError(f'Unknown activation name {fn_name}.')
+
+
+def bounded_leaky_relu(x: tf.Tensor, factor: float, size: float, shift: float, alpha: float) -> tf.Tensor:
+    w = tf.nn.relu(-1 * factor * x + 0.5)
+    z = size * tf.nn.relu(-1 * tf.nn.relu(factor * x - 0.5) + w - 1)
+    return z - size * (w - shift) - 1 + alpha * x
+
+
+#def bounded_leaky_relu(x: tf.Tensor, alpha: float, factor: float, size: float, shift: float) -> tf.Tensor:
+#    w = tf.nn.relu(-1 * factor * x + 0.5)
+#    z = size * tf.nn.leaky_relu(-1 * tf.nn.leaky_relu(factor * x - 0.5, alpha=-alpha) + w - 1, alpha=alpha)
+#    return z - size * (w - shift) - 1
 
 
 def pool_rnn_outputs(outputs: tf.Tensor, final_state: tf.Tensor, pool_mode: str, name: str = 'pool-layer'):
@@ -119,7 +136,10 @@ def fuse_states(curr_state: tf.Tensor, prev_state: Optional[tf.Tensor], fusion_l
     elif mode in ('gate', 'gate_layer', 'gate-layer'):
         concat_states = tf.concat([curr_state, prev_state], axis=-1)  # [B, 2 * D]
         transform = tf.matmul(concat_states, fusion_layer.dense) + fusion_layer.bias  # [B, D]
-        update_weight = tf.math.sigmoid(transform)  # [B, D]
+
+        activation = get_activation(fusion_layer.activation)
+        update_weight = activation(transform)  # [B, D]
+
         return update_weight * curr_state + (1.0 - update_weight) * prev_state
     else:
         raise ValueError(f'Unknown fusion mode: {mode}')

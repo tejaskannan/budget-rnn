@@ -60,7 +60,8 @@ def dynamic_rnn(inputs: tf.Tensor,
 
             # Collect the fusion layer
             layer = FusionLayer(dense=state_transform,
-                                bias=state_transform_bias)
+                                bias=state_transform_bias,
+                                activation='linear_sigmoid')
             fusion_layers.append(layer)
 
     # While loop step

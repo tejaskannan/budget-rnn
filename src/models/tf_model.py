@@ -15,7 +15,7 @@ from utils.hyperparameters import HyperParameters
 from utils.tfutils import get_optimizer, variables_for_loss_op
 from utils.file_utils import read_by_file_suffix, save_by_file_suffix, make_dir
 from utils.constants import BIG_NUMBER, NAME_FMT, HYPERS_PATH, GLOBAL_STEP
-from utils.constants import METADATA_PATH, MODEL_PATH, TRAIN_LOG_PATH
+from utils.constants import METADATA_PATH, MODEL_PATH, TRAIN_LOG_PATH, GRAPH_PATH
 from utils.constants import LOSS, ACCURACY, OPTIMIZER_OP, F1_SCORE, INPUTS, OUTPUT, SAMPLE_ID
 from utils.constants import TRAIN, VALID, LABEL_MAP, NUM_CLASSES, REV_LABEL_MAP
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, INPUT_SCALER, OUTPUT_SCALER
@@ -602,6 +602,9 @@ class TFModel(Model):
 
             # Save results
             save_by_file_suffix(vars_dict, model_path)
+
+            # Save the graph in a protobuf file
+            tf.io.write_graph(self.sess.graph_def, self.save_folder, GRAPH_PATH.format(name))
 
 
     def restore(self, name: str, is_train: bool, is_frozen: bool):
