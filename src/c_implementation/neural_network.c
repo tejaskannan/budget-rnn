@@ -7,8 +7,9 @@ int16_t *execute_model(matrix *inputs[SEQ_LENGTH], int16_t *outputs) {
 	matrix *temp_state = matrix_allocate(16, 1);
 	matrix *fusion_stack = matrix_allocate(2 * 16, 1);
 	matrix *fusion_gate = matrix_allocate(16, 1);
-    matrix *temp0 = matrix_allocate(OUTPUT_HIDDEN_KERNEL_0_MAT->numRows, state->numCols);
-	matrix *temp1 = matrix_allocate(OUTPUT_HIDDEN_KERNEL_1_MAT->numRows, temp0->numCols);
+    matrix *output_temp0 = matrix_allocate(OUTPUT_HIDDEN_KERNEL_0_MAT->numRows, state->numCols);
+	matrix *output_temp1 = matrix_allocate(OUTPUT_HIDDEN_KERNEL_1_MAT->numRows, output_temp0->numCols);
+    matrix *gate_temp = matrix_allocate(16, 1);
 
 	matrix *output = matrix_allocate(OUTPUT_KERNEL_0_MAT->numRows, 1);
 
@@ -16,6 +17,13 @@ int16_t *execute_model(matrix *inputs[SEQ_LENGTH], int16_t *outputs) {
 	for (int16_t i = 0; i < SAMPLES_PER_SEQ; i++) {
 		prev_states[i] = matrix_allocate(16, 1);
 	}
+
+    GRUTempStates gruTemp;
+    gruTemp.update = matrix_allocate(16, 1);
+    gruTemp.reset = matrix_allocate(16, 1);
+    gruTemp.candidate = matrix_allocate(16, 1);
+    gruTemp.inputTemp = matrix_allocate(16, 1);
+    gruTemp.gateTemp = matrix_allocate(16, 1);
 
 	for (int16_t i = 0; i < 5; i++) {
 		matrix_set(state, 0);
@@ -25,30 +33,38 @@ int16_t *execute_model(matrix *inputs[SEQ_LENGTH], int16_t *outputs) {
 			if (i > 0) {
 				fusion_stack = stack(fusion_stack, state, prev_states[j]);
 				fusion_gate = dense(fusion_gate, fusion_stack, FUSION_KERNEL_0_MAT, FUSION_BIAS_0_MAT, &fp_sigmoid, FIXED_POINT_PRECISION);
-				temp_state = apply_gate(temp_state, fusion_gate, state, prev_states[j], FIXED_POINT_PRECISION);
+				temp_state = apply_gate(temp_state, fusion_gate, state, prev_states[j], gate_temp, FIXED_POINT_PRECISION);
 				state = matrix_replace(state, temp_state);
 			}
-			temp_state = apply_gru(temp_state, transformed, state, &rnn_cell, FIXED_POINT_PRECISION);
+			temp_state = apply_gru(temp_state, transformed, state, &rnn_cell, &gruTemp, FIXED_POINT_PRECISION);
 			state = matrix_replace(state, temp_state);
 			matrix_replace(prev_states[j], state);
 		}
 
-		temp0 = dense(temp0, state, OUTPUT_HIDDEN_KERNEL_0_MAT, OUTPUT_HIDDEN_BIAS_0_MAT, &fp_tanh, FIXED_POINT_PRECISION);
-		temp1 = dense(temp1, temp0, OUTPUT_HIDDEN_KERNEL_1_MAT, OUTPUT_HIDDEN_BIAS_1_MAT, &fp_tanh, FIXED_POINT_PRECISION);
-		output = dense(output, temp1, OUTPUT_KERNEL_0_MAT, NULL_PTR, &fp_linear, FIXED_POINT_PRECISION);
+		output_temp0 = dense(output_temp0, state, OUTPUT_HIDDEN_KERNEL_0_MAT, OUTPUT_HIDDEN_BIAS_0_MAT, &fp_tanh, FIXED_POINT_PRECISION);
+		output_temp1 = dense(output_temp1, output_temp0, OUTPUT_HIDDEN_KERNEL_1_MAT, OUTPUT_HIDDEN_BIAS_1_MAT, &fp_tanh, FIXED_POINT_PRECISION);
+		output = dense(output, output_temp1, OUTPUT_KERNEL_0_MAT, NULL_PTR, &fp_linear, FIXED_POINT_PRECISION);
 
 		int16_t prediction = argmax(output);
 		outputs[i] = prediction;
 	}
 
-    matrix_free(temp0);
-    matrix_free(temp1);
+    matrix_free(gate_temp);
+    matrix_free(output_temp0);
+    matrix_free(output_temp1);
 	matrix_free(transformed);
 	matrix_free(state);
 	matrix_free(fusion_gate);
 	matrix_free(fusion_stack);
 	matrix_free(output);
 	matrix_free(temp_state);
+
+    matrix_free(gruTemp.update);
+    matrix_free(gruTemp.reset);
+    matrix_free(gruTemp.candidate);
+    matrix_free(gruTemp.inputTemp);
+    matrix_free(gruTemp.gateTemp);
+
 	for (int16_t i = 0; i < SAMPLES_PER_SEQ; i++) {
 		matrix_free(prev_states[i]);
 	}
