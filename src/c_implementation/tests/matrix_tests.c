@@ -78,7 +78,7 @@ void test_allocate(void) {
     matrix *mat1 = matrix_allocate(n, m);
     assert(mat1->numRows == n);
     assert(mat1->numCols == m);
-    assert((2 + (n * m * sizeof(int16_t)) + sizeof(matrix)) == allocBytes());
+    assert((2 * HEADER_SIZE + (n * m * sizeof(int16_t)) + sizeof(matrix)) == allocBytes());
 
     matrix *mat2 = matrix_allocate(2 * n, m);
     assert(mat2->numRows == 2 * n);

@@ -28,11 +28,18 @@ int main(int argc, char **argv) {
         inputs[i] = matrix_allocate(NUM_INPUT_FEATURES, 1);
     }
     
+    int16_t num_sequences = SEQ_LENGTH / SAMPLES_PER_SEQ;
+
     int16_t output_buffer_size = 5;
     char output_buffer[output_buffer_size];
+    int16_t outputs[num_sequences];
 
-    int16_t num_correct = 0;
+    int16_t num_correct[num_sequences];
     int16_t num_samples = 0;
+    for (int16_t i = 0; i < num_sequences; i++) {
+        num_correct[i] = 0;
+    }
+
     while (fgets(buffer, buffer_size, inputs_file) != NULL) {
         char *token = strtok(buffer, " ");
         for (int16_t i = 0; i < SEQ_LENGTH; i++) {
@@ -46,16 +53,23 @@ int main(int argc, char **argv) {
             normalize(inputs[i], INPUT_MEAN, INPUT_STD, FIXED_POINT_PRECISION);
         }
 
-        uint16_t prediction = execute_model(inputs);
+        execute_model(inputs, outputs);
         
         fgets(output_buffer, output_buffer_size, output_file);
         int16_t label = atoi(output_buffer);
 
-        num_correct += (int16_t) (label == prediction);
+        for (int16_t i = 0; i < num_sequences; i++) {
+            if (label == outputs[i]) {
+                num_correct[i] += 1;
+            }
+        }
         num_samples += 1;
     }
 
-    printf("Accuracy: %d / %d\n", num_correct, num_samples);
+    for (int16_t i = 0; i < num_sequences; i++) {
+        printf("Accuracy for level %d: %d / %d\n", i + 1, num_correct[i], num_samples);
+    }
+
     fclose(inputs_file);
     fclose(output_file);
 
