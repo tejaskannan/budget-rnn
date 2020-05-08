@@ -110,56 +110,25 @@ int16_t fp_tanh(int16_t x, int16_t precision) {
     int16_t one = int_to_fp(1, precision);
     int16_t neg_one = fp_neg(one);
 
+    // Clip the output
     if (result > one) {
         return one;    
     } else if (result < neg_one) {
         return neg_one;
     }
+
     return result;
-
-    // int16_t two = 1 << (precision + 1);
-    // int16_t exp2x = fp_exp(fp_mul(x, two, precision), precision);
- //   int16_t exp = fp_exp(x, precision);
- //   int16_t exp_neg = fp_exp(fp_neg(x), precision);
-
- //   if (fp_add(exp, exp_neg) == 0) {
- //       exp = fp_exp(x, precision);
- //   }
-
- //   int16_t result = fp_div(fp_sub(exp, exp_neg), fp_add(exp, exp_neg), precision);
-
- //   if (should_invert_sign)
- //       return fp_neg(result);
- //   return result;
 }
 
 
 int16_t fp_sigmoid(int16_t x, int16_t precision) {
     /**
-     * Approximates the sigmoid function using absolute values.
+     * Approximates the sigmoid function using tanh.
      */
     int16_t one = 1 << precision;
     int16_t one_half = 1 << (precision - 1);
 
-    int16_t absX = x;
-    if (x < 0) {
-        absX = fp_neg(x);
-    }
-
-    int16_t rational_factor = fp_div(x, fp_add(absX, one), precision);
-    int16_t result = fp_add(fp_mul(rational_factor, one_half, precision), one_half);
-    return result;
-
-  //  int16_t exp_neg_x = fp_exp(fp_neg(x), precision);
-  //  
-  //  int16_t exp_neg_x_plus_one = fp_add(exp_neg_x, one);
-  //  if (exp_neg_x_plus_one == 0) {
-  //      exp_neg_x_plus_one = fp_add(exp_neg_x, one);
-  //  }
-  //  
-  //  int16_t result = fp_div(one, exp_neg_x_plus_one, precision);
-
-  //  if (should_invert_sign)
-  //      return fp_neg(result);
-  //  return result;
+    int16_t tanh = fp_tanh(fp_mul(x, one_half, precision), precision);
+    int16_t half_tanh = fp_mul(fp_add(tanh, one), one_half, precision);
+    return half_tanh;
 }
