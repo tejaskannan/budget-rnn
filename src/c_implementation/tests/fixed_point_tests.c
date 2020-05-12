@@ -85,8 +85,8 @@ void test_sigmoid_basic(void) {
     int16_t two = 1 << (fixed_point_bits + 1);
 
     assert(one_half == fp_sigmoid(zero, fixed_point_bits));
-    assert(183 == fp_sigmoid(one, fixed_point_bits));
-    assert(73 == fp_sigmoid(fp_neg(one), fixed_point_bits));
-    assert(227 == fp_sigmoid(two, fixed_point_bits));
-    assert(28 == fp_sigmoid(fp_neg(two), fixed_point_bits));
+    assert(186 == fp_sigmoid(one, fixed_point_bits));
+    assert(70 == fp_sigmoid(fp_neg(one), fixed_point_bits));
+    assert(224 == fp_sigmoid(two, fixed_point_bits));
+    assert(32 == fp_sigmoid(fp_neg(two), fixed_point_bits));
 }

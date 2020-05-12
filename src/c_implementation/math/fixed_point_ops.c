@@ -95,22 +95,32 @@ int16_t fp_tanh(int16_t x, int16_t precision) {
     }
 
     // Create necessary constants
-    int16_t twenty_seven = int_to_fp(27, precision);
-    int16_t nine = int_to_fp(9, precision);
+//    int16_t twenty_seven = int_to_fp(27, precision);
+//    int16_t nine = int_to_fp(9, precision);
+//
+//    int16_t x_squared = fp_mul(x, x, precision);
+//    int16_t nine_x_squared = fp_mul(nine, x, precision);
+//    int16_t rational_factor = fp_div(fp_add(twenty_seven, x_squared), fp_add(twenty_seven, nine_x_squared), precision);
+//    int16_t result = fp_mul(x, rational_factor, precision);
+
+    int16_t one_eighth = 1 << (precision - 3);
+    int16_t one_half = 1 << (precision - 1);
+    int16_t one = int_to_fp(1, precision);
 
     int16_t x_squared = fp_mul(x, x, precision);
-    int16_t nine_x_squared = fp_mul(nine, x, precision);
-    int16_t rational_factor = fp_div(fp_add(twenty_seven, x_squared), fp_add(twenty_seven, nine_x_squared), precision);
+    int16_t numerator = fp_add(one, fp_mul(x_squared, one_eighth, precision));
+    int16_t denominator = fp_add(one, fp_mul(x_squared, one_half, precision));
+    int16_t rational_factor = fp_div(numerator, denominator, precision);
+
     int16_t result = fp_mul(x, rational_factor, precision);
+
 
     if (should_invert_sign) {
         result = fp_neg(result);
     }
 
-    int16_t one = int_to_fp(1, precision);
-    int16_t neg_one = fp_neg(one);
-
     // Clip the output
+    int16_t neg_one = fp_neg(one);
     if (result > one) {
         return one;    
     } else if (result < neg_one) {
@@ -125,10 +135,21 @@ int16_t fp_sigmoid(int16_t x, int16_t precision) {
     /**
      * Approximates the sigmoid function using tanh.
      */
+    uint8_t should_invert_sign = 0;
+    if (x < 0) {
+        x = fp_neg(x);
+        should_invert_sign = 1;
+    }
+
     int16_t one = 1 << precision;
     int16_t one_half = 1 << (precision - 1);
 
     int16_t tanh = fp_tanh(fp_mul(x, one_half, precision), precision);
-    int16_t half_tanh = fp_mul(fp_add(tanh, one), one_half, precision);
-    return half_tanh;
+    int16_t result = fp_mul(fp_add(tanh, one), one_half, precision);
+
+    if (should_invert_sign) {
+        result = one - result;
+    }
+
+    return result;
 }
