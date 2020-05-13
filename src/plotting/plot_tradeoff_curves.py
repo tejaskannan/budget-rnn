@@ -1,3 +1,4 @@
+import numpy as np
 import matplotlib.pyplot as plt
 import re
 import os.path
@@ -9,13 +10,13 @@ from collections import defaultdict, namedtuple
 from utils.file_utils import read_by_file_suffix, make_dir
 from utils.constants import MODEL, SCHEDULED_MODEL, SCHEDULED_OPTIMIZED
 from utils.testing_utils import ClassificationMetric
-from plotting_constants import STYLE, MARKER_SIZE, LABEL_REGEX, LABEL_FORMAT
+from plotting_constants import STYLE, MARKER_SIZE, LABEL_REGEX, LABEL_FORMAT, CAPSIZE
 
 
 MODEL_TYPE_REGEX = re.compile(r'.*model-.*test-log-([^-]+)-.*')
 LATENCY_FACTOR = 1000.0
 
-MetricPair = namedtuple('MetricPair', ['cost', 'metric'])
+MetricPair = namedtuple('MetricPair', ['cost', 'metric', 'std'])
 
 
 def get_model_type(test_log_file: str) -> str:
@@ -30,7 +31,7 @@ def get_metric_value(model_result: Dict[str, Any], metric: str, cost: str) -> Me
         cost = model_result[ClassificationMetric.FLOPS.name]
 
     metric_value = model_result[metric.upper()]
-    return MetricPair(cost=cost, metric=metric_value)
+    return MetricPair(cost=np.average(cost), metric=np.average(metric_value), std=np.std(metric_value))
 
 
 def fetch_logs(test_log_files: List[str], metric: str, cost: str) -> DefaultDict[str, List[MetricPair]]:
@@ -65,9 +66,12 @@ def plot_tradeoff(model_results: Dict[str, List[MetricPair]], metric: str, cost:
         for series, result_list in sorted(model_results.items()):
             costs = [pair.cost for pair in result_list]
             metric_values = [pair.metric for pair in result_list]
+            std = [pair.std for pair in result_list]
 
-            ax.plot(metric_values, costs, marker='o', markersize=MARKER_SIZE, label=series)
-            
+            # ax.plot(metric_values, costs, marker='o', markersize=MARKER_SIZE, label=series)
+
+            ax.errorbar(metric_values, costs, xerr=std, yerr=0, marker='o', markersize=MARKER_SIZE, capsize=CAPSIZE, label=series)
+
         # Formatting for the Metric Name
         metric_tokens = [t.capitalize() for t in metric.split('_')]
         metric_label = ' '.join(metric_tokens)

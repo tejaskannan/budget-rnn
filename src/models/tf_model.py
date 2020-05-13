@@ -12,7 +12,7 @@ from models.base_model import Model
 from dataset.dataset import Dataset, DataSeries
 from layers.output_layers import OutputType
 from utils.hyperparameters import HyperParameters
-from utils.tfutils import get_optimizer, variables_for_loss_op
+from utils.tfutils import get_optimizer, variables_for_loss_op, get_regularizer
 from utils.file_utils import read_by_file_suffix, save_by_file_suffix, make_dir
 from utils.constants import BIG_NUMBER, NAME_FMT, HYPERS_PATH, GLOBAL_STEP
 from utils.constants import METADATA_PATH, MODEL_PATH, TRAIN_LOG_PATH, GRAPH_PATH
@@ -554,6 +554,26 @@ class TFModel(Model):
 
         return name
 
+    def regularize_weights(self, name: Optional[str], scale: float) -> Optional[tf.Tensor]:
+        """
+        Applies a regularizer to the all non-bias weights in the neural network.
+        """
+        regularizer = get_regularizer(name, scale)
+
+        if regularizer is None:
+            return None
+
+        reg_values: List[tf.Tensor] = []
+        for variable in self.trainable_vars:
+            if 'bias' not in variable.name.lower() and len(variable.get_shape()) > 1 and not any((d == 1 for d in variable.get_shape())):
+                reg = regularizer(variable)
+                reg_values.append(reg)
+
+        if len(reg_values) == 0:
+            return None
+
+        return tf.reduce_sum(tf.stack(reg_values)) 
+
     def save(self, name: str, data_folders: Dict[DataSeries, str], loss_ops: Optional[List[str]], loss_var_dict: Dict[str, List[str]]):
         """
         Save model weights, hyper-parameters, and metadata
@@ -605,7 +625,6 @@ class TFModel(Model):
 
             # Save the graph in a protobuf file
             tf.io.write_graph(self.sess.graph_def, self.save_folder, GRAPH_PATH.format(name))
-
 
     def restore(self, name: str, is_train: bool, is_frozen: bool):
         """

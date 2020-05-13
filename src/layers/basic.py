@@ -1,7 +1,7 @@
 import tensorflow as tf
 from typing import Optional, List, Union, Any
 
-from utils.tfutils import get_activation
+from utils.tfutils import get_activation, get_regularizer
 from utils.constants import BIG_NUMBER
 
 
@@ -42,7 +42,9 @@ def mlp(inputs: tf.Tensor,
         dropout_keep_rate: float = 1.0,
         should_activate_final: bool = False,
         should_bias_final: bool = False,
-        should_dropout_final: bool = False) -> tf.Tensor:
+        should_dropout_final: bool = False,
+        regularization_name: Optional[str] = None,
+        regularization_scale: float = 0.01) -> tf.Tensor:
     """
     Defines a multi-layer perceptron with the given hidden sizes, output size, and activations.
 
@@ -60,6 +62,8 @@ def mlp(inputs: tf.Tensor,
         should_activate_final: Whether to apply activations to the output layer.
         should_bias_final: Whether to apply a bias to the output layer.
         should_dropout_final: Whether to apply dropout to the final tensor.
+        regularization_name: Name of the regularization function. None if no regularization.
+        regularization_scale: Scale of regularization. Unused with the no regularization is applied.
     Returns:
         A tensor containing the inputs transformed by the MLP.
     """
@@ -87,6 +91,7 @@ def mlp(inputs: tf.Tensor,
                                        units=hidden_size,
                                        activation=activation,
                                        kernel_initializer=tf.initializers.glorot_uniform(),
+                                       kernel_regularizer=get_regularizer(name=regularization_name, scale=regularization_scale),
                                        use_bias=True,
                                        name=f'{name}-hidden-{i}')
         intermediate = tf.nn.dropout(intermediate, keep_prob=dropout_keep_rate)
@@ -96,6 +101,7 @@ def mlp(inputs: tf.Tensor,
                              units=output_size,
                              activation=activation_fns[-1],
                              kernel_initializer=tf.initializers.glorot_uniform(),
+                             kernel_regularizer=get_regularizer(name=regularization_name, scale=regularization_scale),
                              use_bias=should_bias_final,
                              name=f'{name}-output')
 

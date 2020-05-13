@@ -691,6 +691,13 @@ class AdaptiveModel(TFModel):
 
         self._ops[LOSS] = weighted_losses + penalty
 
+        # Add any regularization to the loss function
+        reg_loss = self.regularize_weights(name=self.hypers.model_params.get('regularization_name'),
+                                           scale=self.hypers.model_params.get('regularization_scale', 0.01))
+        if reg_loss is not None:
+            self._ops[LOSS] += reg_loss
+
+
     def anytime_generator(self, feed_dict: Dict[tf.Tensor, List[Any]],
                           max_num_levels: int) -> Optional[Iterable[np.ndarray]]:
         """
@@ -710,7 +717,8 @@ class AdaptiveModel(TFModel):
             input_names = set((get_input_name(i) for i in range(num_levels)))
             placeholders = [ph for name, ph in self.placeholders.items() if name in input_names or name == DROPOUT_KEEP_RATE]
 
-            handle = self.sess.partial_run_setup(prediction_ops + logit_ops, placeholders)
+            ops = prediction_ops + logit_ops
+            handle = self.sess.partial_run_setup(ops, placeholders)
 
             for level in range(num_levels):
                 prediction_op = self.ops[get_prediction_name(level)]

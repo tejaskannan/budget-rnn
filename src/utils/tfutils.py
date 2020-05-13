@@ -66,10 +66,20 @@ def bounded_leaky_relu(x: tf.Tensor, factor: float, size: float, shift: float, a
     return z - size * (w - shift) - 1 + alpha * x
 
 
-#def bounded_leaky_relu(x: tf.Tensor, alpha: float, factor: float, size: float, shift: float) -> tf.Tensor:
-#    w = tf.nn.relu(-1 * factor * x + 0.5)
-#    z = size * tf.nn.leaky_relu(-1 * tf.nn.leaky_relu(factor * x - 0.5, alpha=-alpha) + w - 1, alpha=alpha)
-#    return z - size * (w - shift) - 1
+def get_regularizer(name: Optional[str], scale: float) -> Optional[Callable[[tf.Tensor], tf.Tensor]]:
+    """
+    Returns a weight regularizer with the given name and scale.
+    """
+    if name is None:
+        return None
+
+    name = name.lower()
+    if name in ('l1', 'lasso'):
+        return tf.contrib.layers.l1_regularizer(scale=scale)
+    elif name == 'l2':
+        return tf.contrib.layers.l2_regularizer(scale=scale)
+    else:
+        raise ValueError(f'Unknown regularization name: {name}')
 
 
 def pool_rnn_outputs(outputs: tf.Tensor, final_state: tf.Tensor, pool_mode: str, name: str = 'pool-layer'):

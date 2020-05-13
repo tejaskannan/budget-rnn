@@ -269,6 +269,11 @@ class StandardModel(TFModel):
         else:
             self._ops[LOSS] = tf.reduce_mean(tf.square(predictions - expected_output))
 
+        # Add any regularization to the loss function
+        reg_loss = self.regularize_weights(name=self.hypers.model_params.get('regularization_name'),
+                                           scale=self.hypers.model_params.get('regularization_scale'))
+        if reg_loss is not None:
+            self._ops[LOSS] += reg_loss
 
     def compute_flops(self, level: int) -> int:
         """

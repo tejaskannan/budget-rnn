@@ -1,7 +1,7 @@
 import tensorflow as tf
 from typing import Dict, Any, List, Optional
 
-from utils.tfutils import get_activation
+from utils.tfutils import get_activation, get_regularizer
 
 
 def embedding_layer(inputs: tf.Tensor,
@@ -11,7 +11,9 @@ def embedding_layer(inputs: tf.Tensor,
                     params: Dict[str, Any],
                     name_prefix: str,
                     seq_length: int,
-                    input_shape: Optional[List[int]]):
+                    input_shape: Optional[List[int]],
+                    regularizer_name: Optional[str] = None,
+                    regularizer_scale: float = 0.01):
     if use_conv:
         # Reshape into [B * T, H, W, C]
         conv_inputs = tf.reshape(inputs, shape=[-1, input_shape[0], input_shape[1], params['filter_channels'][0]])
@@ -57,5 +59,6 @@ def embedding_layer(inputs: tf.Tensor,
                            units=units,
                            activation=get_activation(params['dense_activation']),
                            kernel_initializer=tf.glorot_uniform_initializer(),
+                           kernel_regularizer=get_regularizer(name=regularizer_name, scale=regularizer_scale),
                            use_bias=True,
                            name=f'{name_prefix}-dense')
