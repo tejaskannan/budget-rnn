@@ -4,6 +4,7 @@ from collections import namedtuple
 from functools import partial
 
 from utils.constants import SMALL_NUMBER
+from utils.hashing import pearson_hash
 
 
 FusionLayer = namedtuple('FusionLayer', ['dense', 'bias', 'activation'])
@@ -190,6 +191,38 @@ def majority_vote(logits: tf.Tensor) -> tf.Tensor:
                                          maximum_iterations=batch_size,
                                          name='majority-while-loop')
     return predictions_array.stack()
+
+
+def expand_to_matrix(vec: tf.Tensor, size: int, matrix_dims: Tuple[int, int], name: str) -> tf.Tensor:
+    """
+    Expands the 1D vector into a 2D matrix using hashing.
+
+    Args:
+        vec: A 1D tensor of size [K]
+        size: The size of the tensor, denoted by K
+        matrix_dims: The output dimensions of the final matrix, denoted by [N, M]
+        name: Name prefix of this layer. This acts as the seed of the hash function.
+    Returns:
+        A [N, M] tensor representing the expanded weights.
+    """
+    # Form the mapping between vector and matrix indices
+    indices: List[int] = []
+    signs: List[int] = []
+    for i in range(matrix_dims[0]):
+        for j in range(matrix_dims[1]):
+            index = pearson_hash('{0}-{1}-{2}'.format(name, i, j)) % size
+
+            sign_hash = pearson_hash('{0}-{1}-{2}-sign'.format(name, i, j)) % size
+            sign = 2 * int(sign_hash < (size / 2)) - 1
+            
+            indices.append(index)
+            signs.append(sign)
+
+    # Expand the vector using the created index mappings
+    mat = tf.gather(vec, indices) * tf.constant(signs, dtype=vec.dtype)
+    mat = tf.reshape(mat, shape=matrix_dims)
+
+    return mat
 
 
 def variables_for_loss_op(variables: List[tf.Variable], loss_op: str) -> List[tf.Variable]:

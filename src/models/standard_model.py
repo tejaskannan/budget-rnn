@@ -127,7 +127,8 @@ class StandardModel(TFModel):
                                          params=self.hypers.model_params['embedding_layer_params'],
                                          seq_length=self.metadata[SEQ_LENGTH],
                                          input_shape=self.metadata[INPUT_SHAPE],
-                                         name_prefix=EMBEDDING_LAYER_NAME)
+                                         name_prefix=EMBEDDING_LAYER_NAME,
+                                         compression_fraction=self.hypers.model_params.get('compression_fraction'))
 
         # Apply the transformation layer
         if self.model_type == StandardModelType.NBOW:
@@ -140,7 +141,8 @@ class StandardModel(TFModel):
                               should_activate_final=True,
                               should_bias_final=True,
                               should_dropout_final=True,
-                              name=TRANSFORM_LAYER_NAME)
+                              name=TRANSFORM_LAYER_NAME,
+                              compression_fraction=self.hypers.model_params.get('compression_fraction'))
 
             aggregated = pool_sequence(transformed, pool_mode=self.hypers.model_params['pool_mode'], name=AGGREGATION_LAYER_NAME)
         elif self.model_type == StandardModelType.CNN:
@@ -220,7 +222,8 @@ class StandardModel(TFModel):
                      hidden_sizes=self.hypers.model_params['output_hidden_units'],
                      activations=self.hypers.model_params['output_hidden_activation'],
                      dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                     name=OUTPUT_LAYER_NAME)
+                     name=OUTPUT_LAYER_NAME,
+                     compression_fraction=self.hypers.model_params.get('compression_fraction'))
 
         if self.output_type == OutputType.BINARY_CLASSIFICATION:
             classification_output = compute_binary_classification_output(model_output=output,

@@ -1,6 +1,7 @@
 import tensorflow as tf
 from typing import Dict, Any, List, Optional
 
+from layers.basic import dense
 from utils.tfutils import get_activation, get_regularizer
 
 
@@ -13,7 +14,8 @@ def embedding_layer(inputs: tf.Tensor,
                     seq_length: int,
                     input_shape: Optional[List[int]],
                     regularizer_name: Optional[str] = None,
-                    regularizer_scale: float = 0.01):
+                    regularizer_scale: float = 0.01,
+                    compression_fraction: Optional[float] = None):
     if use_conv:
         # Reshape into [B * T, H, W, C]
         conv_inputs = tf.reshape(inputs, shape=[-1, input_shape[0], input_shape[1], params['filter_channels'][0]])
@@ -55,10 +57,17 @@ def embedding_layer(inputs: tf.Tensor,
         inputs = tf.reshape(conv_output, [batch_size, seq_length, output_shape[1] * output_shape[2]])
 
     # Project down to state size, [B, T, D]
-    return tf.layers.dense(inputs=inputs,
-                           units=units,
-                           activation=get_activation(params['dense_activation']),
-                           kernel_initializer=tf.glorot_uniform_initializer(),
-                           kernel_regularizer=get_regularizer(name=regularizer_name, scale=regularizer_scale),
-                           use_bias=True,
-                           name=f'{name_prefix}-dense')
+    print(compression_fraction)
+    return dense(inputs=inputs,
+                 units=units,
+                 activation=params['dense_activation'],
+                 use_bias=True,
+                 name='{0}-dense'.format(name_prefix),
+                 compression_fraction=compression_fraction)
+   # return tf.layers.dense(inputs=inputs,
+   #                        units=units,
+   #                        activation=get_activation(params['dense_activation']),
+   #                        kernel_initializer=tf.glorot_uniform_initializer(),
+   #                        kernel_regularizer=get_regularizer(name=regularizer_name, scale=regularizer_scale),
+   #                        use_bias=True,
+   #                        name=f'{name_prefix}-dense')

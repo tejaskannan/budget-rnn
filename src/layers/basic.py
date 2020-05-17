@@ -1,7 +1,7 @@
 import tensorflow as tf
 from typing import Optional, List, Union, Any
 
-from utils.tfutils import get_activation, get_regularizer
+from utils.tfutils import get_activation, get_regularizer, expand_to_matrix
 from utils.constants import BIG_NUMBER
 
 
@@ -34,6 +34,73 @@ def pool_sequence(embeddings: tf.Tensor, pool_mode: str, name: str = 'pool-layer
         raise ValueError(f'Unknown pool mode {pool_mode}!')
 
 
+def dense(inputs: tf.Tensor,
+          units: int,
+          activation: Optional[str],
+          name: str,
+          use_bias: bool = False,
+          compression_fraction: Optional[float] = None) -> tf.Tensor:
+    """
+    Creates a dense, feed-forward layer with the given parameters.
+
+    Args:
+        inputs: The input tensor. Has the shape [B, ..., D]
+        units: The number of output units. Denoted by K.
+        activation: Optional activation function. If none, the activation is linear.
+        name: Name prefix for the created trainable variables.
+        use_bias: Whether to add a bias to the output.
+        compression_fraction: An optional number in [0, 1) that determines the number of true parameters.
+            We perform compression using random weight sharing via hashing. This idea is
+            from HashNets (http://proceedings.mlr.press/v37/chenc15.pdf)
+    """
+    assert compression_fraction is None or (0 <= compression_fraction and compression_fraction < 1), 'If given, the compression fraction must be in [0, 1)'
+
+    # Get the size of the input features, denoted by D
+    input_units = inputs.get_shape()[-1].value
+
+    # Get names for the trainable variables
+    weight_name = '{0}-kernel'.format(name)
+    bias_name = '{0}-bias'.format(name)
+
+    if compression_fraction is None:
+        # This is a standard weight matrix        
+        W = tf.get_variable(name=weight_name,
+                            shape=[input_units, units],
+                            initializer=tf.initializers.glorot_uniform(),
+                            trainable=True)
+    else:
+        # Create the compressed weight vector
+        num_weights = int(compression_fraction * (input_units * units))
+        w = tf.get_variable(name=weight_name,
+                            shape=[num_weights],
+                            initializer=tf.initializers.glorot_uniform(),
+                            trainable=True)
+
+        # Construct the 'virtual' weight matrix using hashing. While it is memory-inefficient to actually materialize
+        # the weight matrix, it simplifies the training process. Furthermore, we are only concerned with memory constraints
+        # at inference time. Thus, we just the smaller weight vector to create the full weight matrix during training.
+        W = expand_to_matrix(w, size=num_weights, matrix_dims=(input_units, units), name=name.lower())
+
+    # Apply the given weights
+    transformed = tf.matmul(inputs, W)  # [B, ..., K]
+    
+    # Add the bias if specified
+    if use_bias:
+        # Bias vector of size [K]
+        b = tf.get_variable(name=bias_name,
+                            shape=[units],
+                            initializer=tf.initializers.glorot_uniform(),
+                            trainable=True)
+
+        transformed = transformed + b
+
+    # Apply the activation function if specified
+    if activation is not None:
+        transformed = get_activation(activation)(transformed)
+
+    return transformed
+
+
 def mlp(inputs: tf.Tensor,
         output_size: int,
         hidden_sizes: Optional[List[int]],
@@ -44,7 +111,8 @@ def mlp(inputs: tf.Tensor,
         should_bias_final: bool = False,
         should_dropout_final: bool = False,
         regularization_name: Optional[str] = None,
-        regularization_scale: float = 0.01) -> tf.Tensor:
+        regularization_scale: float = 0.01,
+        compression_fraction: Optional[float] = None) -> tf.Tensor:
     """
     Defines a multi-layer perceptron with the given hidden sizes, output size, and activations.
 
@@ -64,6 +132,7 @@ def mlp(inputs: tf.Tensor,
         should_dropout_final: Whether to apply dropout to the final tensor.
         regularization_name: Name of the regularization function. None if no regularization.
         regularization_scale: Scale of regularization. Unused with the no regularization is applied.
+        compression_fraction: Optional compression fraction to train network with compressed weights.
     Returns:
         A tensor containing the inputs transformed by the MLP.
     """
@@ -71,39 +140,56 @@ def mlp(inputs: tf.Tensor,
         hidden_sizes = []
 
     # Convert activation function names to the proper functions
-    if isinstance(activations, list):
-        activation_fns = [get_activation(a) for a in activations]
-    else:
-        activation_fns = [get_activation(activations) for _ in range(0, len(hidden_sizes) + 1)]
+   # if isinstance(activations, list):
+   #     activation_fns = [get_activation(a) for a in activations]
+   # else:
+   #     activation_fns = [get_activation(activations) for _ in range(0, len(hidden_sizes) + 1)]
+
+    if not isinstance(activations, list):
+        activations = [activations] * (len(hidden_sizes) + 1)
 
     # Validate activation functions against the number of layers
-    if len(activation_fns) != len(hidden_sizes) + 1:
-        raise ValueError(f'Provided {len(activation_fns)} for {len(hidden_sizes) + 1} layers!')
+    if len(activations) != len(hidden_sizes) + 1:
+        raise ValueError(f'Provided {len(activations)} for {len(hidden_sizes) + 1} layers!')
 
     # Make final activation linear if specified
     if not should_activate_final:
-        activation_fns[-1] = None
+        activations[-1] = None
 
     # Apply hidden layers
     intermediate = inputs
-    for i, (hidden_size, activation) in enumerate(zip(hidden_sizes, activation_fns[:-1])):
-        intermediate = tf.layers.dense(inputs=intermediate,
-                                       units=hidden_size,
-                                       activation=activation,
-                                       kernel_initializer=tf.initializers.glorot_uniform(),
-                                       kernel_regularizer=get_regularizer(name=regularization_name, scale=regularization_scale),
-                                       use_bias=True,
-                                       name=f'{name}-hidden-{i}')
+    for i, (hidden_size, activation) in enumerate(zip(hidden_sizes, activations[:-1])):
+        intermediate = dense(inputs=intermediate,
+                             units=hidden_size,
+                             activation=activation,
+                             use_bias=True,
+                             name='{0}-hidden-{1}'.format(name, i),
+                             compression_fraction=compression_fraction)
+
+        #intermediate = tf.layers.dense(inputs=intermediate,
+        #                               units=hidden_size,
+        #                               activation=activation,
+        #                               kernel_initializer=tf.initializers.glorot_uniform(),
+        #                               kernel_regularizer=get_regularizer(name=regularization_name, scale=regularization_scale),
+        #                               use_bias=True,
+        #                               name=f'{name}-hidden-{i}')
         intermediate = tf.nn.dropout(intermediate, keep_prob=dropout_keep_rate)
 
     # Apply the output layer
-    result = tf.layers.dense(inputs=intermediate,
-                             units=output_size,
-                             activation=activation_fns[-1],
-                             kernel_initializer=tf.initializers.glorot_uniform(),
-                             kernel_regularizer=get_regularizer(name=regularization_name, scale=regularization_scale),
-                             use_bias=should_bias_final,
-                             name=f'{name}-output')
+   # result = tf.layers.dense(inputs=intermediate,
+   #                          units=output_size,
+   #                          activation=activation_fns[-1],
+   #                          kernel_initializer=tf.initializers.glorot_uniform(),
+   #                          kernel_regularizer=get_regularizer(name=regularization_name, scale=regularization_scale),
+   #                          use_bias=should_bias_final,
+   #                          name=f'{name}-output')
+
+    result = dense(inputs=intermediate,
+                   units=output_size,
+                   activation=activations[-1],
+                   use_bias=should_bias_final,
+                   name='{0}-output'.format(name),
+                   compression_fraction=compression_fraction)
 
     # Apply dropout to the final layer if specified
     if should_dropout_final:
