@@ -101,7 +101,7 @@ int8_t *alloc(uint16_t numBytes) {
 }
 
 
-void free(void *ptr) {
+void dealloc(void *ptr) {
     // The pointer points to the beginning of the data block. The header is located exactly one
     // byte behind this. We use this to mark the block as freed by setting the number of allocated.
     // bytes to zero.

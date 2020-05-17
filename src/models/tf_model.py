@@ -27,9 +27,6 @@ class TFModel(Model):
     def __init__(self, hyper_parameters: HyperParameters, save_folder: str, is_train: bool):
         super().__init__(hyper_parameters, save_folder, is_train)
         
-        # We turn of parallelism during testing to simulate a single-threaded, low-power environment
-        # num_threads = 0 if is_train else 1
-        # config = tf.ConfigProto(inter_op_parallelism_threads=num_threads, intra_op_parallelism_threads=num_threads)
         self._sess = tf.Session(graph=tf.Graph())
 
         self._optimizer = None

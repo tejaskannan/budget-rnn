@@ -13,7 +13,7 @@ struct Point {
 typedef struct Point Point;
 
 
-void test_alloc_free(void);
+void test_alloc_dealloc(void);
 void test_store_byte(void);
 void test_pair(void);
 void test_triple(void);

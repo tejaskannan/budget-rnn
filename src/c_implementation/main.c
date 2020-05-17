@@ -15,14 +15,7 @@ int main(int argc, char **argv) {
     int buffer_size = 500;
     char buffer[buffer_size];
 
-   // char *token = strtok(buffer, " ");
-   // while (token != NULL) {
-   //     printf("%s\n", token);
-   //     token = strtok(NULL, " ");
-   // }
-
     // Initialize a dummy input array
-    // matrix **inputs = (matrix **) alloc(sizeof(matrix *) * SEQ_LENGTH);
     matrix *inputs[SEQ_LENGTH];
     for (int16_t i = 0; i < SEQ_LENGTH; i++) {
         inputs[i] = matrix_allocate(NUM_INPUT_FEATURES, 1);
@@ -49,12 +42,12 @@ int main(int argc, char **argv) {
 
                 token = strtok(NULL, " ");
             }
-        
+
             normalize(inputs[i], INPUT_MEAN, INPUT_STD, FIXED_POINT_PRECISION);
         }
 
         execute_model(inputs, outputs);
-        
+
         fgets(output_buffer, output_buffer_size, output_file);
         int16_t label = atoi(output_buffer);
 
@@ -80,4 +73,3 @@ int main(int argc, char **argv) {
 
     return 0;
 }
-

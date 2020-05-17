@@ -3,7 +3,7 @@
 
 int main(void) {
 
-    test_alloc_free();
+    test_alloc_dealloc();
     test_store_byte();
     test_pair();
     test_triple();
@@ -15,13 +15,13 @@ int main(void) {
 }
 
 
-void test_alloc_free(void) {
+void test_alloc_dealloc(void) {
     int8_t numBytes = 16;
     int8_t *ptr = alloc(numBytes);
     
     assert(numBytes + HEADER_SIZE == allocBytes());
 
-    free(ptr);
+    dealloc(ptr);
     assert(0 == allocBytes());
 }
 
@@ -36,7 +36,7 @@ void test_store_byte(void) {
 
     assert(x == *ptr);
     
-    free(ptr);
+    dealloc(ptr);
     assert(0 == allocBytes());
 }
 
@@ -56,11 +56,11 @@ void test_pair(void) {
     assert(x2 == *ptr2);
     assert(numBytesOne + numBytesTwo + 2 * HEADER_SIZE == allocBytes());
 
-    free(ptr1);
+    dealloc(ptr1);
     assert(numBytesTwo + HEADER_SIZE == allocBytes());
     assert(x2 == *ptr2);
 
-    free(ptr2);
+    dealloc(ptr2);
     assert(0 == allocBytes());
 }
 
@@ -89,13 +89,13 @@ void test_triple(void) {
     assert(numBytesOne + numBytesTwo + numBytesThree + 3 * HEADER_SIZE == allocBytes());
 
     // Free the middle pointer and make sure everything else is still present
-    free(ptr2);
+    dealloc(ptr2);
     assert(x1 == *ptr1);
     assert(x3 == *ptr3);
     assert(numBytesOne + numBytesThree + 2 * HEADER_SIZE == allocBytes());
 
-    free(ptr1);
-    free(ptr3);
+    dealloc(ptr1);
+    dealloc(ptr3);
     assert(0 == allocBytes());
 }
 
@@ -124,7 +124,7 @@ void test_nested(void) {
     assert(numBytesOne + numBytesTwo + numBytesThree + 3 * HEADER_SIZE == allocBytes());
 
     // Free ptr2 and allocate an array that is too large to fit in this space
-    free(ptr2);
+    dealloc(ptr2);
     assert(numBytesOne + numBytesThree + 2 * HEADER_SIZE == allocBytes());
 
     int8_t numBytesFour = 2;
@@ -135,9 +135,9 @@ void test_nested(void) {
     assert(x3 == *ptr3);
     assert(numBytesOne + numBytesThree + numBytesFour + 3 * HEADER_SIZE == allocBytes());
     
-    free(ptr1);
-    free(ptr3);
-    free(ptr4);
+    dealloc(ptr1);
+    dealloc(ptr3);
+    dealloc(ptr4);
     assert(0 == allocBytes());
 
 }
@@ -156,7 +156,7 @@ void test_struct(void) {
     assert(x == ptr->x);
     assert(y == ptr->y);
 
-    free(ptr);
+    dealloc(ptr);
     assert(0 == allocBytes());
 }
 
@@ -182,11 +182,11 @@ void test_struct_multiple(void) {
     assert(x2 == ptr2->x);
     assert(y2 == ptr2->y);
 
-    free(ptr1);
+    dealloc(ptr1);
     assert(sizeof(Point) + HEADER_SIZE == allocBytes());
     assert(x2 == ptr2->x);
     assert(y2 == ptr2->y);
 
-    free(ptr2);
+    dealloc(ptr2);
     assert(0 == allocBytes);
 }

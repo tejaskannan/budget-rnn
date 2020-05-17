@@ -7,9 +7,9 @@ matrix *matrix_allocate(int8_t numRows, int8_t numCols) {
         return NULL_PTR;
     }
 
-    int16_t *data = (int16_t *) alloc(numRows * numCols * sizeof(int16_t));
+    dtype *data = (dtype *) alloc(numRows * numCols * sizeof(dtype));
     if (isNull(data)) {
-        free(mat);
+        dealloc(mat);
         return NULL_PTR;
     }
 
@@ -20,7 +20,7 @@ matrix *matrix_allocate(int8_t numRows, int8_t numCols) {
 }
 
 
-matrix *matrix_create_from(int16_t *data, int8_t numRows, int8_t numCols) {
+matrix *matrix_create_from(dtype *data, int8_t numRows, int8_t numCols) {
     matrix *mat = (matrix *) alloc(sizeof(matrix));
     if (isNull(mat)) {
         return NULL_PTR;
@@ -39,10 +39,10 @@ void matrix_free(matrix *mat) {
     }
 
     if (!isNull(mat->data)) {
-        free(mat->data);
+        dealloc(mat->data);
     }
 
-    free(mat);
+    dealloc(mat);
 }
 
 
@@ -59,8 +59,9 @@ matrix *matrix_add(matrix *result, matrix *mat1, matrix *mat2) {
     }
     
     // Compute elementwise sum in place
-    for (int16_t i = 0; i < mat1->numRows * mat1->numCols; i++) {
-        result->data[i] = fp_add(mat1->data[i], mat2->data[i]);
+    uint16_t i;
+    for (i = mat1->numRows * mat1->numCols; i > 0; i--) {
+        result->data[i - 1] = fp_add(mat1->data[i - 1], mat2->data[i - 1]);
     }
 
     return result;
@@ -78,25 +79,26 @@ matrix *matrix_multiply(matrix *result, matrix *mat1, matrix *mat2, int16_t prec
     }
 
     // The result will be a [n, p] matrix
-    int16_t n = mat1->numRows;
-    int16_t m = mat1->numCols;
-    int16_t p = mat2->numCols;
+    int8_t n = mat1->numRows;
+    int8_t m = mat1->numCols;
+    int8_t p = mat2->numCols;
 
-    for (int16_t i = 0; i < n; i++) {
-        int16_t outerRow = i * m;  // Offset for the i^th row
+    uint16_t i, j, k;
+    for (i = n; i > 0; i--) {
+        uint16_t outerRow = (i - 1) * m;  // Offset for the i^th row
 
-        for (int16_t j = 0; j < p; j++) {
+        for (j = p; j > 0; j--) {
             int16_t sum = 0;
 
-            for (int16_t k = 0; k < m; k++) {
-                int16_t innerRow = k * p;  // Offset for the k^th row
+            for (k = m; k > 0; k--) {
+                uint16_t innerRow = (k - 1) * p;  // Offset for the k^th row
                 
-                int16_t prod = fp_mul(mat1->data[outerRow + k], mat2->data[innerRow + j], precision);
+                int16_t prod = fp_mul(mat1->data[outerRow + (k - 1)], mat2->data[innerRow + (j - 1)], precision);
                 sum = fp_add(sum, prod);
             }
      
-            int16_t resultRow = i * p;
-            result->data[resultRow + j] = sum;
+            uint16_t resultRow = (i - 1) * p;
+            result->data[resultRow + (j - 1)] = sum;
         }
     }
 
@@ -115,8 +117,9 @@ matrix *matrix_hadamard(matrix* result, matrix *mat1, matrix *mat2, int16_t prec
         return NULL_PTR;
     }
 
-    for (int16_t i = 0; i < mat1->numRows * mat1->numCols; i++) {
-        result->data[i] = fp_mul(mat1->data[i], mat2->data[i], precision);
+    uint16_t i;
+    for (i = mat1->numRows * mat1->numCols; i > 0; i--) {
+        result->data[i - 1] = fp_mul(mat1->data[i - 1], mat2->data[i - 1], precision);
     }
 
     return result;
@@ -133,8 +136,9 @@ matrix *scalar_product(matrix *result, matrix *mat, int16_t scalar, int16_t prec
         return NULL_PTR;
     }
 
-    for (int16_t i = 0; i < mat->numRows * mat->numCols; i++) {
-        result->data[i] = fp_mul(mat->data[i], scalar, precision);
+    uint16_t i;
+    for (i = mat->numRows * mat->numCols; i > 0; i--) {
+        result->data[i - 1] = fp_mul(mat->data[i - 1], scalar, precision);
     }
 
     return result;
@@ -151,8 +155,9 @@ matrix *scalar_add(matrix *result, matrix *mat, int16_t scalar) {
         return NULL_PTR;
     }
 
-    for (int16_t i = 0; i < mat->numRows * mat->numCols; i++) {
-        result->data[i] = fp_add(mat->data[i], scalar);
+    uint16_t i;
+    for (i = mat->numRows * mat->numCols; i > 0; i--) {
+        result->data[i - 1] = fp_add(mat->data[i - 1], scalar);
     }
     
     return result;
@@ -169,8 +174,9 @@ matrix *apply_elementwise(matrix *result, matrix *mat, int16_t (*fn)(int16_t, in
         return NULL_PTR;
     }
 
-    for (int16_t i = 0; i < mat->numRows * mat->numCols; i++) {
-        result->data[i] = (*fn)(mat->data[i], precision);
+    uint16_t i;
+    for (i = mat->numRows * mat->numCols; i > 0; i--) {
+        result->data[i - 1] = (*fn)(mat->data[i - 1], precision);
     }
 
     return result;
@@ -186,12 +192,13 @@ matrix *transpose(matrix *result, matrix *mat) {
         return NULL_PTR;
     }
 
-    int16_t n = mat->numRows;
-    int16_t m = mat->numCols;
+    int8_t n = mat->numRows;
+    int8_t m = mat->numCols;
 
-    for (int16_t i = 0; i < n; i++) {
-        for (int16_t j = 0; j < m; j++) {
-            result->data[j * n + i] = mat->data[i * m + j];
+    uint16_t i, j;
+    for (i = n; i > 0; i--) {
+        for (j = m; j > 0; j--) {
+            result->data[(j - 1) * n + (i - 1)] = mat->data[(i - 1) * m + (j - 1)];
         }
     }
 
@@ -206,9 +213,10 @@ matrix *matrix_replace(matrix *dst, matrix *src) {
     if ((dst->numRows != src->numRows) || (dst->numCols != src->numCols)) {
         return NULL_PTR;
     }
-    
-    for (int16_t i = 0; i < dst->numRows * dst->numCols; i++) {
-        dst->data[i] = src->data[i];
+
+    uint16_t i;
+    for (i = dst->numRows * dst->numCols; i > 0; i--) {
+        dst->data[i - 1] = src->data[i - 1];
     }
 
     return dst;
@@ -219,8 +227,10 @@ matrix *matrix_set(matrix *mat, int16_t value) {
     /**
      * Sets all values in the matrix to the given value (already in fixed point form).
      */
-    for (int16_t i = 0; i < mat->numRows * mat->numCols; i++) {
-        mat->data[i] = value;
+
+    uint16_t i;
+    for (i = mat->numRows * mat->numCols; i > 0; i--) {
+        mat->data[i - 1] = value;
     }
 
     return mat;
@@ -261,10 +271,14 @@ int16_t argmax(matrix *vec) {
 
     int16_t max = vec->data[0];
     int16_t max_index = 0;
-    for (int16_t i = 1; i < vec->numRows; i++) {
-        if (vec->data[i] > max) {
-            max_index = i;
-            max = vec->data[i];
+
+    uint16_t i;
+    int16_t val;
+    for (i = vec->numRows; i > 1; i--) {
+        val = vec->data[i - 1];
+        if (val > max) {
+            max_index = i - 1;
+            max = val;
         }
     }
 
@@ -282,9 +296,11 @@ matrix *normalize(matrix *vec, int16_t *mean, int16_t *std, int16_t precision) {
     }
 
     int16_t shifted;
-    for (int16_t i = 0; i < vec->numRows; i++) {
-        shifted = fp_sub(vec->data[i], mean[i]);
-        vec->data[i] = fp_div(shifted, std[i], precision);
+    uint16_t i;
+
+    for (i = vec->numRows; i > 0; i--) {
+        shifted = fp_sub(vec->data[i - 1], mean[i - 1]);
+        vec->data[i - 1] = fp_div(shifted, std[i - 1], precision);
     }
 
     return vec;

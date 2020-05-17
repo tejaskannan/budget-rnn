@@ -3,11 +3,11 @@
 #include "../memory.h"
 #include "fixed_point_ops.h"
 
-#ifndef TENSOR_GUARD
-    #define TENSOR_GUARD
+#ifndef MATRIX_OPS_GUARD
+    #define MATRIX_OPS_GUARD
     
     matrix *matrix_allocate(int8_t n_rows, int8_t n_cols);
-    matrix *matrix_create_from(int16_t *data, int8_t n_rows, int8_t n_cols);
+    matrix *matrix_create_from(dtype *data, int8_t n_rows, int8_t n_cols);
     void matrix_free(matrix *mat);
     matrix *matrix_add(matrix *result, matrix *mat1, matrix *mat2);
     matrix *matrix_multiply(matrix *result, matrix *mat1, matrix *mat2, int16_t precision);

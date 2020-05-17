@@ -9,10 +9,10 @@
     "dataset_type": "single",
     "input_noise": 0.001,
 	"model_params": {
-	    "tree_type": "random_forest",
-        "num_estimators": 50,
-        "max_depth": 10,
+	    "tree_type": "gradient_boosted",
+        "num_estimators": 256,
+        "max_depth": 4,
         "criterion": "gini",
-        "output_type": "binary_classification"
+        "output_type": "multi_classification"
     }
 }

@@ -13,7 +13,7 @@ static int8_t MEMORY[MEMORY_BYTES];
 static void *NULL_PTR = (void *) 0x0;  // Custom-defined null pointer.
 
 int8_t *alloc(uint16_t numBytes);
-void free(void *ptr);
+void dealloc(void *ptr);
 int8_t isNull(void *ptr);
 uint16_t freeBytes(void);
 uint16_t allocBytes(void);
