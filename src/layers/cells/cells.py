@@ -1,6 +1,7 @@
 import tensorflow as tf
 from typing import Tuple, Dict, Optional, Any, List
 
+from layers.basic import dense
 from utils.tfutils import get_activation
 
 
@@ -11,9 +12,10 @@ def make_rnn_cell(cell_type: str,
                   dropout_keep_rate: tf.Tensor,
                   name: str,
                   num_layers: Optional[int] = None,
-                  use_skip_connections: bool = False):
+                  use_skip_connections: bool = False,
+                  compression_fraction: Optional[float] = None):
     if num_layers is None:
-        return make_single_rnn_cell(cell_type, input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections)
+        return make_single_rnn_cell(cell_type, input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections, compression_fraction=compression_fraction)
 
     return MultiRNNCell(num_layers=num_layers,
                         input_units=input_units,
@@ -22,7 +24,8 @@ def make_rnn_cell(cell_type: str,
                         dropout_keep_rate=dropout_keep_rate,
                         cell_type=cell_type,
                         name=name,
-                        use_skip_connections=use_skip_connections)
+                        use_skip_connections=use_skip_connections,
+                        compression_fraction=compression_fraction)
 
 
 def make_single_rnn_cell(cell_type: str,
@@ -31,15 +34,16 @@ def make_single_rnn_cell(cell_type: str,
                          activation: str,
                          dropout_keep_rate: tf.Tensor,
                          name: str,
-                         use_skip_connections: bool = False):
+                         use_skip_connections: bool = False,
+                         compression_fraction: Optional[float] = None):
     cell_type = cell_type.lower()
 
     if cell_type == 'gru':
-        return GRU(input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections)
+        return GRU(input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections, compression_fraction=compression_fraction)
     if cell_type == 'vanilla':
-        return VanillaCell(input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections)
+        return VanillaCell(input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections, compression_fraction=compression_fraction)
     if cell_type == 'lstm':
-        return LSTM(input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections)
+        return LSTM(input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections, compression_fraction=compression_fraction)
     raise ValueError(f'Unknown cell name {cell_type}!')
 
 
@@ -52,7 +56,8 @@ class RNNCell:
                  dropout_keep_rate: tf.Tensor,
                  name: str,
                  use_skip_connections: bool = False,
-                 state_size: Optional[int] = None):
+                 state_size: Optional[int] = None,
+                 compression_fraction: Optional[float] = None):
         """
         Initializes the RNN Cell
 
@@ -64,6 +69,7 @@ class RNNCell:
             name: Name of the RNN Cell
             use_skip_connections: Whether to allow skip connections through this cell
             state_size: Size of the state. Defaults to output_units
+            compression_fraction: Optional compression fraction
         """
         self.input_units = input_units
         self.output_units = output_units
@@ -73,6 +79,8 @@ class RNNCell:
         self.state_size = output_units if state_size is None else state_size
         self.use_skip_connections = use_skip_connections
         self.name = name
+        self.compression_fraction = compression_fraction
+
         self.init_weights()
 
     @property
@@ -119,9 +127,10 @@ class MultiRNNCell(RNNCell):
                  name: str,
                  cell_type: str,
                  use_skip_connections: bool = False,
-                 state_size: Optional[int] = None):
+                 state_size: Optional[int] = None,
+                 compression_fraction: Optional[float] = None):
         assert num_layers >= 1, 'Must provide at least one layer'
-        super().__init__(input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections, state_size)
+        super().__init__(input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections, state_size, compression_fraction)
         self.num_layers = num_layers
 
         self.cells: List[RNNCell] = []
@@ -132,7 +141,8 @@ class MultiRNNCell(RNNCell):
                                         activation=activation,
                                         dropout_keep_rate=dropout_keep_rate,
                                         name=f'{name}-cell-{i}',
-                                        use_skip_connections=use_skip_connections)
+                                        use_skip_connections=use_skip_connections,
+                                        compression_fraction=compression_fraction)
             self.cells.append(cell)
 
     @property
@@ -168,41 +178,43 @@ class MultiRNNCell(RNNCell):
 class GRU(RNNCell):
 
     def init_weights(self):
-        self.W_update = tf.get_variable(name=f'{self.name}-W-update',
+        weight_shape = [self.state_size, self.output_units] if self.compression_fraction is None else [int(self.compression_fraction * self.state_size * self.output_units)]
+
+        self.W_update = tf.get_variable(name=f'{self.name}-W-update-kernel',
                                         initializer=self.initializer,
-                                        shape=[self.state_size, self.output_units],
+                                        shape=weight_shape,
                                         trainable=True)
-        self.U_update = tf.get_variable(name=f'{self.name}-U-update',
+        self.U_update = tf.get_variable(name=f'{self.name}-U-update-kernel',
                                         initializer=self.initializer,
-                                        shape=[self.input_units, self.output_units],
+                                        shape=weight_shape,
                                         trainable=True)
-        self.b_update = tf.get_variable(name=f'{self.name}-b-update',
+        self.b_update = tf.get_variable(name=f'{self.name}-b-update-bias',
                                         initializer=self.initializer,
                                         shape=[1, self.output_units],
                                         trainable=True)
 
-        self.W_reset = tf.get_variable(name=f'{self.name}-W-reset',
+        self.W_reset = tf.get_variable(name=f'{self.name}-W-reset-kernel',
                                        initializer=self.initializer,
-                                       shape=[self.state_size, self.output_units],
+                                       shape=weight_shape,
                                        trainable=True)
-        self.U_reset = tf.get_variable(name=f'{self.name}-U-reset',
+        self.U_reset = tf.get_variable(name=f'{self.name}-U-reset-kernel',
                                        initializer=self.initializer,
-                                       shape=[self.input_units, self.output_units],
+                                       shape=weight_shape,
                                        trainable=True)
-        self.b_reset = tf.get_variable(name=f'{self.name}-b-reset',
+        self.b_reset = tf.get_variable(name=f'{self.name}-b-reset-bias',
                                        initializer=self.initializer,
                                        shape=[1, self.output_units],
                                        trainable=True)
 
-        self.W = tf.get_variable(name=f'{self.name}-W',
+        self.W = tf.get_variable(name=f'{self.name}-W-kernel',
                                  initializer=self.initializer,
-                                 shape=[self.state_size, self.output_units],
+                                 shape=weight_shape,
                                  trainable=True)
-        self.U = tf.get_variable(name=f'{self.name}-U',
+        self.U = tf.get_variable(name=f'{self.name}-U-kernel',
                                  initializer=self.initializer,
-                                 shape=[self.input_units, self.output_units],
+                                 shape=weight_shape,
                                  trainable=True)
-        self.b = tf.get_variable(name=f'{self.name}-b',
+        self.b = tf.get_variable(name=f'{self.name}-b-bias',
                                  initializer=self.initializer,
                                  shape=[1, self.output_units],
                                  trainable=True)
@@ -227,17 +239,24 @@ class GRU(RNNCell):
             skip_gate = tf.math.sigmoid(tf.matmul(concat_state, self.R) + self.b_skip)
             state = skip_gate * state + (1.0 - skip_gate) * skip_input
 
-        update_vector = tf.matmul(state, self.W_update) + tf.matmul(inputs, self.U_update) + self.b_update
-        reset_vector = tf.matmul(state, self.W_reset) + tf.matmul(inputs, self.U_reset) + self.b_reset
+        # Create the update and reset vectors
+        update_state_vector = dense(inputs=state, units=self.output_units, use_bias=False, activation=None, name='{0}-W-update'.format(self.name), compression_fraction=self.compression_fraction)
+        update_input_vector = dense(inputs=inputs, units=self.output_units, use_bias=False, activation=None, name='{0}-U-update'.format(self.name), compression_fraction=self.compression_fraction)
+        update_gate = tf.math.sigmoid(update_state_vector + update_input_vector + self.b_update)
 
-        update_gate = tf.math.sigmoid(update_vector)
-        reset_gate = tf.math.sigmoid(reset_vector)
+        reset_state_vector = dense(inputs=state, units=self.output_units, use_bias=False, activation=None, name='{0}-W-reset'.format(self.name), compression_fraction=self.compression_fraction)
+        reset_input_vector = dense(inputs=inputs, units=self.output_units, use_bias=False, activation=None, name='{0}-U-reset'.format(self.name), compression_fraction=self.compression_fraction)
+        reset_gate = tf.math.sigmoid(reset_state_vector + reset_input_vector + self.b_reset)
 
         update_with_dropout = tf.nn.dropout(update_gate, keep_prob=self.dropout_keep_rate)
         reset_with_dropout = tf.nn.dropout(reset_gate, keep_prob=self.dropout_keep_rate)
 
-        candidate_vector = tf.matmul(state * reset_with_dropout, self.W) + tf.matmul(inputs, self.U) + self.b
-        candidate_state = self.activation(candidate_vector)
+        # Create the candidate state
+        candidate_reset = dense(inputs=state * reset_with_dropout, units=self.output_units, use_bias=False, activation=None, name='{0}-W'.format(self.name), compression_fraction=self.compression_fraction)
+        candidate_input = dense(inputs=inputs, units=self.output_units, use_bias=False, activation=None, name='{0}-U'.format(self.name), compression_fraction=self.compression_fraction)
+        candidate_state = self.activation(candidate_reset + candidate_input + self.b)
+
+        # Form the next state using the update gate
         next_state = update_with_dropout * state + (1.0 - update_with_dropout) * candidate_state
 
         return next_state, next_state, [update_gate, reset_gate]

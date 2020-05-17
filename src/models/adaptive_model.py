@@ -560,7 +560,8 @@ class AdaptiveModel(TFModel):
                                              params=self.hypers.model_params['embedding_layer_params'],
                                              seq_length=self.samples_per_seq,
                                              input_shape=self.metadata[INPUT_SHAPE],
-                                             name_prefix=get_embedding_name())
+                                             name_prefix=get_embedding_name(),
+                                             compression_fraction=self.hypers.model_params.get('compression_fraction'))
 
             # Create the RNN Cell
             cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
@@ -569,7 +570,8 @@ class AdaptiveModel(TFModel):
                                  activation=self.hypers.model_params['rnn_activation'],
                                  dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
                                  num_layers=self.hypers.model_params['rnn_layers'],
-                                 name=cell_name)
+                                 name=cell_name,
+                                 compression_fraction=self.hypers.model_params.get('compression_fraction'))
 
             inputs = input_sequence
             initial_state = cell.zero_state(batch_size=tf.shape(inputs)[0], dtype=tf.float32)
@@ -615,7 +617,8 @@ class AdaptiveModel(TFModel):
                          hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
                          activations=self.hypers.model_params['output_hidden_activation'],
                          dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                         name=output_layer_name)
+                         name=output_layer_name,
+                         compression_fraction=self.hypers.model_params.get('compression_fraction'))
 
             if self.output_type == OutputType.BINARY_CLASSIFICATION:
                 classification_output = compute_binary_classification_output(model_output=output,
