@@ -12,5 +12,6 @@ void test_exp_basic();
 void test_exp_neg();
 void test_tanh_basic();
 void test_sigmoid_basic();
+void test_relu_basic();
 
 #endif
