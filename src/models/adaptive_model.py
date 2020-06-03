@@ -17,7 +17,7 @@ from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs
 from utils.misc import sample_sequence_batch
-from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS
+from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS, OUTPUT_SEED
 from utils.constants import NODE_REGEX_FORMAT, DROPOUT_KEEP_RATE, MODEL, SCHEDULED_MODEL, NUM_CLASSES
 from utils.constants import INPUT_SCALER, OUTPUT_SCALER, INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE
 from utils.loss_utils import f1_score_loss, binary_classification_loss
@@ -593,7 +593,8 @@ class AdaptiveModel(TFModel):
                                   initial_state=initial_state,
                                   name=rnn_level_name,
                                   should_share_weights=self.hypers.model_params['share_rnn_weights'],
-                                  fusion_mode=self.hypers.model_params.get('fusion_mode'))
+                                  fusion_mode=self.hypers.model_params.get('fusion_mode'),
+                                  compression_fraction=self.hypers.model_params.get('compression_fraction'))
             rnn_outputs = rnn_out.outputs
             rnn_states = rnn_out.states
             rnn_gates = rnn_out.gates
@@ -616,9 +617,11 @@ class AdaptiveModel(TFModel):
                          output_size=output_size,
                          hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
                          activations=self.hypers.model_params['output_hidden_activation'],
+                         should_bias_final=True,
                          dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
                          name=output_layer_name,
-                         compression_fraction=self.hypers.model_params.get('compression_fraction'))
+                         compression_fraction=self.hypers.model_params.get('compression_fraction'),
+                         compression_seed=OUTPUT_SEED)
 
             if self.output_type == OutputType.BINARY_CLASSIFICATION:
                 classification_output = compute_binary_classification_output(model_output=output,

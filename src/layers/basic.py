@@ -39,7 +39,8 @@ def dense(inputs: tf.Tensor,
           activation: Optional[str],
           name: str,
           use_bias: bool = False,
-          compression_fraction: Optional[float] = None) -> tf.Tensor:
+          compression_fraction: Optional[float] = None,
+          compression_seed: Optional[str] = None) -> tf.Tensor:
     """
     Creates a dense, feed-forward layer with the given parameters.
 
@@ -52,6 +53,9 @@ def dense(inputs: tf.Tensor,
         compression_fraction: An optional number in [0, 1) that determines the number of true parameters.
             We perform compression using random weight sharing via hashing. This idea is
             from HashNets (http://proceedings.mlr.press/v37/chenc15.pdf)
+        compression_seed: The prefix seed to use when hashing. Must be non-None when the compression fraction is non-None.
+    Returns:
+        The transformed inputs in a [B, ..., K] tensor.
     """
     assert compression_fraction is None or (0 <= compression_fraction and compression_fraction < 1), 'If given, the compression fraction must be in [0, 1)'
 
@@ -69,6 +73,8 @@ def dense(inputs: tf.Tensor,
                             initializer=tf.initializers.glorot_uniform(),
                             trainable=True)
     else:
+        assert compression_seed is not None, 'The seed value must be non-None when compressing weights'
+
         # Create the compressed weight vector
         num_weights = int(compression_fraction * (input_units * units))
         w = tf.get_variable(name=weight_name,
@@ -79,24 +85,25 @@ def dense(inputs: tf.Tensor,
         # Construct the 'virtual' weight matrix using hashing. While it is memory-inefficient to actually materialize
         # the weight matrix, it simplifies the training process. Furthermore, we are only concerned with memory constraints
         # at inference time. Thus, we just the smaller weight vector to create the full weight matrix during training.
-        W = expand_to_matrix(w, size=num_weights, matrix_dims=(input_units, units), name=name.lower())
+        W = expand_to_matrix(w, size=num_weights, matrix_dims=(input_units, units), name=compression_seed)
 
     # Apply the given weights
     transformed = tf.matmul(inputs, W)  # [B, ..., K]
-    
+
     # Add the bias if specified
     if use_bias:
         # Bias vector of size [K]
         b = tf.get_variable(name=bias_name,
-                            shape=[units],
+                            shape=[1, units],
                             initializer=tf.initializers.glorot_uniform(),
                             trainable=True)
 
         transformed = transformed + b
 
     # Apply the activation function if specified
-    if activation is not None:
-        transformed = get_activation(activation)(transformed)
+    activation_fn = get_activation(activation)
+    if activation_fn is not None:
+        transformed = activation_fn(transformed)
 
     return transformed
 
@@ -112,7 +119,8 @@ def mlp(inputs: tf.Tensor,
         should_dropout_final: bool = False,
         regularization_name: Optional[str] = None,
         regularization_scale: float = 0.01,
-        compression_fraction: Optional[float] = None) -> tf.Tensor:
+        compression_fraction: Optional[float] = None,
+        compression_seed: Optional[float] = None) -> tf.Tensor:
     """
     Defines a multi-layer perceptron with the given hidden sizes, output size, and activations.
 
@@ -133,17 +141,12 @@ def mlp(inputs: tf.Tensor,
         regularization_name: Name of the regularization function. None if no regularization.
         regularization_scale: Scale of regularization. Unused with the no regularization is applied.
         compression_fraction: Optional compression fraction to train network with compressed weights.
+        compression_seed: Optional name of compression seed. Must be provided when compression fraction is given.
     Returns:
         A tensor containing the inputs transformed by the MLP.
     """
     if hidden_sizes is None:
         hidden_sizes = []
-
-    # Convert activation function names to the proper functions
-   # if isinstance(activations, list):
-   #     activation_fns = [get_activation(a) for a in activations]
-   # else:
-   #     activation_fns = [get_activation(activations) for _ in range(0, len(hidden_sizes) + 1)]
 
     if not isinstance(activations, list):
         activations = [activations] * (len(hidden_sizes) + 1)
@@ -164,32 +167,19 @@ def mlp(inputs: tf.Tensor,
                              activation=activation,
                              use_bias=True,
                              name='{0}-hidden-{1}'.format(name, i),
-                             compression_fraction=compression_fraction)
+                             compression_fraction=compression_fraction,
+                             compression_seed='{0}{1}'.format(compression_seed, i))
 
-        #intermediate = tf.layers.dense(inputs=intermediate,
-        #                               units=hidden_size,
-        #                               activation=activation,
-        #                               kernel_initializer=tf.initializers.glorot_uniform(),
-        #                               kernel_regularizer=get_regularizer(name=regularization_name, scale=regularization_scale),
-        #                               use_bias=True,
-        #                               name=f'{name}-hidden-{i}')
         intermediate = tf.nn.dropout(intermediate, keep_prob=dropout_keep_rate)
 
     # Apply the output layer
-   # result = tf.layers.dense(inputs=intermediate,
-   #                          units=output_size,
-   #                          activation=activation_fns[-1],
-   #                          kernel_initializer=tf.initializers.glorot_uniform(),
-   #                          kernel_regularizer=get_regularizer(name=regularization_name, scale=regularization_scale),
-   #                          use_bias=should_bias_final,
-   #                          name=f'{name}-output')
-
     result = dense(inputs=intermediate,
                    units=output_size,
                    activation=activations[-1],
                    use_bias=should_bias_final,
                    name='{0}-output'.format(name),
-                   compression_fraction=compression_fraction)
+                   compression_fraction=compression_fraction,
+                   compression_seed=compression_seed)
 
     # Apply dropout to the final layer if specified
     if should_dropout_final:

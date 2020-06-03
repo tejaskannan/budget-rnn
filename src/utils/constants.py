@@ -41,6 +41,16 @@ SCHEDULED_GENETIC = 'scheduled_genetic'
 SCHEDULED_OPTIMIZED = 'scheduled_optimized'
 OPTIMIZED_RESULTS = 'optimized_results'
 
+# Compression Hashing Seeds (kept short for efficiency purposes)
+TRANSFORM_SEED = 'tr'
+EMBEDDING_SEED = 'em'
+AGGREGATE_SEED = 'ag'
+OUTPUT_SEED = 'ou'
+UPDATE_SEED = 'up'
+RESET_SEED = 'rs'
+CANDIDATE_SEED = 'cd'
+FUSION_SEED = 'fs'
+
 # Data folder names
 TRAIN = 'train'
 VALID = 'valid'

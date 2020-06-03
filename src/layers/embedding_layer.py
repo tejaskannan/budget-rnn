@@ -3,6 +3,7 @@ from typing import Dict, Any, List, Optional
 
 from layers.basic import dense
 from utils.tfutils import get_activation, get_regularizer
+from utils.constants import EMBEDDING_SEED
 
 
 def embedding_layer(inputs: tf.Tensor,
@@ -57,17 +58,10 @@ def embedding_layer(inputs: tf.Tensor,
         inputs = tf.reshape(conv_output, [batch_size, seq_length, output_shape[1] * output_shape[2]])
 
     # Project down to state size, [B, T, D]
-    print(compression_fraction)
     return dense(inputs=inputs,
                  units=units,
                  activation=params['dense_activation'],
                  use_bias=True,
                  name='{0}-dense'.format(name_prefix),
-                 compression_fraction=compression_fraction)
-   # return tf.layers.dense(inputs=inputs,
-   #                        units=units,
-   #                        activation=get_activation(params['dense_activation']),
-   #                        kernel_initializer=tf.glorot_uniform_initializer(),
-   #                        kernel_regularizer=get_regularizer(name=regularizer_name, scale=regularizer_scale),
-   #                        use_bias=True,
-   #                        name=f'{name_prefix}-dense')
+                 compression_fraction=compression_fraction,
+                 compression_seed=EMBEDDING_SEED)

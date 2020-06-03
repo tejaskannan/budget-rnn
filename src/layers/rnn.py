@@ -2,12 +2,70 @@ import tensorflow as tf
 from typing import Optional, Tuple
 from collections import namedtuple
 
+from layers.basic import dense
 from layers.cells.cells import MultiRNNCell
-from utils.tfutils import fuse_states, FusionLayer
 from utils.rnn_utils import get_combine_states_name, get_rnn_while_loop_name
+from utils.constants import FUSION_SEED
 
 
 RnnOutput = namedtuple('RnnOutput', ['outputs', 'states', 'gates'])
+
+
+def fuse_states(curr_state: tf.Tensor,
+                prev_state: Optional[tf.Tensor],
+                state_size: int,
+                mode: Optional[str],
+                name: str,
+                compression_fraction: Optional[float] = None,
+                compression_seed: Optional[str] = None) -> tf.Tensor:
+    """
+    Combines the provided states using the specified strategy.
+
+    Args:
+        curr_state: A [B, D] tensor of the current state
+        prev_state: An optional [B, D] tensor of previous state
+        fusion_layer: Optional trainable variables for the fusion layer. Only use when mode = 'gate'
+        state_size: Size (D) of the fused vector
+        mode: The fusion strategy. If None is given, the strategy is an identity.
+        name: Name of this layer
+        compression_fraction: Compression level to apply to any trainable parameters.
+        compression_seed: Seed to use for hashing function during compression.
+    Returns:
+        A [B, D] tensor that represents the fused state
+    """
+    mode = mode.lower() if mode is not None else None
+
+    if mode is None or mode in ('identity', 'none') or prev_state is None:
+        return curr_state
+    elif mode == 'sum':
+        return curr_state + prev_state
+    elif mode in ('sum-tanh', 'sum_tanh'):
+        return tf.nn.tanh(curr_state + prev_state)
+    elif mode in ('avg', 'average'):
+        return (curr_state + prev_state) / 2.0
+    elif mode in ('max', 'max-pool', 'max_pool'):
+        concat = tf.concat([tf.expand_dims(curr_state, axis=-1), tf.expand_dims(prev_state, axis=-1)], axis=-1)  # [B, D, 2]
+        return tf.reduce_max(concat, axis=-1)  # [B, D]
+    elif mode in ('gate', 'gate_layer', 'gate-layer'):
+        concat_states = tf.concat([curr_state, prev_state], axis=-1)  # [B, 2 * D]
+
+        # [B, D]
+        update_weight = dense(inputs=concat_states,
+                              units=state_size,
+                              name=name,
+                              activation='sigmoid',
+                              use_bias=True,
+                              compression_fraction=compression_fraction,
+                              compression_seed=compression_seed)
+
+       # transform = tf.matmul(concat_states, fusion_layer.dense) + fusion_layer.bias  # [B, D]
+
+       # activation = get_activation(fusion_layer.activation)
+       # update_weight = activation(transform)  # [B, D]
+
+        return update_weight * curr_state + (1.0 - update_weight) * prev_state
+    else:
+        raise ValueError(f'Unknown fusion mode: {mode}')
 
 
 def dynamic_rnn(inputs: tf.Tensor,
@@ -17,7 +75,8 @@ def dynamic_rnn(inputs: tf.Tensor,
                 skip_width: Optional[int] = None,
                 name: Optional[str] = None,
                 should_share_weights: bool = False,
-                fusion_mode: Optional[str] = None) -> RnnOutput:
+                fusion_mode: Optional[str] = None,
+                compression_fraction: Optional[float] = None) -> RnnOutput:
     """
     Implementation of a recurrent neural network which allows for complex state passing.
 
@@ -30,6 +89,7 @@ def dynamic_rnn(inputs: tf.Tensor,
         name: Optional name of this RNN
         should_share_weights: Whether or not to share weights for any added trainable parameters
         fusion_mode: Optional fusion mode for combining states between levels
+        compression_fraction: Optional fraction for which we should compress weights
     Returns:
         A tuple of 3 tensor arrays
             (1) The outputs of each cell
@@ -44,25 +104,33 @@ def dynamic_rnn(inputs: tf.Tensor,
     outputs_array = tf.TensorArray(dtype=tf.float32, size=sequence_length, dynamic_size=False)
     gates_array = tf.TensorArray(dtype=tf.float32, size=sequence_length, dynamic_size=False)
 
+    combine_layer_name = get_combine_states_name(name, should_share_weights)
+
     fusion_layers: List[FusionLayer] = []
     if previous_states is not None and fusion_mode.lower() == 'gate':
-        combine_layer_name = get_combine_states_name(name, should_share_weights)
-
+    
+        # Initialize all variables before the while loop
         for i in range(rnn_layers):
-            state_transform = tf.get_variable(name='{0}-state-{1}'.format(combine_layer_name, i),
-                                              shape=(state_size * 2, state_size),
-                                              initializer=tf.initializers.glorot_uniform(),
-                                              trainable=True)
-            state_transform_bias = tf.get_variable(name='{0}-bias-{1}'.format(combine_layer_name, i),
+            if compression_fraction is None or compression_fraction >= 1:
+                state_transform = tf.get_variable(name='{0}-{1}-kernel'.format(combine_layer_name, i),
+                                                  shape=(state_size * 2, state_size),
+                                                  initializer=tf.initializers.glorot_uniform(),
+                                                  trainable=True)
+            else:
+                state_transform = tf.get_variable(name='{0}-{1}-kernel'.format(combine_layer_name, i),
+                                                  shape=int(compression_fraction * (state_size * state_size * 2)),
+                                                  initializer=tf.initializers.glorot_uniform(),
+                                                  trainable=True)
+
+            state_transform_bias = tf.get_variable(name='{0}-{1}-bias'.format(combine_layer_name, i),
                                                    shape=(1, state_size),
                                                    initializer=tf.initializers.glorot_uniform(),
                                                    trainable=True)
-
             # Collect the fusion layer
-            layer = FusionLayer(dense=state_transform,
-                                bias=state_transform_bias,
-                                activation='linear_sigmoid')
-            fusion_layers.append(layer)
+            #layer = FusionLayer(dense=state_transform,
+            #                    bias=state_transform_bias,
+            #                    activation='linear_sigmoid')
+            #fusion_layers.append(layer)
 
     # While loop step
     def step(index, state, outputs, states, gates):
@@ -83,12 +151,15 @@ def dynamic_rnn(inputs: tf.Tensor,
         for i in range(rnn_layers):
             curr = state[i, :, :]
             prev = prev_state[i, :, :] if prev_state is not None else None
-            fusion_layer = fusion_layers[i] if i < len(fusion_layers) else None
+            # fusion_layer = fusion_layers[i] if i < len(fusion_layers) else None
 
             combined = fuse_states(curr_state=curr,
                                    prev_state=prev,
-                                   fusion_layer=fusion_layer,
-                                   mode=fusion_mode)
+                                   mode=fusion_mode,
+                                   state_size=state_size,
+                                   name='{0}-{1}'.format(combine_layer_name, i),
+                                   compression_fraction=compression_fraction,
+                                   compression_seed='{0}{1}'.format(FUSION_SEED, i))
 
             combined_state.append(combined)
 

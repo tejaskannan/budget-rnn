@@ -7,7 +7,6 @@ from utils.constants import SMALL_NUMBER
 from utils.hashing import pearson_hash
 
 
-FusionLayer = namedtuple('FusionLayer', ['dense', 'bias', 'activation'])
 NODES_TO_SKIP = ['initializer', 'dropout']
 
 
@@ -79,6 +78,8 @@ def get_regularizer(name: Optional[str], scale: float) -> Optional[Callable[[tf.
         return tf.contrib.layers.l1_regularizer(scale=scale)
     elif name == 'l2':
         return tf.contrib.layers.l2_regularizer(scale=scale)
+    elif name == 'none':
+        return None
     else:
         raise ValueError(f'Unknown regularization name: {name}')
 
@@ -119,41 +120,61 @@ def pool_rnn_outputs(outputs: tf.Tensor, final_state: tf.Tensor, pool_mode: str,
         raise ValueError(f'Unknown pool mode {pool_mode}.')
 
 
-def fuse_states(curr_state: tf.Tensor, prev_state: Optional[tf.Tensor], fusion_layer: Optional[FusionLayer], mode: Optional[str]) -> tf.Tensor:
-    """
-    Combines the provided states using the specified strategy.
-
-    Args:
-        curr_state: A [B, D] tensor of the current state
-        prev_state: An optional [B, D] tensor of previous state
-        fusion_layer: Optional trainable variables for the fusion layer. Only use when mode = 'gate'
-        mode: The fusion strategy. If None is given, the strategy is an identity.
-    Returns:
-        A [B, D] tensor that represents the fused state
-    """
-    mode = mode.lower() if mode is not None else None
-
-    if mode is None or mode in ('identity', 'none') or prev_state is None:
-        return curr_state
-    elif mode == 'sum':
-        return curr_state + prev_state
-    elif mode in ('sum-tanh', 'sum_tanh'):
-        return tf.nn.tanh(curr_state + prev_state)
-    elif mode in ('avg', 'average'):
-        return (curr_state + prev_state) / 2.0
-    elif mode in ('max', 'max-pool', 'max_pool'):
-        concat = tf.concat([tf.expand_dims(curr_state, axis=-1), tf.expand_dims(prev_state, axis=-1)], axis=-1)  # [B, D, 2]
-        return tf.reduce_max(concat, axis=-1)  # [B, D]
-    elif mode in ('gate', 'gate_layer', 'gate-layer'):
-        concat_states = tf.concat([curr_state, prev_state], axis=-1)  # [B, 2 * D]
-        transform = tf.matmul(concat_states, fusion_layer.dense) + fusion_layer.bias  # [B, D]
-
-        activation = get_activation(fusion_layer.activation)
-        update_weight = activation(transform)  # [B, D]
-
-        return update_weight * curr_state + (1.0 - update_weight) * prev_state
-    else:
-        raise ValueError(f'Unknown fusion mode: {mode}')
+#def fuse_states(curr_state: tf.Tensor,
+#                prev_state: Optional[tf.Tensor],
+#                state_size: int,
+#                mode: Optional[str],
+#                name: str,
+#                compression_fraction: Optional[float] = None,
+#                compression_seed: Optional[str] = None) -> tf.Tensor:
+#    """
+#    Combines the provided states using the specified strategy.
+#
+#    Args:
+#        curr_state: A [B, D] tensor of the current state
+#        prev_state: An optional [B, D] tensor of previous state
+#        fusion_layer: Optional trainable variables for the fusion layer. Only use when mode = 'gate'
+#        state_size: Size (D) of the fused vector
+#        mode: The fusion strategy. If None is given, the strategy is an identity.
+#        name: Name of this layer
+#        compression_fraction: Compression level to apply to any trainable parameters.
+#        compression_seed: Seed to use for hashing function during compression.
+#    Returns:
+#        A [B, D] tensor that represents the fused state
+#    """
+#    mode = mode.lower() if mode is not None else None
+#
+#    if mode is None or mode in ('identity', 'none') or prev_state is None:
+#        return curr_state
+#    elif mode == 'sum':
+#        return curr_state + prev_state
+#    elif mode in ('sum-tanh', 'sum_tanh'):
+#        return tf.nn.tanh(curr_state + prev_state)
+#    elif mode in ('avg', 'average'):
+#        return (curr_state + prev_state) / 2.0
+#    elif mode in ('max', 'max-pool', 'max_pool'):
+#        concat = tf.concat([tf.expand_dims(curr_state, axis=-1), tf.expand_dims(prev_state, axis=-1)], axis=-1)  # [B, D, 2]
+#        return tf.reduce_max(concat, axis=-1)  # [B, D]
+#    elif mode in ('gate', 'gate_layer', 'gate-layer'):
+#        concat_states = tf.concat([curr_state, prev_state], axis=-1)  # [B, 2 * D]
+#
+#        # [B, D]
+#        update_weight = dense(inputs=concat_states,
+#                              units=state_size,
+#                              name=name,
+#                              activation=tf.math.sigmoid,
+#                              use_bias=True,
+#                              compression_fraction=compression_fraction,
+#                              compression_seed=compression_seed)
+#
+#       # transform = tf.matmul(concat_states, fusion_layer.dense) + fusion_layer.bias  # [B, D]
+#
+#       # activation = get_activation(fusion_layer.activation)
+#       # update_weight = activation(transform)  # [B, D]
+#
+#        return update_weight * curr_state + (1.0 - update_weight) * prev_state
+#    else:
+#        raise ValueError(f'Unknown fusion mode: {mode}')
 
 def majority_vote(logits: tf.Tensor) -> tf.Tensor:
     """
@@ -210,10 +231,10 @@ def expand_to_matrix(vec: tf.Tensor, size: int, matrix_dims: Tuple[int, int], na
     signs: List[int] = []
     for i in range(matrix_dims[0]):
         for j in range(matrix_dims[1]):
-            index = pearson_hash('{0}-{1}-{2}'.format(name, i, j)) % size
+            index = pearson_hash('{0}{1}{2}'.format(name, i, j)) % size
 
-            sign_hash = pearson_hash('{0}-{1}-{2}-sign'.format(name, i, j)) % size
-            sign = 2 * int(sign_hash < (size / 2)) - 1
+            sign_hash = pearson_hash('{0}{1}{2}s'.format(name, i, j)) % 2
+            sign = 2 * sign_hash - 1  # Map onto {-1, 1}
             
             indices.append(index)
             signs.append(sign)
