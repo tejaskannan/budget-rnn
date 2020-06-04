@@ -305,3 +305,47 @@ matrix *normalize(matrix *vec, int16_t *mean, int16_t *std, int16_t precision) {
 
     return vec;
 }
+
+
+matrix *hashed_matrix_vector_product(matrix *result, matrix *mat, matrix *vec, char *seed, uint16_t n, int16_t precision) {
+    /**
+     * Computes the matrix vector product using the hashing trick where the matrix is compressed into a vector.
+     */
+    // Validate dimensions.
+    if ((mat->numCols != 1) || (vec->numCols != 1) | (result->numCols != 1)) {
+        return NULL_PTR;
+    }
+    
+    // Create the hashing seed by pre-prending the given prefix.
+    char hash_str[n+3];
+    uint16_t i;
+    for (i = n; i > 0; i--) {
+        hash_str[i - 1] = seed[i - 1];
+    }
+
+    // Compute the matrix vector product
+    uint16_t i_offset, j_offset, j, mat_index;
+    int8_t sign;
+    for (i = result->numRows; i > 0; i--) {
+        i_offset = i - 1;
+
+        result->data[i_offset] = 0;    
+
+        for (j = vec->numRows; j > 0; j--) {
+            j_offset = j - 1;
+
+            // Construct the hashing seed.
+            hash_str[n] = (uint8_t) (i_offset + '0');
+            hash_str[n+1] = (uint8_t) (j_offset + '0');
+            hash_str[n+2] = (uint8_t) 's';
+
+            mat_index = pearson_hash(hash_str, n + 2) % mat->numRows;
+            sign = 2 * (pearson_hash(hash_str, n + 3) % 2)  - 1;
+
+            result->data[i_offset] = fp_add(sign * fp_mul(mat->data[mat_index], vec->data[j_offset], precision), result->data[i_offset]);
+        }
+    }
+
+    return result;
+}
+

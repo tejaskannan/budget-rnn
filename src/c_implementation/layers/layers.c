@@ -119,28 +119,3 @@ matrix *apply_tf_gru(matrix *result, matrix *input, matrix *state, TFGRU *gru, i
  
     return result;
 }
-
-
-//matrix *rnn(matrix *result, matrix **inputs, void *cell, enum CellType cellType, int16_t seqLength, int16_t precision) {
-//    /**
-//     * Implementation of an RNN that outputs the final state to summarize the input sequence.
-//     */
-//    // The output is the final state
-//    matrix *state = result;
-//    matrix_set(state, 0);  // Start with a zero state.
-//
-//    int16_t i;
-//    for (i = 0; i < seqLength; i++) {
-//        matrix *input = inputs[i];
-//
-//        if (cellType == GRUCell) {
-//            state = apply_gru(state, input, state, ((GRU *) cell), precision);
-//        } else if (cellType == TFGRUCell) {
-//            state = apply_tf_gru(state, input, state, ((TFGRU *) cell), precision);
-//        } else {
-//            return NULL_PTR;
-//        }
-//    }
-//
-//    return state;
-//}
