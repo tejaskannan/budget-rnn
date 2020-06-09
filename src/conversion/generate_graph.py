@@ -2,6 +2,20 @@ from argparse import ArgumentParser
 from utils.file_utils import read_by_file_suffix
 from typing import Dict, Any, List
 
+from utils.constants import TRANSFORM_SEED, EMBEDDING_SEED, AGGREGATE_SEED, OUTPUT_SEED, UPDATE_SEED, RESET_SEED, CANDIDATE_SEED, FUSION_SEED
+
+
+def allocate_matrix(mat_name: str, num_rows: int, num_cols: int, prefix: str) -> str:
+    lines: List[str] = []
+    lines.append('{0}matrix {1}Mat;'.format(prefix, mat_name))
+    lines.append('{0}dtype {1}Data[{2}];'.format(prefix, mat_name, num_rows * num_cols))
+    lines.append('{0}{1}Mat.data = {1}Data;'.format(prefix, mat_name))
+    lines.append('{0}{1}Mat.numRows = {2};'.format(prefix, mat_name, num_rows))
+    lines.append('{0}{1}Mat.numCols = {2};'.format(prefix, mat_name, num_cols))
+    lines.append('{0}matrix *{1} = &{1}Mat;'.format(prefix, mat_name)) 
+    
+    return '\n'.join(lines)
+
 
 def create_tf_gru_cell(rnn_layer: Dict[str, str]) -> str:
     return '\tTFGRU rnn_cell = {{ {0}, {1}, {2}, {3} }};\n'.format(rnn_layer['gates_kernel'], rnn_layer['gates_bias'], rnn_layer['candidates_kernel'], rnn_layer['candidates_bias'])
@@ -16,7 +30,7 @@ def create_gru_cell(rnn_layer: Dict[str, str]) -> str:
     W_reset, U_reset, b_reset = rnn_layer['W_reset'], rnn_layer['U_reset'], rnn_layer['b_reset']
     W_candidate, U_candidate, b_candidate = rnn_layer['W_candidate'], rnn_layer['U_candidate'], rnn_layer['b_candidate']
 
-    return '\tGRU rnn_cell = {{ {0}, {1}, {2}, {3}, {4}, {5}, {6}, {7}, {8} }};\n'.format(W_update,
+    return '\tGRU rnn_cell = {{ {0}, {1}, {2}, {3}, {4}, {5}, {6}, {7}, {8} }};\n\n'.format(W_update,
                                                                                           U_update,
                                                                                           b_update,
                                                                                           W_reset,
@@ -34,7 +48,7 @@ def create_fusion_layer(current_state: str, prev_state: str, temp_variable: str,
     return current_state
 
 
-def create_dense_layer(input_var: str, output_var: str, layer_info: List[Dict[str, str]], prefix: str) -> str:
+def create_dense_layer(input_var: str, output_var: str, layer_info: List[Dict[str, str]], hidden_vars: List[str], seed: str, prefix: str) -> str:
     """
     Creates a dense layer using the C implementation.
 
@@ -51,24 +65,18 @@ def create_dense_layer(input_var: str, output_var: str, layer_info: List[Dict[st
         W = layer_info[i]['kernel']
         bias = layer_info[i].get('bias', 'NULL_PTR')
         activation = layer_info[i].get('activation')
-        
+
         # Create the activation function pointer
-        if activation is None:
-            activation = 'NULL_PTR'
+        if activation is None or i == len(layer_info) - 1:
+            activation = '&fp_linear'
         else:
             activation = '&fp_' + activation
 
-        if i < len(layer_info) - 1:
-            layer_var = 'temp{0}'.format(i)
-            code.append('{0}matrix *{1} = matrix_allocate({2}->numRows, {3}->numCols);'.format(prefix, layer_var, W, input_var))
-        else:
-            layer_var = output_var
+        layer_var = output_var if i == len(layer_info) - 1 else hidden_vars[i]
+        layer_seed = seed if i == len(layer_info) - 1 else '{0}{1}'.format(seed, i)
 
-        code.append('{0}{1} = dense({1}, {2}, {3}, {4}, {5}, {6});'.format(prefix, layer_var, input_var, W, bias, activation, 'FIXED_POINT_PRECISION'))
+        code.append('{0}{1} = dense({1}, {2}, {3}, {4}, {5}, {6}, "{7}", {8});'.format(prefix, layer_var, input_var, W, bias, activation, 'IS_COMPRESSED', layer_seed, 'FIXED_POINT_PRECISION'))
         input_var = layer_var
-
-    for i in range(len(layer_info) - 1):
-        code.append('{0}matrix_free(temp{1});'.format(prefix, i))
 
     return '\n'.join(code)
 
@@ -78,7 +86,7 @@ def write_standard_graph(model_params: Dict[str, Any]):
         output_file.write('#include "neural_network.h"\n')
 
         # Create function definition and enclosing for loop
-        output_file.write('int16_t *execute_model(matrix *inputs[SEQ_LENGTH], int16_t *outputs) {\n')
+        output_file.write('int8_t *execute_model(matrix *inputs[SEQ_LENGTH], int8_t *outputs) {\n')
 
         output_file.write(create_tf_gru_cell(model_params['transform']))
         output_file.write('\n')
@@ -88,11 +96,12 @@ def write_standard_graph(model_params: Dict[str, Any]):
         output_file.write('\tmatrix_set(state, 0);\n')
         output_file.write('\tmatrix *temp_state = matrix_allocate({0}, 1);\n\n'.format(model_params['state_size']))
 
-        output_file.write('\tfor (int16_t i = 0; i < SEQ_LENGTH; i++) {\n')
+        output_file.write('\tint16_t i;')
+        output_file.write('\tfor (i = 0; i < SEQ_LENGTH; i++) {\n')
         output_file.write('\t\tmatrix *input = inputs[i];\n')
 
-        # (1) Create the embedding layer
-        embedding_layer = create_dense_layer('input', 'transformed', model_params['embedding'], prefix='\t\t')
+        # (1) Create the embedding layer. We don't support hidden layers (yet)
+        embedding_layer = create_dense_layer('input', 'transformed', model_params['embedding'], hidden_vars=[], prefix='\t\t')
         output_file.write(embedding_layer)
         output_file.write('\n')
 
@@ -133,44 +142,58 @@ def write_adaptive_graph(model_params: Dict[str, str]):
     num_sequences = int(seq_length / samples_per_seq)
     state_size = model_params['state_size']
 
-    print(num_sequences)
     with open('neural_network.c', 'w') as output_file:
         output_file.write('#include "neural_network.h"\n')
 
         # Create function definition and enclosing for loop
-        output_file.write('int16_t *execute_model(matrix *inputs[SEQ_LENGTH], int16_t *outputs) {\n')
+        output_file.write('int8_t *execute_model(matrix *inputs[SEQ_LENGTH], int8_t *outputs) {\n')
 
         # Create the GRU Cell
         output_file.write(create_gru_cell(model_params['transform']))
         output_file.write('\n')
 
         # Allocate temporary variables
-        output_file.write('\tmatrix *transformed = matrix_allocate({0}, 1);\n'.format(state_size))
-        output_file.write('\tmatrix *state = matrix_allocate({0}, 1);\n'.format(state_size))
-        output_file.write('\tmatrix *temp_state = matrix_allocate({0}, 1);\n'.format(state_size))
-        output_file.write('\tmatrix *fusion_stack = matrix_allocate(2 * {0}, 1);\n'.format(state_size))
-        output_file.write('\tmatrix *fusion_gate = matrix_allocate({0}, 1);\n\n'.format(state_size))
+        temp_vars = ['transformed','state', 'temp_state', 'fusion_stack', 'fusion_gate', 'gateTemp']
+        for temp_var in temp_vars:
+            output_file.write('{0}\n\n'.format(allocate_matrix(temp_var, state_size, 1, prefix='\t')))
 
-        output_kernel = model_params['output'][-1]['kernel']
-        output_file.write('\tmatrix *output = matrix_allocate({0}->numRows, 1);\n\n'.format(output_kernel))
+        # Create output dense layers
+        output_hidden_units = model_params['output_hidden_units']
+        output_hidden_vars: List[str] = []
+        for i in range(len(output_hidden_units)):
+            name = 'outputTemp{0}'.format(i)
+            output_hidden_vars.append(name)
+            output_file.write('{0}\n\n'.format(allocate_matrix(name, output_hidden_units[i], 1, prefix='\t')))
+
+        num_outputs = model_params['output_units']
+        output_file.write('{0}\n\n'.format(allocate_matrix('output', num_outputs, 1, prefix='\t')))
 
         output_file.write('\tmatrix *prev_states[SAMPLES_PER_SEQ];\n')
-        output_file.write('\tfor (int16_t i = 0; i < SAMPLES_PER_SEQ; i++) {\n')
-        output_file.write('\t\tprev_states[i] = matrix_allocate({0}, 1);\n'.format(state_size))
-        output_file.write('\t}\n\n')
+        for i in range(samples_per_seq):
+            output_file.write('{0}\n'.format(allocate_matrix('prevStates{0}'.format(i), state_size, 1, prefix='\t')))
+            output_file.write('\tprev_states[{0}] = prevStates{0};\n\n'.format(i))
 
-        output_file.write('\tfor (int16_t i = 0; i < {0}; i++) {{\n'.format(num_sequences))
+        # Create the GRU temporary state
+        output_file.write('\tGRUTempStates gruTemp;\n')
+    
+        temp_vars = ['update', 'reset', 'candidate', 'inputTemp', 'gateTemp']
+        for temp_var in temp_vars:
+            output_file.write('{0}\n'.format(allocate_matrix('gruTemp{0}'.format(temp_var.capitalize()), state_size, 1, prefix='\t')))
+            output_file.write('\tgruTemp.{0} = gruTemp{1};\n\n'.format(temp_var, temp_var.capitalize()))
+
+        output_file.write('\tint16_t i, j;\n')
+        output_file.write('\tfor (i = 0; i < NUM_SEQUENCES; i++) {\n')
 
         # Initialize state to zero at the beginning of each sequence
         output_file.write('\t\tmatrix_set(state, 0);\n')
 
-        output_file.write('\t\tfor (int16_t j = 0; j < {0}; j++) {{\n'.format('SAMPLES_PER_SEQ'))
+        output_file.write('\t\tfor (j = 0; j < {0}; j++) {{\n'.format('SAMPLES_PER_SEQ'))
 
         # Fetch the input
         output_file.write('\t\t\tmatrix *input = inputs[j * {0} + i];\n'.format(num_sequences))
 
         # Apply the embedding layer
-        embedding_layer = create_dense_layer('input', 'transformed', model_params['embedding'], prefix='\t\t\t')
+        embedding_layer = create_dense_layer('input', 'transformed', model_params['embedding'], hidden_vars=[], seed=EMBEDDING_SEED, prefix='\t\t\t')
         output_file.write(embedding_layer)
         output_file.write('\n')
 
@@ -178,23 +201,23 @@ def write_adaptive_graph(model_params: Dict[str, str]):
         output_file.write('\t\t\tif (i > 0) {\n')
         output_file.write('\t\t\t\tfusion_stack = stack(fusion_stack, state, prev_states[j]);\n')
 
-        fusion_layer = create_dense_layer('fusion_stack', 'fusion_gate', model_params['fusion'], prefix='\t\t\t\t')
+        fusion_layer = create_dense_layer('fusion_stack', 'fusion_gate', model_params['fusion'], hidden_vars=[], seed=FUSION_SEED, prefix='\t\t\t\t')
         output_file.write(fusion_layer)
         output_file.write('\n')
 
-        output_file.write('\t\t\t\ttemp_state = apply_gate(temp_state, fusion_gate, state, prev_states[j], FIXED_POINT_PRECISION);\n')
+        output_file.write('\t\t\t\ttemp_state = apply_gate(temp_state, fusion_gate, state, prev_states[j], gateTemp, FIXED_POINT_PRECISION);\n')
         output_file.write('\t\t\t\tstate = matrix_replace(state, temp_state);\n')
 
         output_file.write('\t\t\t}\n')
 
-        # (2) Create the transformation layer
-        output_file.write('\t\t\ttemp_state = apply_gru(temp_state, transformed, state, &rnn_cell, FIXED_POINT_PRECISION);\n')
+        # (2) Create the transformation layer. We currently only support single layer RNN cells.
+        output_file.write('\t\t\ttemp_state = apply_gru(temp_state, transformed, state, &rnn_cell, &gruTemp, IS_COMPRESSED, 0, FIXED_POINT_PRECISION);\n')
         output_file.write('\t\t\tstate = matrix_replace(state, temp_state);\n')
         output_file.write('\t\t\tmatrix_replace(prev_states[j], state);\n')
         output_file.write('\t\t}\n\n')
 
         # (3) Create the output layer
-        output_layer = create_dense_layer('state', 'output', model_params['output'], prefix='\t\t')
+        output_layer = create_dense_layer('state', 'output', model_params['output'], hidden_vars=output_hidden_vars, seed=OUTPUT_SEED, prefix='\t\t')
         output_file.write(output_layer)
         output_file.write('\n\n')
 
@@ -210,13 +233,16 @@ def write_adaptive_graph(model_params: Dict[str, str]):
         output_file.write('\t}\n\n')
 
         # Free all memory
-        variables = ['transformed', 'state', 'fusion_gate', 'fusion_stack', 'output', 'temp_state']
-        for variable in variables:
-            output_file.write('\tmatrix_free({0});\n'.format(variable))
+        #gruMembers = ['update', 'reset', 'candidate', 'inputTemp', 'gateTemp']
+        #gruStates = ['gruTemp.{0}'.format(member) for member in gruMembers]
 
-        output_file.write('\tfor (int16_t i = 0; i < SAMPLES_PER_SEQ; i++) {\n')
-        output_file.write('\t\tmatrix_free(prev_states[i]);\n')
-        output_file.write('\t}\n\n')
+        #variables = ['transformed', 'state', 'fusion_gate', 'fusion_stack', 'output', 'temp_state', 'gateTemp'] + gruStates
+        #for variable in variables:
+        #    output_file.write('\tmatrix_free({0});\n'.format(variable))
+
+        #output_file.write('\tfor (i = 0; i < SAMPLES_PER_SEQ; i++) {\n')
+        #output_file.write('\t\tmatrix_free(prev_states[i]);\n')
+        #output_file.write('\t}\n\n')
 
         output_file.write('\treturn outputs;\n')
         output_file.write('}\n')
