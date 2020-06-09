@@ -570,7 +570,7 @@ void test_hashed_prod_one(void) {
 
     matrix *result = matrix_allocate(3, 1);
 
-    result = hashed_matrix_vector_product(result, mat, vec, "tr", 2, precision);
+    result = hashed_matrix_vector_product(result, mat, vec, "tr", precision);
 
     assert(matrix_equal(expected, result));
 
@@ -597,7 +597,7 @@ void test_hashed_prod_two(void) {
 
     matrix *result = matrix_allocate(3, 1);
 
-    result = hashed_matrix_vector_product(result, mat, vec, "tr", 2, precision);
+    result = hashed_matrix_vector_product(result, mat, vec, "tr", precision);
 
     assert(matrix_equal(expected, result));
 
@@ -624,7 +624,7 @@ void test_hashed_prod_three(void) {
 
     matrix *result = matrix_allocate(3, 1);
 
-    result = hashed_matrix_vector_product(result, mat, vec, "tr", 2, precision);
+    result = hashed_matrix_vector_product(result, mat, vec, "tr", precision);
 
     assert(matrix_equal(expected, result));
 
@@ -651,7 +651,7 @@ void test_hashed_prod_four(void) {
 
     matrix *result = matrix_allocate(3, 1);
 
-    result = hashed_matrix_vector_product(result, mat, vec, "tr", 2, precision);
+    result = hashed_matrix_vector_product(result, mat, vec, "tr", precision);
 
     assert(matrix_equal(expected, result));
 

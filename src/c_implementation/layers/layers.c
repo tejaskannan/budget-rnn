@@ -1,11 +1,18 @@
 #include "layers.h"
 
 
-matrix *dense(matrix *result, matrix *input, matrix *W, matrix *b, int16_t (*activation)(int16_t, int16_t), int16_t precision) {
+matrix *dense(matrix *result, matrix *input, matrix *W, matrix *b, int16_t (*activation)(int16_t, int16_t), uint8_t is_compressed, char *seed, int16_t precision) {
     /**
      * Implementation of a dense feed-forward layer using matrix operations.
      */
-    result = matrix_multiply(result, W, input, precision);
+
+    // If the weights are compressed, then we use the hashing trick to compute the matrix multiplication. Otherwise,
+    // we  perform standard matrix multiplication.
+    if (is_compressed) {
+        result = hashed_matrix_vector_product(result, W, input, seed, precision);
+    } else { 
+        result = matrix_multiply(result, W, input, precision);
+    }
 
     if (!isNull(b)) {
         result = matrix_add(result, result, b);
@@ -21,17 +28,15 @@ matrix *apply_gate(matrix *result, matrix *gate, matrix *first, matrix *second, 
     // matrix *opp_gate = matrix_allocate(gate->numRows, gate->numCols);
     temp = scalar_product(temp, gate, int_to_fp(-1, precision), precision);
     temp = scalar_add(temp, temp, int_to_fp(1, precision));
-    // opp_gate = scalar_add(opp_gate, scalar_product(opp_gate, gate, int_to_fp(-1, precision), precision), int_to_fp(1, precision));
 
     temp = matrix_hadamard(temp, second, temp, precision);
     result = matrix_add(result, matrix_hadamard(result, first, gate, precision), temp);
 
-    // matrix_free(opp_gate);
     return result;
 }
 
 
-matrix *apply_gru(matrix *result, matrix *input, matrix *state, GRU *gru, GRUTempStates *temp, int16_t precision) {
+matrix *apply_gru(matrix *result, matrix *input, matrix *state, GRU *gru, GRUTempStates *temp, uint8_t is_compressed, uint8_t layer, int16_t precision) {
     /**
      * Implementation of a GRU Cell.
      */
@@ -42,27 +47,84 @@ matrix *apply_gru(matrix *result, matrix *input, matrix *state, GRU *gru, GRUTem
     matrix *inputTemp = temp->inputTemp;
     matrix *tempGate = temp->gateTemp;
 
+    char hash_seed[8];
+    replace(hash_seed, TRANSFORM_SEED, 0);
+    hash_seed[6] = (char) (layer + '0');
+    hash_seed[7] = '\0'; // Make sure the seed is null-terminated
+
     // Create the update state
-    inputTemp = matrix_multiply(inputTemp, gru->uUpdate, input, precision);
-    update = matrix_multiply(update, gru->wUpdate, state, precision);
+    if (is_compressed) {
+        hash_seed[3] = 'U';
+        replace(hash_seed, UPDATE_SEED, 4);
+        inputTemp = hashed_matrix_vector_product(inputTemp, gru->uUpdate, input, hash_seed, precision);
+
+        hash_seed[3] = 'W';
+        update = hashed_matrix_vector_product(inputTemp, gru->wUpdate, state, hash_seed, precision);
+    } else {
+        inputTemp = matrix_multiply(inputTemp, gru->uUpdate, input, precision);
+        update = matrix_multiply(update, gru->wUpdate, state, precision);
+    }
+
     update = matrix_add(update, update, inputTemp);
     update = matrix_add(update, update, gru->bUpdate);
     update = apply_elementwise(update, update, &fp_sigmoid, precision);
 
     // Create the reset state
-    inputTemp = matrix_multiply(inputTemp, gru->uReset, input, precision);
-    reset = matrix_multiply(reset, gru->wReset, state, precision);
+    if (is_compressed) {
+        hash_seed[3] = 'U';
+        replace(hash_seed, UPDATE_SEED, 4);
+        inputTemp = hashed_matrix_vector_product(inputTemp, gru->uReset, input, hash_seed, precision);
+        
+        hash_seed[3] = 'W';
+        reset = hashed_matrix_vector_product(reset, gru->wReset, state, hash_seed, precision);
+    } else {
+        inputTemp = matrix_multiply(inputTemp, gru->uReset, input, precision);
+        reset = matrix_multiply(reset, gru->wReset, state, precision);
+    }
+
     reset = matrix_add(reset, reset, inputTemp);
     reset = matrix_add(reset, reset, gru->bReset);
     reset = apply_elementwise(reset, reset, &fp_sigmoid, precision);
     reset = matrix_hadamard(reset, state, reset, precision);
 
     // Create the candidate state
-    inputTemp = matrix_multiply(inputTemp, gru->uCandidate, input, precision);
-    candidate = matrix_multiply(candidate, gru->wCandidate, reset, precision);
+    if (is_compressed) {
+        hash_seed[3] = 'U';
+        replace(hash_seed, CANDIDATE_SEED, 4);
+        inputTemp = hashed_matrix_vector_product(inputTemp, gru->uCandidate, input, hash_seed, precision);
+
+        hash_seed[3] = 'W';
+        candidate = hashed_matrix_vector_product(candidate, gru->wCandidate, reset, hash_seed, precision);
+    } else {
+        inputTemp = matrix_multiply(inputTemp, gru->uCandidate, input, precision);
+        candidate = matrix_multiply(candidate, gru->wCandidate, reset, precision);
+    }
+    
     candidate = matrix_add(candidate, candidate, inputTemp);
     candidate = matrix_add(candidate, candidate, gru->bCandidate);
     candidate = apply_elementwise(candidate, candidate, &fp_tanh, precision);
+
+    // Create the update state
+//    inputTemp = matrix_multiply(inputTemp, gru->uUpdate, input, precision);
+//    update = matrix_multiply(update, gru->wUpdate, state, precision);
+//    update = matrix_add(update, update, inputTemp);
+//    update = matrix_add(update, update, gru->bUpdate);
+//    update = apply_elementwise(update, update, &fp_sigmoid, precision);
+//
+//    // Create the reset state
+//    inputTemp = matrix_multiply(inputTemp, gru->uReset, input, precision);
+//    reset = matrix_multiply(reset, gru->wReset, state, precision);
+//    reset = matrix_add(reset, reset, inputTemp);
+//    reset = matrix_add(reset, reset, gru->bReset);
+//    reset = apply_elementwise(reset, reset, &fp_sigmoid, precision);
+//    reset = matrix_hadamard(reset, state, reset, precision);
+//
+//    // Create the candidate state
+//    inputTemp = matrix_multiply(inputTemp, gru->uCandidate, input, precision);
+//    candidate = matrix_multiply(candidate, gru->wCandidate, reset, precision);
+//    candidate = matrix_add(candidate, candidate, inputTemp);
+//    candidate = matrix_add(candidate, candidate, gru->bCandidate);
+//    candidate = apply_elementwise(candidate, candidate, &fp_tanh, precision);
 
     // Construct the result
     result = apply_gate(result, update, state, candidate, tempGate, precision);

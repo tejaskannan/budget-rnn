@@ -3,6 +3,7 @@
 #include "../memory.h"
 #include "fixed_point_ops.h"
 #include "hashing.h"
+#include "../utils/string_utils.h"
 
 #ifndef MATRIX_OPS_GUARD
     #define MATRIX_OPS_GUARD
@@ -22,6 +23,6 @@
     matrix *stack(matrix *result, matrix *vec1, matrix *vec2);
     int16_t argmax(matrix *vec);
     matrix *normalize(matrix *vec, int16_t *mean, int16_t *std, int16_t precision);
-    matrix *hashed_matrix_vector_product(matrix *result, matrix *mat, matrix *vec, char *seed, uint16_t n, int16_t precision);
+    matrix *hashed_matrix_vector_product(matrix *result, matrix *mat, matrix *vec, char *seed, int16_t precision);
 
 #endif

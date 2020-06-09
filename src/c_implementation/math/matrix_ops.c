@@ -307,7 +307,7 @@ matrix *normalize(matrix *vec, int16_t *mean, int16_t *std, int16_t precision) {
 }
 
 
-matrix *hashed_matrix_vector_product(matrix *result, matrix *mat, matrix *vec, char *seed, uint16_t n, int16_t precision) {
+matrix *hashed_matrix_vector_product(matrix *result, matrix *mat, matrix *vec, char *seed, int16_t precision) {
     /**
      * Computes the matrix vector product using the hashing trick where the matrix is compressed into a vector.
      */
@@ -316,15 +316,16 @@ matrix *hashed_matrix_vector_product(matrix *result, matrix *mat, matrix *vec, c
         return NULL_PTR;
     }
     
+    // Get the length of the seed
+    uint16_t n = string_length(seed);
+
     // Create the hashing seed by pre-prending the given prefix.
-    char hash_str[n+3];
-    uint16_t i;
-    for (i = n; i > 0; i--) {
-        hash_str[i - 1] = seed[i - 1];
-    }
+    char hash_str[n+4];
+    string_copy(hash_str, seed, n);
+    hash_str[n+3] = '\0';  // Ensure the string is null-terminated
 
     // Compute the matrix vector product
-    uint16_t i_offset, j_offset, j, mat_index;
+    uint16_t i, j, i_offset, j_offset, mat_index;
     int8_t sign;
     for (i = result->numRows; i > 0; i--) {
         i_offset = i - 1;
