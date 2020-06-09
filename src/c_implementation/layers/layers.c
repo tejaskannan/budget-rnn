@@ -104,46 +104,34 @@ matrix *apply_gru(matrix *result, matrix *input, matrix *state, GRU *gru, GRUTem
     candidate = matrix_add(candidate, candidate, gru->bCandidate);
     candidate = apply_elementwise(candidate, candidate, &fp_tanh, precision);
 
-    // Create the update state
-//    inputTemp = matrix_multiply(inputTemp, gru->uUpdate, input, precision);
-//    update = matrix_multiply(update, gru->wUpdate, state, precision);
-//    update = matrix_add(update, update, inputTemp);
-//    update = matrix_add(update, update, gru->bUpdate);
-//    update = apply_elementwise(update, update, &fp_sigmoid, precision);
-//
-//    // Create the reset state
-//    inputTemp = matrix_multiply(inputTemp, gru->uReset, input, precision);
-//    reset = matrix_multiply(reset, gru->wReset, state, precision);
-//    reset = matrix_add(reset, reset, inputTemp);
-//    reset = matrix_add(reset, reset, gru->bReset);
-//    reset = apply_elementwise(reset, reset, &fp_sigmoid, precision);
-//    reset = matrix_hadamard(reset, state, reset, precision);
-//
-//    // Create the candidate state
-//    inputTemp = matrix_multiply(inputTemp, gru->uCandidate, input, precision);
-//    candidate = matrix_multiply(candidate, gru->wCandidate, reset, precision);
-//    candidate = matrix_add(candidate, candidate, inputTemp);
-//    candidate = matrix_add(candidate, candidate, gru->bCandidate);
-//    candidate = apply_elementwise(candidate, candidate, &fp_tanh, precision);
-
     // Construct the result
     result = apply_gate(result, update, state, candidate, tempGate, precision);
  
     return result;
 }
 
-matrix *apply_tf_gru(matrix *result, matrix *input, matrix *state, TFGRU *gru, int16_t precision) {
+matrix *apply_tf_gru(matrix *result, matrix *input, matrix *state, TFGRU *gru, TFGRUTempStates *tempStates, int16_t precision) {
     /**
-     * Implementation of a GRU Cell.
+     * Implementation of a Tensorflow GRU Cell. This implementation applies a matrix to a stack version of state
+     * and inputs instead of separating the matrices out.
      */
     // Allocate matrices for the intermediate state
-    matrix *stacked = matrix_allocate(input->numRows + state->numRows, state->numCols);
-    matrix *gates = matrix_allocate(state->numRows * 2, state->numCols);
-    matrix *candidate = matrix_allocate(state->numRows, state->numCols);
-    matrix *update = matrix_allocate(state->numRows, state->numCols);
-    matrix *reset = matrix_allocate(state->numRows, state->numCols);
-    matrix *tempGate = matrix_allocate(state->numRows, state->numCols);
-   
+   // matrix *stacked = matrix_allocate(input->numRows + state->numRows, state->numCols);
+   // matrix *gates = matrix_allocate(state->numRows * 2, state->numCols);
+   // matrix *candidate = matrix_allocate(state->numRows, state->numCols);
+   // matrix *update = matrix_allocate(state->numRows, state->numCols);
+   // matrix *reset = matrix_allocate(state->numRows, state->numCols);
+   // matrix *tempGate = matrix_allocate(state->numRows, state->numCols);
+
+    // Unpack the temp states
+    matrix *stacked = tempStates->stacked;
+    matrix *gates = tempStates->gates;
+    matrix *candidate = tempStates->candidate;
+    matrix *update = tempStates->update;
+    matrix *reset = tempStates->reset;
+    matrix *tempGate = tempStates->tempGate;
+    // matrix *tempGate = matrix_allocate(state->numRows, state->numCols);
+
     // Create the gates
     stacked = stack(stacked, input, state);
     gates = matrix_multiply(gates, gru->wGates, stacked, precision);
@@ -171,13 +159,13 @@ matrix *apply_tf_gru(matrix *result, matrix *input, matrix *state, TFGRU *gru, i
 
     // Construct the result
     result = apply_gate(result, update, state, candidate, tempGate, precision);
- 
+
     // Free intermediate states
-    matrix_free(update);
-    matrix_free(reset);
-    matrix_free(candidate);
-    matrix_free(stacked);
-    matrix_free(gates);
+//    matrix_free(update);
+//    matrix_free(reset);
+//    matrix_free(candidate);
+//    matrix_free(stacked);
+//    matrix_free(gates);
  
     return result;
 }
