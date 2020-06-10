@@ -7,11 +7,11 @@ from models.adaptive_model import AdaptiveModel
 from dataset.dataset import DataSeries, Dataset
 from dataset.dataset_factory import get_dataset
 from utils.hyperparameters import HyperParameters
-from utils.constants import METADATA_PATH, HYPERS_PATH, TEST_LOG_PATH
+from utils.constants import METADATA_PATH, HYPERS_PATH, TEST_LOG_PATH, OPTIMIZED_TEST_LOG_PATH, TRAIN
 from utils.rnn_utils import get_prediction_name
 from utils.testing_utils import ClassificationMetric
 from utils.file_utils import extract_model_name, read_by_file_suffix, save_by_file_suffix
-from genetic_optimizer import GeneticThresholdOptimizer
+from threshold_optimization.genetic_optimizer import GeneticThresholdOptimizer
 
 
 def make_dataset(model_name: str, save_folder: str, dataset_type: str, dataset_folder: Optional[str]) -> Dataset:
@@ -55,6 +55,27 @@ def get_serialized_info(model_path: str, dataset_folder: Optional[str]) -> Tuple
     return model, dataset, test_log
 
 
+def compute_thresholds(model: AdaptiveModel, opt_params: Dict[str, Any], flops_per_level: List[float]) -> Dict[str, float]:
+    best_accuracy = None
+    best_optimizer = None
+
+    for _ in range(opt_params['trials']):
+        threshold_optimizer = GeneticThresholdOptimizer(model=model, params=opt_params)
+        threshold_optimizer.fit(dataset, series=DataSeries.VALID)
+
+        valid_results = threshold_optimizer.score(dataset, series=DataSeries.VALID, flops_per_level=flops_per_level)
+        acc = valid_results[ClassificationMetric.ACCURACY.name]
+
+        if best_accuracy is None or acc > best_accuracy:
+            best_accuracy = acc
+            best_optimizer = threshold_optimizer
+
+    print('Completed optimization. Starting testing.')
+    test_results = best_optimizer.score(dataset, series=DataSeries.TEST, flops_per_level=flops_per_level)
+    print('Completed Testing. Accuracy: {0:.4f}. Avg Levels: {1:.4f}.'.format(test_results[ClassificationMetric.ACCURACY.name], test_results[ClassificationMetric.LEVEL.name]))
+
+    return test_results
+
 
 if __name__ == '__main__':
     parser = ArgumentParser()
@@ -75,14 +96,14 @@ if __name__ == '__main__':
     # Retrieved saved information
     model, dataset, test_log = get_serialized_info(args.model_path, args.dataset_folder)
 
+    save_folder, model_path = os.path.split(args.model_path)
+    model_name = extract_model_name(model_path)
+
     prediction_names = [get_prediction_name(i) for i in range(model.num_outputs)]
     flops_per_level = [test_log[name][ClassificationMetric.FLOPS.name] for name in prediction_names]
 
     for opt_params in params:
-        threshold_optimizer = GeneticThresholdOptimizer(model=model, params=opt_params)
-        threshold_optimizer.fit(dataset, series=DataSeries.VALID)
+        test_results = compute_thresholds(model, opt_params, flops_per_level)
 
-        valid_results = threshold_optimizer.score(dataset, series=DataSeries.VALID, flops_per_level=flops_per_level)
-        print(valid_results)
-
-
+        optimized_test_log_path = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format('genetic', opt_params['level_penalty'], opt_params['population_size'],  model_name))
+        save_by_file_suffix([test_results], optimized_test_log_path)

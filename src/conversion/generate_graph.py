@@ -5,6 +5,10 @@ from typing import Dict, Any, List
 from utils.constants import TRANSFORM_SEED, EMBEDDING_SEED, AGGREGATE_SEED, OUTPUT_SEED, UPDATE_SEED, RESET_SEED, CANDIDATE_SEED, FUSION_SEED
 
 
+INCLUDE_HEADER = '#include "neural_network.h"\n'
+METHOD_DEF = 'int8_t *execute_model(matrix *inputs[SEQ_LENGTH], int8_t *outputs) {\n'
+
+
 def allocate_matrix(mat_name: str, num_rows: int, num_cols: int, prefix: str) -> str:
     lines: List[str] = []
     lines.append('{0}matrix {1}Mat;'.format(prefix, mat_name))
@@ -82,55 +86,76 @@ def create_dense_layer(input_var: str, output_var: str, layer_info: List[Dict[st
 
 
 def write_standard_graph(model_params: Dict[str, Any]):
+    state_size = model_params['state_size']
+
     with open('neural_network.c', 'w') as output_file:
-        output_file.write('#include "neural_network.h"\n')
+        output_file.write(INCLUDE_HEADER)
 
         # Create function definition and enclosing for loop
-        output_file.write('int8_t *execute_model(matrix *inputs[SEQ_LENGTH], int8_t *outputs) {\n')
+        output_file.write(METHOD_DEF)
 
         output_file.write(create_tf_gru_cell(model_params['transform']))
         output_file.write('\n')
 
-        output_file.write('\tmatrix *transformed = matrix_allocate({0}, 1);\n'.format(model_params['state_size']))
-        output_file.write('\tmatrix *state = matrix_allocate({0}, 1);\n'.format(model_params['state_size']))
-        output_file.write('\tmatrix_set(state, 0);\n')
-        output_file.write('\tmatrix *temp_state = matrix_allocate({0}, 1);\n\n'.format(model_params['state_size']))
+        # Allocate temporary variables
+        temp_var_names = ['transformed', 'state', 'temp_state']
+        for temp_var in temp_var_names:
+            output_file.write('{0}\n\n'.format(allocate_matrix(temp_var, state_size, 1, prefix='\t')))
 
-        output_file.write('\tint16_t i;')
+        output_file.write('\tTFGRUTempStates gruTemp;\n')
+        temp_vars = ['stacked', 'gates', 'candidate', 'update', 'reset', 'tempGate']
+        for temp_var in temp_vars:
+            size = 2 * state_size if temp_var in {'stacked', 'gates'} else state_size
+            output_file.write('{0}\n'.format(allocate_matrix('gruTemp{0}'.format(temp_var.capitalize()), size, 1, prefix='\t')))
+            output_file.write('\tgruTemp.{0} = gruTemp{1};\n\n'.format(temp_var, temp_var.capitalize()))
+
+        output_hidden_units = model_params['output_hidden_units']
+        output_hidden_vars: List[str] = []
+        for i in range(len(output_hidden_units)):
+            name = 'outputTemp{0}'.format(i)
+            output_hidden_vars.append(name)
+            output_file.write('{0}\n\n'.format(allocate_matrix(name, output_hidden_units[i], 1, prefix='\t')))
+
+        num_outputs = model_params['output_units']
+        output_file.write('{0}\n\n'.format(allocate_matrix('output', num_outputs, 1, prefix='\t')))
+
+        # Initialize state to all zeros
+        output_file.write('\tmatrix_set(state, 0);\n')
+
+        output_file.write('\tuint16_t i;\n')
         output_file.write('\tfor (i = 0; i < SEQ_LENGTH; i++) {\n')
         output_file.write('\t\tmatrix *input = inputs[i];\n')
 
-        # (1) Create the embedding layer. We don't support hidden layers (yet)
-        embedding_layer = create_dense_layer('input', 'transformed', model_params['embedding'], hidden_vars=[], prefix='\t\t')
+        # Create the embedding layer. We don't support hidden layers (yet)
+        embedding_layer = create_dense_layer('input', 'transformed', model_params['embedding'], hidden_vars=[], seed=EMBEDDING_SEED, prefix='\t\t')
         output_file.write(embedding_layer)
         output_file.write('\n')
 
-        # (2) Create the transformation layer
-        output_file.write('\t\ttemp_state = apply_tf_gru(temp_state, transformed, state, &rnn_cell, FIXED_POINT_PRECISION);\n')
+        # Create the transformation layer
+        output_file.write('\t\ttemp_state = apply_tf_gru(temp_state, transformed, state, &rnn_cell, &gruTemp, FIXED_POINT_PRECISION);\n')
         output_file.write('\t\tstate = matrix_replace(state, temp_state);\n')
         output_file.write('\t}\n')
 
-        # (3) Create the output layer
-        output_kernel = model_params['output'][-1]['kernel']
-        output_file.write('\n\tmatrix *output = matrix_allocate({0}->numRows, 1);\n'.format(output_kernel))
-        output_layer = create_dense_layer('state', 'output', model_params['output'], prefix='\t')
+        # Create the output layer
+        output_layer = create_dense_layer('state', 'output', model_params['output'], hidden_vars=output_hidden_vars, seed=OUTPUT_SEED, prefix='\t')
         output_file.write(output_layer)
         output_file.write('\n\n')
 
         if model_params['output_type'] == 'multi_classification':
             output_file.write('\tint16_t prediction = argmax(output);\n')
         elif model_params['output_type'] == 'binary_classification':
-            output_file.write('\tint16_t prediction = (int16_t) output->data[0] > 0;\n')
+            output_file.write('\tint16_t prediction = (int8_t) output->data[0] > 0;\n')
         else:
             output_file.write('\tint16_t prediction = output->data[0];\n')
 
+        # Save in output array
         output_file.write('\t*outputs = prediction;\n')
 
-        # Free all intermediate states
-        output_file.write('\tmatrix_free({0});\n'.format('transformed'))
-        output_file.write('\tmatrix_free({0});\n'.format('state'))
-        output_file.write('\tmatrix_free({0});\n'.format('temp_state'))
-        output_file.write('\tmatrix_free({0});\n\n'.format('output'))
+        ## Free all intermediate states
+        #output_file.write('\tmatrix_free({0});\n'.format('transformed'))
+        #output_file.write('\tmatrix_free({0});\n'.format('state'))
+        #output_file.write('\tmatrix_free({0});\n'.format('temp_state'))
+        #output_file.write('\tmatrix_free({0});\n\n'.format('output'))
 
         output_file.write('\treturn outputs;\n')
         output_file.write('}')
@@ -153,9 +178,11 @@ def write_adaptive_graph(model_params: Dict[str, str]):
         output_file.write('\n')
 
         # Allocate temporary variables
-        temp_vars = ['transformed','state', 'temp_state', 'fusion_stack', 'fusion_gate', 'gateTemp']
+        temp_vars = ['transformed','state', 'temp_state', 'fusion_gate', 'gateTemp']
         for temp_var in temp_vars:
             output_file.write('{0}\n\n'.format(allocate_matrix(temp_var, state_size, 1, prefix='\t')))
+
+        output_file.write('{0}\n\n'.format(allocate_matrix('fusion_stack', state_size * 2, 1, prefix='\t')))
 
         # Create output dense layers
         output_hidden_units = model_params['output_hidden_units']

@@ -215,7 +215,7 @@ class GeneticThresholdOptimizer:
         predictions, levels = threshold_predictions(normalized_logits, thresholds=thresholds)
 
         accuracy = np.average((predictions == labels).astype(float))
-        level_penalty = -1 * self._level_penalty * np.average(levels)
+        level_penalty = -1 * self._level_penalty * np.average(levels / self._model.num_outputs)
 
         return accuracy + level_penalty
 
