@@ -3,6 +3,7 @@ from typing import Tuple, Dict, Optional, Any, List
 
 from layers.basic import dense
 from utils.tfutils import get_activation
+from utils.constants import TRANSFORM_SEED, UPDATE_SEED, RESET_SEED, CANDIDATE_SEED
 
 
 def make_rnn_cell(cell_type: str,
@@ -35,15 +36,37 @@ def make_single_rnn_cell(cell_type: str,
                          dropout_keep_rate: tf.Tensor,
                          name: str,
                          use_skip_connections: bool = False,
-                         compression_fraction: Optional[float] = None):
+                         compression_fraction: Optional[float] = None,
+                         layer: int = 0):
     cell_type = cell_type.lower()
 
     if cell_type == 'gru':
-        return GRU(input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections, compression_fraction=compression_fraction)
+        return GRU(input_units=input_units,
+                   output_units=output_units,
+                   activation=activation,
+                   dropout_keep_rate=dropout_keep_rate,
+                   name=name,
+                   layer=layer,
+                   use_skip_connections=use_skip_connections,
+                   compression_fraction=compression_fraction)
     if cell_type == 'vanilla':
-        return VanillaCell(input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections, compression_fraction=compression_fraction)
+        return VanillaCell(input_units=input_units,
+                           output_units=output_units,
+                           activation=activation,
+                           dropout_keep_rate=dropout_keep_rate,
+                           name=name,
+                           layer=layer,
+                           use_skip_connections=use_skip_connections,
+                           compression_fraction=compression_fraction)
     if cell_type == 'lstm':
-        return LSTM(input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections, compression_fraction=compression_fraction)
+        return LSTM(input_units=input_units,
+                    output_units=output_units,
+                    activation=activation,
+                    dropout_keep_rate=dropout_keep_rate,
+                    name=name,
+                    layer=layer,
+                    use_skip_connections=use_skip_connections,
+                    compression_fraction=compression_fraction)
     raise ValueError(f'Unknown cell name {cell_type}!')
 
 
@@ -55,7 +78,8 @@ class RNNCell:
                  activation: str,
                  dropout_keep_rate: tf.Tensor,
                  name: str,
-                 use_skip_connections: bool = False,
+                 layer: int,
+                 use_skip_connections: bool,
                  state_size: Optional[int] = None,
                  compression_fraction: Optional[float] = None):
         """
@@ -67,6 +91,7 @@ class RNNCell:
             activation: Name of the activation function (i.e. tanh)
             dropout_keep_rate: Dropout keep rate for gate values
             name: Name of the RNN Cell
+            layer: Layer at which this cell exists (within a multi-layered RNN cell)
             use_skip_connections: Whether to allow skip connections through this cell
             state_size: Size of the state. Defaults to output_units
             compression_fraction: Optional compression fraction
@@ -80,6 +105,7 @@ class RNNCell:
         self.use_skip_connections = use_skip_connections
         self.name = name
         self.compression_fraction = compression_fraction
+        self.layer = layer
 
         self.init_weights()
 
@@ -130,7 +156,7 @@ class MultiRNNCell(RNNCell):
                  state_size: Optional[int] = None,
                  compression_fraction: Optional[float] = None):
         assert num_layers >= 1, 'Must provide at least one layer'
-        super().__init__(input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections, state_size, compression_fraction)
+        super().__init__(input_units, output_units, activation, dropout_keep_rate, name, 0, use_skip_connections, state_size, compression_fraction)
         self.num_layers = num_layers
 
         self.cells: List[RNNCell] = []
@@ -141,6 +167,7 @@ class MultiRNNCell(RNNCell):
                                         activation=activation,
                                         dropout_keep_rate=dropout_keep_rate,
                                         name=f'{name}-cell-{i}',
+                                        layer=i,
                                         use_skip_connections=use_skip_connections,
                                         compression_fraction=compression_fraction)
             self.cells.append(cell)
@@ -240,20 +267,56 @@ class GRU(RNNCell):
             state = skip_gate * state + (1.0 - skip_gate) * skip_input
 
         # Create the update and reset vectors
-        update_state_vector = dense(inputs=state, units=self.output_units, use_bias=False, activation=None, name='{0}-W-update'.format(self.name), compression_fraction=self.compression_fraction)
-        update_input_vector = dense(inputs=inputs, units=self.output_units, use_bias=False, activation=None, name='{0}-U-update'.format(self.name), compression_fraction=self.compression_fraction)
+        update_state_vector = dense(inputs=state,
+                                    units=self.output_units,
+                                    use_bias=False,
+                                    activation=None,
+                                    name='{0}-W-update'.format(self.name),
+                                    compression_fraction=self.compression_fraction,
+                                    compression_seed='{0}W{1}{2}'.format(TRANSFORM_SEED, UPDATE_SEED, self.layer))
+        update_input_vector = dense(inputs=inputs,
+                                    units=self.output_units,
+                                    use_bias=False,
+                                    activation=None,
+                                    name='{0}-U-update'.format(self.name),
+                                    compression_fraction=self.compression_fraction,
+                                    compression_seed='{0}U{1}{2}'.format(TRANSFORM_SEED, UPDATE_SEED, self.layer))
         update_gate = tf.math.sigmoid(update_state_vector + update_input_vector + self.b_update)
 
-        reset_state_vector = dense(inputs=state, units=self.output_units, use_bias=False, activation=None, name='{0}-W-reset'.format(self.name), compression_fraction=self.compression_fraction)
-        reset_input_vector = dense(inputs=inputs, units=self.output_units, use_bias=False, activation=None, name='{0}-U-reset'.format(self.name), compression_fraction=self.compression_fraction)
+        reset_state_vector = dense(inputs=state,
+                                   units=self.output_units,
+                                   use_bias=False,
+                                   activation=None,
+                                   name='{0}-W-reset'.format(self.name),
+                                   compression_fraction=self.compression_fraction,
+                                   compression_seed='{0}W{1}{2}'.format(TRANSFORM_SEED, RESET_SEED, self.layer))
+        reset_input_vector = dense(inputs=inputs,
+                                   units=self.output_units,
+                                   use_bias=False,
+                                   activation=None,
+                                   name='{0}-U-reset'.format(self.name),
+                                   compression_fraction=self.compression_fraction,
+                                   compression_seed='{0}U{1}{2}'.format(TRANSFORM_SEED, RESET_SEED, self.layer))
         reset_gate = tf.math.sigmoid(reset_state_vector + reset_input_vector + self.b_reset)
 
         update_with_dropout = tf.nn.dropout(update_gate, keep_prob=self.dropout_keep_rate)
         reset_with_dropout = tf.nn.dropout(reset_gate, keep_prob=self.dropout_keep_rate)
 
         # Create the candidate state
-        candidate_reset = dense(inputs=state * reset_with_dropout, units=self.output_units, use_bias=False, activation=None, name='{0}-W'.format(self.name), compression_fraction=self.compression_fraction)
-        candidate_input = dense(inputs=inputs, units=self.output_units, use_bias=False, activation=None, name='{0}-U'.format(self.name), compression_fraction=self.compression_fraction)
+        candidate_reset = dense(inputs=state * reset_with_dropout,
+                                units=self.output_units,
+                                use_bias=False,
+                                activation=None,
+                                name='{0}-W'.format(self.name),
+                                compression_fraction=self.compression_fraction,
+                                compression_seed='{0}W{1}{2}'.format(TRANSFORM_SEED, CANDIDATE_SEED, self.layer))
+        candidate_input = dense(inputs=inputs,
+                                units=self.output_units,
+                                use_bias=False,
+                                activation=None,
+                                name='{0}-U'.format(self.name),
+                                compression_fraction=self.compression_fraction,
+                                compression_seed='{0}U{1}{2}'.format(TRANSFORM_SEED, CANDIDATE_SEED, self.layer))
         candidate_state = self.activation(candidate_reset + candidate_input + self.b)
 
         # Form the next state using the update gate

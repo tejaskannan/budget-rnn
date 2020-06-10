@@ -27,6 +27,17 @@ struct GRUTempStates {
 typedef struct GRUTempStates GRUTempStates;
 
 
+struct TFGRUTempStates {
+    matrix *stacked;
+    matrix *gates;
+    matrix *candidate;
+    matrix *update;
+    matrix *reset;
+    matrix *tempGate;
+};
+typedef struct TFGRUTempStates TFGRUTempStates;
+
+
 struct TFGRU {
     matrix *wGates;
     matrix *bGates;

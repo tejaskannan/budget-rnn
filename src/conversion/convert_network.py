@@ -32,7 +32,7 @@ def create_matrix(name: str, dim0: int, dim1: int) -> str:
     var_name = '{0}_{1}_VAR'.format(name, MATRIX)
     ptr_name = '{0}_{1}'.format(name, MATRIX)
 
-    struct_assignment = ', '.join([str(dim0), str(dim1), name])
+    struct_assignment = ', '.join([name, str(dim0), str(dim1)])
 
     code_list: List[str] = []
     code_list.append('static matrix {0} = {{ {1} }};'.format(var_name, struct_assignment))
@@ -139,39 +139,6 @@ def collect_recurrent_layer(variable_names: List[str], use_tf_style: bool) -> Di
     return var_dict
 
 
-def low_rank_decomposition(mat: np.ndarray, var_frac: float) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Decomposes the given matrix into two low-rank matrices using the singular value decomposition.
-
-    Args:
-        mat: A [N, M] matrix
-        rank: Desired rank (R) of the output matrix
-    Returns:
-        A pair of matrices. The first is an [N, R] matrix and the second is a [R, M]
-        matrix. The product of these matrices is the low-rank approximation.
-    """
-    if abs(var_frac - 1.0) < SMALL_NUMBER:
-        return mat
-
-    U, S, VH = np.linalg.svd(mat, compute_uv=True)
-
-    eigenvalues = np.square(S)
-    eigenvalue_sum = np.sum(eigenvalues)
-    
-    variance_fractions = np.cumsum(eigenvalues) / eigenvalue_sum
-    rank = np.sum((variance_fractions <= var_frac).astype(int))
-
-    # Pad singular values with zeros to align the shapes
-    S = np.pad(S, pad_width=(0, U.shape[1] - S.shape[0]), mode='constant', constant_values=0)
-    singular_values = np.diag(S)
-    US = U.dot(singular_values)
-    
-    U_low_rank = US[:, :rank]
-    V_low_rank = VH[:rank, :]
-
-    return U_low_rank, V_low_rank
-
-
 def to_fixed_point(value: float, num_bits: int) -> int:
     """
     Convert the given value to a fixed point representation with the number of bits.
@@ -264,23 +231,7 @@ def get_transform_name(weight_name: str) -> Tuple[str, int]:
             return get_dense_name(weight_name)
 
 
-def compress_network(model_path: str, model_parameters: Dict[str, np.ndarray], var_frac: float, num_bits: int):
-    compressed_parameters = compress_weights(model_parameters, var_frac, num_bits)
-
-    # Rename weights in the compressed parameters dictionary
-    compressed_model_params: Dict[str, np.ndarray] = dict()
-    for name, weights in compressed_parameters.items():
-        assert len(weights) == 1 or len(weights) == 2, 'Should only have 1 or 2 weight components'
-
-        if len(weights) == 2:
-            first_name = '{0}-first'.format(name)
-            second_name = '{0}-second'.format(name)
-
-            compressed_model_params[first_name] = weights[0]
-            compressed_model_params[second_name] = weights[1]
-        else:
-            compressed_model_params[name] = weights[0]
-
+def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], num_bits: int):
     # Dictionary to hold all variables
     weight_variables: List[str] = []
     dtype = 'dtype'  # The true data type is set via a typedef in the C implementation
@@ -289,7 +240,7 @@ def compress_network(model_path: str, model_parameters: Dict[str, np.ndarray], v
     var_name_dict: Dict[str, str] = dict()  # Track variable renaming
 
     # Store the embedding layer variables
-    for weight_name, weight_value in sorted(compressed_model_params.items()):
+    for weight_name, weight_value in sorted(model_parameters.items()):
 
         # We transpose all 2d weights to standardize matrix and vector formats.
         # Tensorflow uses the transpose version of weight matrices.
@@ -316,17 +267,20 @@ def compress_network(model_path: str, model_parameters: Dict[str, np.ndarray], v
 
         weight_layers[name_prefix + '_' + var_name] += 1
 
+        # Quantize the weights and convert to fixed point numbers
+        fixed_point_weights = [to_fixed_point(x, num_bits=num_bits) for x in weight_value.reshape(-1)]
+
         # (3) Save variables and associated data as C static variables
         n_dims = len(weight_value.shape)
         dims = weight_value.shape
         dims_str = seq_to_str(dims)
-        flattened_weights = seq_to_str(weight_value.reshape(-1))
+        flattened_weights = seq_to_str(fixed_point_weights)
 
         c_name = NAME_FORMAT.format(name_prefix, var_name, index)
         var_name_dict[weight_name] = '{0}_{1}'.format(c_name, MATRIX)
 
-        n_dims_var = C_VAR_FORMAT.format('int16_t', c_name + '_NUM_DIMS', n_dims)
-        dims_var = C_VAR_FORMAT.format('int16_t', ARRAY_FORMAT.format(c_name + '_DIMS', n_dims), dims_str)
+        n_dims_var = C_VAR_FORMAT.format('uint8_t', c_name + '_NUM_DIMS', n_dims)
+        dims_var = C_VAR_FORMAT.format('uint8_t', ARRAY_FORMAT.format(c_name + '_DIMS', n_dims), dims_str)
         weights_var = C_VAR_FORMAT.format(dtype, ARRAY_FORMAT.format(c_name, np.prod(weight_value.shape)), flattened_weights)
 
         # We store everything as 2D matrices for consistency purposes
@@ -338,7 +292,7 @@ def compress_network(model_path: str, model_parameters: Dict[str, np.ndarray], v
             dim1 = weight_value.shape[1]
 
         struct_code = create_matrix(c_name, dim0=dim0, dim1=dim1)
-        weight_variables.extend([n_dims_var, dims_var, weights_var, struct_code + '\n'])
+        weight_variables.extend([weights_var, struct_code + '\n'])
 
     # Store all weights associated with a particular layer into a single void * array
     layer_names: List[str] = []
@@ -356,9 +310,11 @@ def compress_network(model_path: str, model_parameters: Dict[str, np.ndarray], v
     model_type = hypers.model_params['model_type']
     output_type = hypers.model_params['output_type']
     state_size = hypers.model_params['state_size']
+    output_hidden_units = hypers.model_params['output_hidden_units']
     transform_type = hypers.model_params.get('rnn_cell_type', 'dense')
     seq_length = int(hypers.seq_length)
     samples_per_seq = int(seq_length * hypers.model_params.get('sample_frac', 1.0))
+    is_compressed = 1 if hypers.model_params.get('compression_fraction', 1.0) < 1.0 else 0
 
     # Get the input and output scalers
     metadata = get_metadata(model_path)
@@ -405,6 +361,8 @@ def compress_network(model_path: str, model_parameters: Dict[str, np.ndarray], v
         'model_class': model_class,
         'model_type': model_type,
         'output_type': output_type,
+        'output_hidden_units': output_hidden_units,
+        'output_units': num_output_features,
         'state_size': state_size,
         'seq_length': seq_length,
         'transform_type': transform_type,
@@ -425,7 +383,10 @@ def compress_network(model_path: str, model_parameters: Dict[str, np.ndarray], v
         output_file.write('#define NEURAL_NETWORK_GUARD\n\n')
 
         # Write the number of bits used during fixed point quantization
-        output_file.write(C_VAR_FORMAT.format('int', 'FIXED_POINT_PRECISION', num_bits) + '\n\n')
+        output_file.write('#define FIXED_POINT_PRECISION {0}\n\n'.format(num_bits))
+        
+        # Write whether or not the dense layers are compressed
+        output_file.write('#define IS_COMPRESSED {0}\n\n'.format(is_compressed))
 
         # Define ENUMs for the model and output types
         output_file.write('enum ModelClass { STANDARD = 0, ADAPTIVE = 1 };\n')
@@ -439,6 +400,7 @@ def compress_network(model_path: str, model_parameters: Dict[str, np.ndarray], v
         output_file.write('#define {0} {1}\n'.format('STATE_SIZE', state_size))
         output_file.write('#define {0} {1}\n'.format('SEQ_LENGTH', seq_length))
         output_file.write('#define {0} {1}\n'.format('SAMPLES_PER_SEQ', samples_per_seq))
+        output_file.write('#define {0} {1}\n'.format('NUM_SEQUENCES', int(seq_length / samples_per_seq)))
         output_file.write('#define {0} {1}\n'.format('NUM_INPUT_FEATURES', num_input_features))
         output_file.write('#define {0} {1}\n'.format('NUM_OUTPUT_FEATURES', num_output_features))
         output_file.write(C_VAR_FORMAT.format('int16_t', 'INPUT_MEAN[{0}]'.format(num_input_features), seq_to_str(input_mean)) + '\n')
@@ -449,11 +411,11 @@ def compress_network(model_path: str, model_parameters: Dict[str, np.ndarray], v
         for weight_var in weight_variables:
             output_file.write(weight_var)
             output_file.write('\n')
-    
+
         output_file.write('\n')
 
         # Write the function prototype
-        output_file.write('int16_t *execute_model(matrix *inputs[SEQ_LENGTH], int16_t *outputs);\n')
+        output_file.write('int8_t *execute_model(matrix *inputs[SEQ_LENGTH], int8_t *outputs);\n')
 
         output_file.write('#endif\n')
 
@@ -461,13 +423,11 @@ def compress_network(model_path: str, model_parameters: Dict[str, np.ndarray], v
 if __name__ == '__main__':
     parser = ArgumentParser('Compresses the neural network and converts the parameters into a C header file.')
     parser.add_argument('--model-path', type=str, required=True)
-    parser.add_argument('--variance-frac', type=float, required=True)
     parser.add_argument('--precision', type=int, required=True)
     args = parser.parse_args()
 
-    assert args.variance_frac > 0 and args.variance_frac <= 1, 'The variance fraction must be in (0, 1]'
     assert args.precision > 0 and args.precision < 16, 'The precision must be in [1, 15]'
 
     model_parameters = read_by_file_suffix(args.model_path)
 
-    compress_network(args.model_path, model_parameters, num_bits=args.precision, var_frac=args.variance_frac)
+    convert_network(args.model_path, model_parameters, num_bits=args.precision)

@@ -7,6 +7,8 @@ from collections import defaultdict
 from typing import Optional, Dict, List, Any, DefaultDict, Iterable
 
 from models.tf_model import TFModel
+from layers.rnn import dynamic_rnn
+from layers.cells.cells import make_rnn_cell
 from layers.basic import mlp, pool_sequence
 from layers.output_layers import OutputType, compute_binary_classification_output, compute_multi_classification_output
 from layers.embedding_layer import embedding_layer
@@ -17,6 +19,7 @@ from utils.tfutils import pool_rnn_outputs, get_activation, tf_rnn_cell, get_rnn
 from utils.constants import ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS, PREDICTION, F1_SCORE, LOGITS, NODE_REGEX_FORMAT
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, INPUT_SCALER, OUTPUT_SCALER, SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, INPUT_NOISE
 from utils.constants import LABEL_MAP, REV_LABEL_MAP, NUM_CLASSES
+from utils.constants import AGGREGATE_SEED, TRANSFORM_SEED, OUTPUT_SEED, EMBEDDING_SEED
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
 from utils.loss_utils import binary_classification_loss, f1_score_loss
 from .base_model import Model
@@ -142,7 +145,8 @@ class StandardModel(TFModel):
                               should_bias_final=True,
                               should_dropout_final=True,
                               name=TRANSFORM_LAYER_NAME,
-                              compression_fraction=self.hypers.model_params.get('compression_fraction'))
+                              compression_fraction=self.hypers.model_params.get('compression_fraction'),
+                              compression_seed=TRANSFORM_SEED)
 
             aggregated = pool_sequence(transformed, pool_mode=self.hypers.model_params['pool_mode'], name=AGGREGATION_LAYER_NAME)
         elif self.model_type == StandardModelType.CNN:
@@ -161,22 +165,58 @@ class StandardModel(TFModel):
 
             aggregated = pool_sequence(transformed, pool_mode=self.hypers.model_params['pool_mode'], name=AGGREGATION_LAYER_NAME)
         elif self.model_type == StandardModelType.RNN:
-            cell = tf_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
-                               num_units=self.hypers.model_params['state_size'],
-                               activation=self.hypers.model_params['rnn_activation'],
-                               layers=self.hypers.model_params['rnn_layers'],
-                               dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                               name_prefix=TRANSFORM_LAYER_NAME)
+            compression_fraction = self.hypers.model_params.get('compression_fraction')
 
-            initial_state = cell.zero_state(batch_size=tf.shape(input_sequence)[0], dtype=tf.float32)
-            transformed, state = tf.nn.dynamic_rnn(cell=cell,
-                                                   inputs=input_sequence,
-                                                   initial_state=initial_state,
-                                                   dtype=tf.float32,
-                                                   scope=RNN_NAME)
-            final_state = get_rnn_state(state)
+            # We either use a tensorflow cell or a custom RNN cell depending on whether we
+            # are compressing the trainable parameters
+            if compression_fraction is None:            
+                cell = tf_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
+                                   num_units=self.hypers.model_params['state_size'],
+                                   activation=self.hypers.model_params['rnn_activation'],
+                                   layers=self.hypers.model_params['rnn_layers'],
+                                   dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                                   name_prefix=TRANSFORM_LAYER_NAME)
 
-            aggregated = pool_rnn_outputs(transformed, final_state, pool_mode=self.hypers.model_params['pool_mode'], name=AGGREGATION_LAYER_NAME)
+                initial_state = cell.zero_state(batch_size=tf.shape(input_sequence)[0], dtype=tf.float32)
+                transformed, state = tf.nn.dynamic_rnn(cell=cell,
+                                                       inputs=input_sequence,
+                                                       initial_state=initial_state,
+                                                       dtype=tf.float32,
+                                                       scope=RNN_NAME)
+                final_state = get_rnn_state(state)
+                aggregated = pool_rnn_outputs(transformed, final_state, pool_mode=self.hypers.model_params['pool_mode'], name=AGGREGATION_LAYER_NAME)
+            else:
+                cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
+                                     input_units=self.hypers.model_params['state_size'],
+                                     output_units=self.hypers.model_params['state_size'],
+                                     activation=self.hypers.model_params['rnn_activation'],
+                                     dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                                     num_layers=self.hypers.model_params['rnn_layers'],
+                                     name=TRANSFORM_LAYER_NAME,
+                                     compression_fraction=self.hypers.model_params.get('compression_fraction'))
+
+                initial_state = cell.zero_state(batch_size=tf.shape(input_sequence)[0], dtype=tf.float32)
+
+                # Run RNN and collect outputs
+                rnn_out = dynamic_rnn(cell=cell,
+                                      inputs=input_sequence,
+                                      previous_states=None,
+                                      initial_state=initial_state,
+                                      name=RNN_NAME,
+                                      compression_fraction=self.hypers.model_params.get('compression_fraction'))
+                rnn_outputs = rnn_out.outputs
+                rnn_states = rnn_out.states
+                rnn_gates = rnn_out.gates
+
+                last_index = tf.shape(input_sequence)[1] - 1
+                final_output = rnn_outputs.read(index=last_index)
+                final_state = rnn_states.read(index=last_index)  # [L, B, D] where L is the number of RNN layers
+                final_state = tf.concat(tf.unstack(final_state, axis=0), axis=-1)  # [B, D * L]
+
+                print(final_state)
+
+                # [B, D]
+                aggregated = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
         elif self.model_type == StandardModelType.BIRNN:
             fw_cell = tf_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
                                   num_units=self.hypers.model_params['state_size'],
@@ -223,7 +263,8 @@ class StandardModel(TFModel):
                      activations=self.hypers.model_params['output_hidden_activation'],
                      dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
                      name=OUTPUT_LAYER_NAME,
-                     compression_fraction=self.hypers.model_params.get('compression_fraction'))
+                     compression_fraction=self.hypers.model_params.get('compression_fraction'),
+                     compression_seed=OUTPUT_SEED)
 
         if self.output_type == OutputType.BINARY_CLASSIFICATION:
             classification_output = compute_binary_classification_output(model_output=output,

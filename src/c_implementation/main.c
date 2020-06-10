@@ -25,7 +25,7 @@ int main(int argc, char **argv) {
 
     int16_t output_buffer_size = 5;
     char output_buffer[output_buffer_size];
-    int16_t outputs[num_sequences];
+    int8_t outputs[num_sequences];
 
     int16_t num_correct[num_sequences];
     int16_t num_samples = 0;

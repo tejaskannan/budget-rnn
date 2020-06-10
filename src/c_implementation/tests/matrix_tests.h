@@ -38,5 +38,9 @@
     void test_replace(void);
     void test_replace_wrong_dims(void);
     void test_argmax(void);
+    void test_hashed_prod_one(void);
+    void test_hashed_prod_two(void);
+    void test_hashed_prod_three(void);
+    void test_hashed_prod_four(void);
 
 #endif

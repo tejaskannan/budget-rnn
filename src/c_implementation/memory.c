@@ -157,7 +157,8 @@ uint16_t freeBytes(void) {
 
 
 void clearMemory(void) {
-    for (uint16_t i = 1; i < MEMORY_BYTES; i++) {
+    uint16_t i;
+    for (i = 1; i < MEMORY_BYTES; i++) {
         MEMORY[i] = 0;
     }
 }

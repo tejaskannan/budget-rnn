@@ -30,9 +30,22 @@ def linear_normalize(arr: np.ndarray) -> np.ndarray:
     return arr / arr_sum
 
 
+def min_max_normalize(arr: np.ndarray, axis: Optional[int] = None) -> np.ndarray:
+    min_value = np.min(arr, axis=axis, keepdims=True)
+    adjusted_arr = arr - min_value
+    arr_sum = np.sum(adjusted_arr, axis=-1, keepdims=True)
+    return adjusted_arr / arr_sum
+
+
 def l2_normalize(arr: np.ndarray) -> np.ndarray:
     l2_norm = np.linalg.norm(arr, ord=2)
     return arr / (l2_norm + SMALL_NUMBER)
+
+
+def round_to_precision(arr: np.ndarray, precision: int):
+    rounded = np.floor(arr * (2 << precision))
+    return rounded / (2 << precision)
+
 
 def clip_by_norm(arr: np.ndarray, clip: float, axis: Optional[int] = None) -> np.ndarray:
     assert clip > 0, 'The clip value must be positive'
@@ -46,13 +59,6 @@ def clip_by_norm(arr: np.ndarray, clip: float, axis: Optional[int] = None) -> np
     # Don't clip elements that already satisfy the constraint
     clipped_arr = arr * clip / (norm + SMALL_NUMBER)
     return np.where(tiled_norm < clip, arr, clipped_arr)
-
-    # Don't clip arrays that already satisfy the constraint
-    #if norm < clip:
-    #    return arr
-
-   # factor = clip / norm
-   # return arr * factor
 
 
 def np_majority(logits: np.ndarray) -> np.ndarray:

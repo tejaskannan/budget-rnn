@@ -9,6 +9,7 @@ int main(void) {
     test_exp_neg();
     test_tanh_basic();
     test_sigmoid_basic();
+    test_relu_basic();
 
     printf("\nPassed All Tests.\n\n");
 }
@@ -89,4 +90,19 @@ void test_sigmoid_basic(void) {
     assert(70 == fp_sigmoid(fp_neg(one), fixed_point_bits));
     assert(224 == fp_sigmoid(two, fixed_point_bits));
     assert(32 == fp_sigmoid(fp_neg(two), fixed_point_bits));
+}
+
+
+void test_relu_basic(void) {
+    int fixed_point_bits = 8;
+    int16_t one_half = 1 << (fixed_point_bits - 1);
+    int16_t zero = 0;
+    int16_t one = 1 << (fixed_point_bits);
+    int16_t two = 1 << (fixed_point_bits + 1);
+
+    assert(zero == fp_relu(zero, fixed_point_bits));
+    assert(one == fp_relu(one, fixed_point_bits));
+    assert(zero == fp_relu(fp_neg(one), fixed_point_bits));
+    assert(two == fp_relu(two, fixed_point_bits));
+    assert(zero == fp_relu(fp_neg(two), fixed_point_bits));
 }

@@ -65,6 +65,14 @@ int main(void) {
     test_argmax();
     printf("\tPassed argmax tests.\n");
 
+    // Vector Argmax
+    printf("---- Testing Hashed Matrix-Vector Product ----\n");
+    test_hashed_prod_one();
+    test_hashed_prod_two();
+    test_hashed_prod_three();
+    test_hashed_prod_four();
+    printf("\tPassed hashed product tests.\n");
+
     printf("--------------------\n");
     printf("Completed all tests.\n");
     return 0;
@@ -546,6 +554,113 @@ void test_transpose_wrong_dims(void) {
     assert(0 == allocBytes());
 }
 
+void test_hashed_prod_one(void) {
+    uint8_t precision = 3;
+    int16_t matData[] = { 1, 2, 3, 4 };
+    matrix *mat = matrix_allocate(4, 1);
+    load_data(mat, matData, precision);
+
+    int16_t vecData[] = { 1, 2, 3 };
+    matrix *vec = matrix_allocate(3, 1);
+    load_data(vec, vecData, precision);
+
+    int16_t expectedData[] = { 0, -3, -2 };
+    matrix *expected = matrix_allocate(3, 1);
+    load_data(expected, expectedData, precision);
+
+    matrix *result = matrix_allocate(3, 1);
+
+    result = hashed_matrix_vector_product(result, mat, vec, "tr", precision);
+
+    assert(matrix_equal(expected, result));
+
+    matrix_free(expected);
+    matrix_free(result);
+    matrix_free(vec);
+    matrix_free(mat);
+    assert(0 == allocBytes());
+}
+
+void test_hashed_prod_two(void) {
+    uint8_t precision = 3;
+    int16_t matData[] = { 1, 2, 3, 4 };
+    matrix *mat = matrix_allocate(4, 1);
+    load_data(mat, matData, precision);
+
+    int16_t vecData[] = { -1, 2, 1 };
+    matrix *vec = matrix_allocate(3, 1);
+    load_data(vec, vecData, precision);
+
+    int16_t expectedData[] = { -8, -5, -2 };
+    matrix *expected = matrix_allocate(3, 1);
+    load_data(expected, expectedData, precision);
+
+    matrix *result = matrix_allocate(3, 1);
+
+    result = hashed_matrix_vector_product(result, mat, vec, "tr", precision);
+
+    assert(matrix_equal(expected, result));
+
+    matrix_free(expected);
+    matrix_free(result);
+    matrix_free(vec);
+    matrix_free(mat);
+    assert(0 == allocBytes());
+}
+
+void test_hashed_prod_three(void) {
+    uint8_t precision = 3;
+    int16_t matData[] = { 1, 0, -1, 2 };
+    matrix *mat = matrix_allocate(4, 1);
+    load_data(mat, matData, precision);
+
+    int16_t vecData[] = { 1, 3 };
+    matrix *vec = matrix_allocate(2, 1);
+    load_data(vec, vecData, precision);
+
+    int16_t expectedData[] = { -6, -3, -5 };
+    matrix *expected = matrix_allocate(3, 1);
+    load_data(expected, expectedData, precision);
+
+    matrix *result = matrix_allocate(3, 1);
+
+    result = hashed_matrix_vector_product(result, mat, vec, "tr", precision);
+
+    assert(matrix_equal(expected, result));
+
+    matrix_free(expected);
+    matrix_free(result);
+    matrix_free(vec);
+    matrix_free(mat);
+    assert(0 == allocBytes());
+}
+
+void test_hashed_prod_four(void) {
+    uint8_t precision = 3;
+    int16_t matData[] = { 1, 0, -1, 2 };
+    matrix *mat = matrix_allocate(4, 1);
+    load_data(mat, matData, precision);
+
+    int16_t vecData[] = { -1, 2 };
+    matrix *vec = matrix_allocate(2, 1);
+    load_data(vec, vecData, precision);
+
+    int16_t expectedData[] = { -4, -2, -5 };
+    matrix *expected = matrix_allocate(3, 1);
+    load_data(expected, expectedData, precision);
+
+    matrix *result = matrix_allocate(3, 1);
+
+    result = hashed_matrix_vector_product(result, mat, vec, "tr", precision);
+
+    assert(matrix_equal(expected, result));
+
+    matrix_free(expected);
+    matrix_free(result);
+    matrix_free(vec);
+    matrix_free(mat);
+    assert(0 == allocBytes());
+}
 
 int matrix_equal(matrix *mat1, matrix *mat2) {
     if (mat1 == NULL_PTR && mat2 == NULL_PTR) {
@@ -572,7 +687,6 @@ int matrix_equal(matrix *mat1, matrix *mat2) {
 
     return 1;
 }
-
 
 void load_data(matrix *mat, int16_t *data, int16_t precision) {
     for (int16_t i = 0; i < mat->numRows * mat->numCols; i++) {

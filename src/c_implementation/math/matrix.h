@@ -6,9 +6,9 @@
     typedef int16_t dtype;
 
     struct matrix {
+        dtype *data;
         int8_t numRows;
         int8_t numCols;
-        dtype *data;
     };
     typedef struct matrix matrix;
 
