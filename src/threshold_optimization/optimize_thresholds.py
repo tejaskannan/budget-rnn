@@ -8,6 +8,8 @@ from dataset.dataset import DataSeries, Dataset
 from dataset.dataset_factory import get_dataset
 from utils.hyperparameters import HyperParameters
 from utils.constants import METADATA_PATH, HYPERS_PATH, TEST_LOG_PATH
+from utils.rnn_utils import get_prediction_name
+from utils.testing_utils import ClassificationMetric
 from utils.file_utils import extract_model_name, read_by_file_suffix, save_by_file_suffix
 from genetic_optimizer import GeneticThresholdOptimizer
 
@@ -73,6 +75,14 @@ if __name__ == '__main__':
     # Retrieved saved information
     model, dataset, test_log = get_serialized_info(args.model_path, args.dataset_folder)
 
+    prediction_names = [get_prediction_name(i) for i in range(model.num_outputs)]
+    flops_per_level = [test_log[name][ClassificationMetric.FLOPS.name] for name in prediction_names]
+
     for opt_params in params:
         threshold_optimizer = GeneticThresholdOptimizer(model=model, params=opt_params)
         threshold_optimizer.fit(dataset, series=DataSeries.VALID)
+
+        valid_results = threshold_optimizer.score(dataset, series=DataSeries.VALID, flops_per_level=flops_per_level)
+        print(valid_results)
+
+
