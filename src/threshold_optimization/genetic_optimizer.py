@@ -9,6 +9,11 @@ from utils.rnn_utils import get_logits_name
 from utils.testing_utils import ClassificationMetric
 from utils.np_utils import round_to_precision, min_max_normalize, clip_by_norm
 from utils.constants import BIG_NUMBER, SMALL_NUMBER, OUTPUT
+from utils.adaptive_inference import threshold_predictions
+
+
+MIN_INIT = 0.3
+MAX_INIT = 0.7
 
 
 class CrossoverType(Enum):
@@ -19,43 +24,13 @@ class CrossoverType(Enum):
     UNIFORM = auto()
 
 
-def threshold_predictions(predictions: np.ndarray, thresholds: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Computes the predictions using the early-stopping inference algorithm.
-
-    Args:
-        predictions: [B, L, C] array of normalized log probabilities for each sample, level, and class
-        thresholds: [L] array of thresholds for each level
-    Returns:
-        A tuple of (1) A [B] array with the predictions per sample and (2) A [B] array with the number of computed levels.
-    """
-    # Reshape thresholds to a [1, L] array
-    expanded_thresholds = np.expand_dims(thresholds, axis=0)
-
-    # Create mask using the maximum probability
-    max_prob = np.max(predictions, axis=-1)  # [B, L]
-    diff_mask = (max_prob < expanded_thresholds).astype(np.float32) * BIG_NUMBER  # [B, L]
-
-    indices = np.expand_dims(np.arange(start=0, stop=len(thresholds)), axis=0)  # [1, L]
-
-    # Apply mask to compute the number of computed levels
-    masked_indices = indices + diff_mask  # [B, L]
-    levels = np.clip(np.min(masked_indices, axis=-1).astype(int), a_min=0, a_max=predictions.shape[1] - 1)  # [B]
-
-    # Use number of levels to get the classification
-    predicted_class_per_level = np.argmax(predictions, axis=-1)  # [B, L]
-    batch_indices = np.arange(start=0, stop=predictions.shape[0])  # [B]
-    predicted_classes = predicted_class_per_level[batch_indices, levels]  # [B]
-
-    return predicted_classes, levels
-
-
 def rank_sample(fitness: List[float], count: int) -> np.ndarray:
     indices = list(range(len(fitness)))
 
-    sorted_indices = np.argsort(fitness)
+    sorted_indices = np.argsort(fitness)[::-1]  # Sort in descending order
     ranks = np.empty_like(sorted_indices)
-    ranks[sorted_indices] = np.arange(len(fitness))
+    ranks[sorted_indices] = np.arange(len(fitness)) + 1
+
     normalized_ranks = ranks / np.sum(ranks)
 
     selected_indices = np.random.choice(indices, count, replace=False, p=normalized_ranks)
@@ -84,13 +59,12 @@ class GeneticThresholdOptimizer:
         self._thresholds = None
 
     def fit(self, dataset: Dataset, series: DataSeries) -> np.ndarray:
-        # Initialize the thresholds. Always start with a single sample with all 0.5.
-        state = np.random.uniform(low=0.0, high=1.0, size=(self._population_size, self._num_levels))
-        state[-1] = np.full(shape=(self._num_levels, ), fill_value=0.5)
+        # Initialize the thresholds.
+        state = np.random.uniform(low=MIN_INIT, high=MAX_INIT, size=(self._population_size, self._num_levels))
         state = round_to_precision(state, precision=self._precision)
 
         if self._should_sort_thresholds:
-            state = np.sort(state, axis=-1)
+            state = np.sort(state, axis=-1)[::-1]  # Sort in descending order
 
         # Set logit operations
         logit_ops = [get_logits_name(i) for i in range(self._num_levels)]
@@ -100,9 +74,17 @@ class GeneticThresholdOptimizer:
                                                      metadata=self._model.metadata,
                                                      should_shuffle=True)
         best_individual = None
-        for batch_num, batch in enumerate(data_generator):
-            if batch_num >= self._num_iterations:
-                break
+        for batch_num in range(self._num_iterations):
+
+            # Get the next batch. We cycle the data generator if needed.
+            try:
+                batch = next(data_generator)
+            except StopIteration:
+                data_generator = dataset.minibatch_generator(series=series,
+                                                             batch_size=self._batch_size,
+                                                             metadata=self._model.metadata,
+                                                             should_shuffle=True)
+                batch = next(data_generator)
 
             # Compute the predicted log probabilities
             feed_dict = self._model.batch_to_feed_dict(batch, is_train=False)
@@ -117,13 +99,13 @@ class GeneticThresholdOptimizer:
             normalized_logits = round_to_precision(normalized_logits, precision=self._precision)
 
             # Compute fitness values and transition the population
-            fitnesses = self.evaluate(state, normalized_logits, batch[OUTPUT])
+            fitnesses = self.evaluate(state, normalized_logits, np.squeeze(batch[OUTPUT]))
             state = self.selection(state, fitnesses)
             state = self.mutation(state)
 
             state = round_to_precision(state, precision=self._precision)
             if self._should_sort_thresholds:
-                state = np.sort(state, axis=-1)
+                state = np.sort(state, axis=-1)[::-1]
 
             best_idx = np.argmax(fitnesses)
             best_individual = np.copy(state[best_idx])
@@ -134,6 +116,7 @@ class GeneticThresholdOptimizer:
             # Detect if the process has converged
             if np.isclose(state, state[0]).all():
                 print('Converged after {0} iterations. Best Fitness: {1:.4f}'.format(batch_num + 1, best_fitness), end='\r')
+                break
         print()
 
         # Set the best thresholds
@@ -213,6 +196,8 @@ class GeneticThresholdOptimizer:
 
     def fitness_function(self, normalized_logits: np.ndarray, labels: np.ndarray, thresholds: np.ndarray) -> float:
         predictions, levels = threshold_predictions(normalized_logits, thresholds=thresholds)
+
+        assert predictions.shape == labels.shape, 'Misaligned labels ({0}) and predictions ({1})'.format(labels.shape, predictions.shape)
 
         accuracy = np.average((predictions == labels).astype(float))
         level_penalty = -1 * self._level_penalty * np.average(levels / self._model.num_outputs)
@@ -308,4 +293,4 @@ class GeneticThresholdOptimizer:
         mutation_individuals = np.random.uniform(low=0.0, high=1.0, size=(self._population_size, 1))
         masked_mutations = np.where(mutation_individuals < self._mutation_rate, mutations, np.zeros_like(state))
 
-        return state + masked_mutations
+        return np.clip(state + masked_mutations, a_min=0.0, a_max=1.0)

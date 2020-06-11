@@ -59,12 +59,17 @@ def compute_thresholds(model: AdaptiveModel, opt_params: Dict[str, Any], flops_p
     best_accuracy = None
     best_optimizer = None
 
-    for _ in range(opt_params['trials']):
+    for trial in range(opt_params['trials']):
+        print('Beginning model {0}'.format(trial + 1))
+
         threshold_optimizer = GeneticThresholdOptimizer(model=model, params=opt_params)
         threshold_optimizer.fit(dataset, series=DataSeries.VALID)
 
+        print('Evaluating model {0} on Validation Set.'.format(trial + 1))
         valid_results = threshold_optimizer.score(dataset, series=DataSeries.VALID, flops_per_level=flops_per_level)
         acc = valid_results[ClassificationMetric.ACCURACY.name]
+
+        print('==========')
 
         if best_accuracy is None or acc > best_accuracy:
             best_accuracy = acc
