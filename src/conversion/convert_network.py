@@ -3,7 +3,7 @@ import re
 import os.path
 from argparse import ArgumentParser
 from collections import defaultdict
-from typing import Callable, Set, Tuple, Dict, List, DefaultDict, Any
+from typing import Callable, Set, Tuple, Dict, List, DefaultDict, Any, Optional
 from functools import partial
 
 from utils.hyperparameters import HyperParameters
@@ -231,7 +231,7 @@ def get_transform_name(weight_name: str) -> Tuple[str, int]:
             return get_dense_name(weight_name)
 
 
-def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], num_bits: int):
+def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], num_bits: int, thresholds: Optional[List[float]]):
     # Dictionary to hold all variables
     weight_variables: List[str] = []
     dtype = 'dtype'  # The true data type is set via a typedef in the C implementation
@@ -314,6 +314,7 @@ def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], nu
     transform_type = hypers.model_params.get('rnn_cell_type', 'dense')
     seq_length = int(hypers.seq_length)
     samples_per_seq = int(seq_length * hypers.model_params.get('sample_frac', 1.0))
+    num_sequences = int(seq_length / samples_per_seq)
     is_compressed = 1 if hypers.model_params.get('compression_fraction', 1.0) < 1.0 else 0
 
     # Get the input and output scalers
@@ -352,6 +353,12 @@ def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], nu
     elif (model_class == 'adaptive' and model_type != 'bow'):
         rnn_layer = collect_recurrent_layer(var_names, use_tf_style=False)
         fusion_layer = collect_dense_layer(var_names, layer_name='fusion', activation='sigmoid', activate_final=False)
+
+    # Convert the output thresholds to fixed point numbers
+    if thresholds is None:
+        thresholds = [1.0 for _ in range(len(num_sequences))]
+
+    thresholds = [to_fixed_point(x, num_bits) for x in thresholds]
 
     model_parameters = {
         'embedding': embedding_layer,
@@ -400,13 +407,14 @@ def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], nu
         output_file.write('#define {0} {1}\n'.format('STATE_SIZE', state_size))
         output_file.write('#define {0} {1}\n'.format('SEQ_LENGTH', seq_length))
         output_file.write('#define {0} {1}\n'.format('SAMPLES_PER_SEQ', samples_per_seq))
-        output_file.write('#define {0} {1}\n'.format('NUM_SEQUENCES', int(seq_length / samples_per_seq)))
+        output_file.write('#define {0} {1}\n'.format('NUM_SEQUENCES', num_sequences))
         output_file.write('#define {0} {1}\n'.format('NUM_INPUT_FEATURES', num_input_features))
         output_file.write('#define {0} {1}\n'.format('NUM_OUTPUT_FEATURES', num_output_features))
         output_file.write(C_VAR_FORMAT.format('int16_t', 'INPUT_MEAN[{0}]'.format(num_input_features), seq_to_str(input_mean)) + '\n')
         output_file.write(C_VAR_FORMAT.format('int16_t', 'INPUT_STD[{0}]'.format(num_input_features), seq_to_str(input_std)) + '\n')
         output_file.write(C_VAR_FORMAT.format('int16_t', 'OUTPUT_MEAN[{0}]'.format(num_output_features), seq_to_str(output_mean)) + '\n')
         output_file.write(C_VAR_FORMAT.format('int16_t', 'OUTPUT_STD[{0}]'.format(num_output_features), seq_to_str(output_std)) + '\n\n')
+        output_file.write(C_VAR_FORMAT.format('int16_t', 'THRESHOLDS[{0}]'.format(num_sequences), seq_to_str(thresholds)) + '\n\n')
 
         for weight_var in weight_variables:
             output_file.write(weight_var)
@@ -424,10 +432,16 @@ if __name__ == '__main__':
     parser = ArgumentParser('Compresses the neural network and converts the parameters into a C header file.')
     parser.add_argument('--model-path', type=str, required=True)
     parser.add_argument('--precision', type=int, required=True)
+    parser.add_argument('--optimized-test-log', type=str)
     args = parser.parse_args()
 
     assert args.precision > 0 and args.precision < 16, 'The precision must be in [1, 15]'
 
     model_parameters = read_by_file_suffix(args.model_path)
 
-    convert_network(args.model_path, model_parameters, num_bits=args.precision)
+    thresholds = None
+    if args.optimized_test_log is not None:
+        opt_test_log = list(read_by_file_suffix(args.optimized_test_log))[0]
+        thresholds = opt_test_log['THRESHOLDS']
+
+    convert_network(args.model_path, model_parameters, num_bits=args.precision, thresholds=thresholds)

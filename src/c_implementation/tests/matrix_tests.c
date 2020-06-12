@@ -65,13 +65,31 @@ int main(void) {
     test_argmax();
     printf("\tPassed argmax tests.\n");
 
-    // Vector Argmax
+    // Hashed Matrix Vector Product
     printf("---- Testing Hashed Matrix-Vector Product ----\n");
     test_hashed_prod_one();
     test_hashed_prod_two();
     test_hashed_prod_three();
     test_hashed_prod_four();
+    test_hashed_prod_double_digit();
     printf("\tPassed hashed product tests.\n");
+
+    // Matrix Minimum
+    printf("---- Testing Matrix Min ----\n");
+    test_matrix_min();
+    printf("\tPassed matrix min test.\n");
+
+    // Matrix Sum
+    printf("---- Testing Matrix Sum ----\n");
+    test_matrix_sum();
+    printf("\tPassed matrix sum test.\n");
+
+    // Matrix Sum
+    printf("---- Testing Threshold Prediction ----\n");
+    test_threshold_prediction();
+    test_threshold_prediction_multiple();
+    test_threshold_prediction_none();
+    printf("\tPassed threshold prediction test.\n");
 
     printf("--------------------\n");
     printf("Completed all tests.\n");
@@ -570,7 +588,7 @@ void test_hashed_prod_one(void) {
 
     matrix *result = matrix_allocate(3, 1);
 
-    result = hashed_matrix_vector_product(result, mat, vec, "tr", precision);
+    result = hashed_matrix_vector_product(result, mat, vec, "tr", 0, precision);
 
     assert(matrix_equal(expected, result));
 
@@ -597,7 +615,7 @@ void test_hashed_prod_two(void) {
 
     matrix *result = matrix_allocate(3, 1);
 
-    result = hashed_matrix_vector_product(result, mat, vec, "tr", precision);
+    result = hashed_matrix_vector_product(result, mat, vec, "tr", 0, precision);
 
     assert(matrix_equal(expected, result));
 
@@ -624,7 +642,7 @@ void test_hashed_prod_three(void) {
 
     matrix *result = matrix_allocate(3, 1);
 
-    result = hashed_matrix_vector_product(result, mat, vec, "tr", precision);
+    result = hashed_matrix_vector_product(result, mat, vec, "tr", 0, precision);
 
     assert(matrix_equal(expected, result));
 
@@ -651,7 +669,7 @@ void test_hashed_prod_four(void) {
 
     matrix *result = matrix_allocate(3, 1);
 
-    result = hashed_matrix_vector_product(result, mat, vec, "tr", precision);
+    result = hashed_matrix_vector_product(result, mat, vec, "tr", 0, precision);
 
     assert(matrix_equal(expected, result));
 
@@ -661,6 +679,106 @@ void test_hashed_prod_four(void) {
     matrix_free(mat);
     assert(0 == allocBytes());
 }
+
+
+void test_hashed_prod_double_digit(void) {
+    uint8_t precision = 3;
+    int16_t matData[] = { 1, 0, -1, 2 };
+    matrix *mat = matrix_allocate(4, 1);
+    load_data(mat, matData, precision);
+
+    int16_t vecData[] = { 1, 0, -1, 1, -1, 1, 0, 0, 1, -1 };
+    matrix *vec = matrix_allocate(10, 1);
+    load_data(vec, vecData, precision);
+
+    int16_t expectedData[] = { -2, 6, 6, 0, 1, 4, -4, -2, -4, 0, 5 };
+    matrix *expected = matrix_allocate(11, 1);
+    load_data(expected, expectedData, precision);
+
+    matrix *result = matrix_allocate(11, 1);
+
+    result = hashed_matrix_vector_product(result, mat, vec, "tr", 0, precision);
+
+    assert(matrix_equal(expected, result));
+
+    matrix_free(expected);
+    matrix_free(result);
+    matrix_free(vec);
+    matrix_free(mat);
+    assert(0 == allocBytes());
+}
+
+
+void test_matrix_sum(void) {
+    int16_t matData[] = { 2, 3, 1, 4, 5, 2 };
+    matrix *mat = matrix_allocate(3, 2);
+    load_data(mat, matData, PRECISION);
+
+    int16_t sum = matrix_sum(mat);
+    assert(int_to_fp(17, PRECISION) == sum);
+    
+    matrix_free(mat);
+    assert(0 == allocBytes());
+}
+
+
+void test_matrix_min(void) {
+    int16_t matData[] = { 2, 3, 1, 4, 5, 2 };
+    matrix *mat = matrix_allocate(3, 2);
+    load_data(mat, matData, PRECISION);
+
+    int16_t min = matrix_min(mat);
+    assert(int_to_fp(1, PRECISION) == min);
+    
+    matrix_free(mat);
+    assert(0 == allocBytes());
+}
+
+
+void test_threshold_prediction(void) {
+    int16_t vecData[] = { -3, 5, 7, -1, 0 };
+    matrix *vec = matrix_allocate(5, 1);
+    load_data(vec, vecData, PRECISION);
+
+    int16_t threshold = (1 << (PRECISION - 2)) | (1 << (PRECISION - 3));  // 0.375
+    int8_t pred = threshold_prediction(vec, threshold, PRECISION);
+
+    assert(2 == pred);
+
+    matrix_free(vec);
+    assert(0 == allocBytes());
+}
+
+
+void test_threshold_prediction_multiple(void) {
+    int16_t vecData[] = { -3, 5, 7, -1, 0, 8 };
+    matrix *vec = matrix_allocate(6, 1);
+    load_data(vec, vecData, PRECISION);
+
+    int16_t threshold = 1;
+    int8_t pred = threshold_prediction(vec, threshold, PRECISION);
+
+    assert(5 == pred);
+
+    matrix_free(vec);
+    assert(0 == allocBytes());
+}
+
+
+void test_threshold_prediction_none(void) {
+    int16_t vecData[] = { -3, -1, -2, -1, 0, 3 };
+    matrix *vec = matrix_allocate(6, 1);
+    load_data(vec, vecData, PRECISION);
+
+    int16_t threshold = int_to_fp(4, PRECISION);
+    int8_t pred = threshold_prediction(vec, threshold, PRECISION);
+
+    assert(-1 == pred);
+
+    matrix_free(vec);
+    assert(0 == allocBytes());
+}
+
 
 int matrix_equal(matrix *mat1, matrix *mat2) {
     if (mat1 == NULL_PTR && mat2 == NULL_PTR) {

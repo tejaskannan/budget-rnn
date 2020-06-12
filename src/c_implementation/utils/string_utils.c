@@ -31,3 +31,29 @@ char *replace(char *output, const char *str, uint16_t start) {
 
     return output;
 }
+
+
+uint16_t append_int_to_str(char *output, uint16_t x) {
+    int16_t digits[MAX_NUM_DIGITS];
+
+    // As zero is the stopping condition, we handle it separately.
+    if (x == 0) {
+        output[0] = '0';
+        output[1] = '\0';
+        return 1;
+    }
+
+    int16_t i = 0;
+    while (x) {
+        digits[i++] = x % 10;
+        x = x / 10;
+    }
+
+    uint16_t j;
+    for (j = i; j > 0; j--) {
+        output[j - 1] = (char) (digits[j - i] + '0');
+    }
+    output[i] = '\0';
+
+    return i;
+}

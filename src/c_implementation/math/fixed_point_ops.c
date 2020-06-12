@@ -150,7 +150,8 @@ int16_t fp_sigmoid(int16_t x, int16_t precision) {
     int16_t one = 1 << precision;
     int16_t one_half = 1 << (precision - 1);
 
-    int16_t tanh = fp_tanh(fp_mul(x, one_half, precision), precision);
+    int16_t half_x = fp_mul(x, one_half, precision);
+    int16_t tanh = fp_tanh(half_x, precision);
     int16_t result = fp_mul(fp_add(tanh, one), one_half, precision);
 
     if (should_invert_sign) {

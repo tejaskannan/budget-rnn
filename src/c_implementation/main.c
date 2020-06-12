@@ -57,6 +57,11 @@ int main(int argc, char **argv) {
             }
         }
         num_samples += 1;
+
+        if (num_samples % 1000 == 0) {
+            printf("Finished %d samples\n", num_samples);
+        }
+
     }
 
     for (int16_t i = 0; i < num_sequences; i++) {

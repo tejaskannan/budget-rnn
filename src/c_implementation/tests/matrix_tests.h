@@ -42,5 +42,11 @@
     void test_hashed_prod_two(void);
     void test_hashed_prod_three(void);
     void test_hashed_prod_four(void);
+    void test_hashed_prod_double_digit(void);
+    void test_matrix_min(void);
+    void test_matrix_sum(void);
+    void test_threshold_prediction(void);
+    void test_threshold_prediction_multiple(void);
+    void test_threshold_prediction_none(void);
 
 #endif
