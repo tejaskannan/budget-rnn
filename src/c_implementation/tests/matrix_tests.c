@@ -71,6 +71,7 @@ int main(void) {
     test_hashed_prod_two();
     test_hashed_prod_three();
     test_hashed_prod_four();
+    test_hashed_prod_transpose();
     test_hashed_prod_double_digit();
     printf("\tPassed hashed product tests.\n");
 
@@ -698,6 +699,34 @@ void test_hashed_prod_double_digit(void) {
     matrix *result = matrix_allocate(11, 1);
 
     result = hashed_matrix_vector_product(result, mat, vec, "tr", 0, precision);
+
+    assert(matrix_equal(expected, result));
+
+    matrix_free(expected);
+    matrix_free(result);
+    matrix_free(vec);
+    matrix_free(mat);
+    assert(0 == allocBytes());
+}
+
+
+void test_hashed_prod_transpose(void) {
+    uint8_t precision = 3;
+    int16_t matData[] = { 1, 0, -1, 2 };
+    matrix *mat = matrix_allocate(4, 1);
+    load_data(mat, matData, precision);
+
+    int16_t vecData[] = { 1, 2, -1 };
+    matrix *vec = matrix_allocate(3, 1);
+    load_data(vec, vecData, precision);
+
+    int16_t expectedData[] = { -1, -2, -1, 3 };
+    matrix *expected = matrix_allocate(4, 1);
+    load_data(expected, expectedData, precision);
+
+    matrix *result = matrix_allocate(4, 1);
+
+    result = hashed_matrix_vector_product(result, mat, vec, "tr", 1, precision);
 
     assert(matrix_equal(expected, result));
 

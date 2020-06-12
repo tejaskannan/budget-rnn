@@ -10,6 +10,7 @@ int main(void) {
     test_tanh_basic();
     test_sigmoid_basic();
     test_relu_basic();
+    test_round_to_int();
 
     printf("\nPassed All Tests.\n\n");
 }
@@ -106,3 +107,14 @@ void test_relu_basic(void) {
     assert(two == fp_relu(two, fixed_point_bits));
     assert(zero == fp_relu(fp_neg(two), fixed_point_bits));
 }
+
+
+void test_round_to_int(void) {
+    int16_t precision = 4;
+
+    assert(int_to_fp(3, precision) == fp_round_to_int(float_to_fp(3.1, precision), precision));
+    assert(int_to_fp(-3, precision) == fp_round_to_int(float_to_fp(-3.1, precision), precision));
+    assert(int_to_fp(4, precision) == fp_round_to_int(float_to_fp(3.5, precision), precision));
+    assert(int_to_fp(-4, precision) == fp_round_to_int(float_to_fp(-3.5, precision), precision));
+}
+

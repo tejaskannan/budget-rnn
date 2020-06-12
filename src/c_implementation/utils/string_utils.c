@@ -51,7 +51,7 @@ uint16_t append_int_to_str(char *output, uint16_t x) {
 
     uint16_t j;
     for (j = i; j > 0; j--) {
-        output[j - 1] = (char) (digits[j - i] + '0');
+        output[j - 1] = (char) (digits[i - j] + '0');
     }
     output[i] = '\0';
 

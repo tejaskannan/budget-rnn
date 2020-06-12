@@ -382,6 +382,7 @@ def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], nu
         output_file.write('#include "math/matrix.h"\n')
         output_file.write('#include "layers/cells.h"\n')
         output_file.write('#include "layers/layers.h"\n')
+        output_file.write('#include "utils/neural_network_utils.h\n"')
         output_file.write('#include "math/matrix_ops.h"\n')
         output_file.write('#include "math/fixed_point_ops.h"\n\n')
 
@@ -423,7 +424,7 @@ def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], nu
         output_file.write('\n')
 
         # Write the function prototype
-        output_file.write('int8_t *execute_model(matrix *inputs[SEQ_LENGTH], int8_t *outputs);\n')
+        output_file.write('InferenceResult *execute_model(matrix *inputs[SEQ_LENGTH], InferenceResult *result);\n')
 
         output_file.write('#endif\n')
 

@@ -6,7 +6,7 @@ from utils.constants import TRANSFORM_SEED, EMBEDDING_SEED, AGGREGATE_SEED, OUTP
 
 
 INCLUDE_HEADER = '#include "neural_network.h"\n'
-METHOD_DEF = 'int8_t *execute_model(matrix *inputs[SEQ_LENGTH], int8_t *outputs) {\n'
+METHOD_DEF = 'InferenceResult *execute_model(matrix *inputs[SEQ_LENGTH], InferenceResult *result) {\n'
 
 
 def allocate_matrix(mat_name: str, num_rows: int, num_cols: int, prefix: str) -> str:
@@ -168,10 +168,10 @@ def write_adaptive_graph(model_params: Dict[str, str]):
     state_size = model_params['state_size']
 
     with open('neural_network.c', 'w') as output_file:
-        output_file.write('#include "neural_network.h"\n')
+        output_file.write(INCLUDE_HEADER)
 
         # Create function definition and enclosing for loop
-        output_file.write('int8_t *execute_model(matrix *inputs[SEQ_LENGTH], int8_t *outputs) {\n')
+        output_file.write(METHOD_DEF)
 
         # Create the GRU Cell
         output_file.write(create_gru_cell(model_params['transform']))
@@ -250,17 +250,24 @@ def write_adaptive_graph(model_params: Dict[str, str]):
         output_file.write('\n\n')
 
         if model_params['output_type'] == 'multi_classification':
-            output_file.write('\t\tint16_t prediction = argmax(output);\n')
+            output_file.write('\t\tint16_t prediction = threshold_prediction(output, THRESHOLDS[i], FIXED_POINT_PRECISION);\n')
+            output_file.write('\t\tif (prediction != -1) {\n')
+            output_file.write('\t\t\tresult->num_levels = i;\n')
+            output_file.write('\t\t\tresult->prediction = prediction;\n')
+            output_file.write('\t\t} else if (i == NUM_SEQUENCES - 1) {\n')
+            output_file.write('\t\t\tresult->num_levels = i;\n')
+            output_file.write('\t\t\tresult->prediction = argmax(output);\n')
+            output_file.write('\t\t}\n')
         elif model_params['output_type'] == 'binary_classification':
             output_file.write('\t\tint16_t prediction = (int16_t) output->data[0] > 0;\n')
         else:
             output_file.write('\t\tint16_t prediction = output->data[0];\n')
 
-        output_file.write('\t\toutputs[i] = prediction;\n')
+        # output_file.write('\t\toutputs[i] = prediction;\n')
 
         output_file.write('\t}\n\n')
 
-        output_file.write('\treturn outputs;\n')
+        output_file.write('\treturn result;\n')
         output_file.write('}\n')
 
 
