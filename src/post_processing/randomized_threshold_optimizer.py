@@ -6,7 +6,7 @@ from dataset.dataset import DataSeries, Dataset
 from models.adaptive_model import AdaptiveModel
 from utils.rnn_utils import get_logits_name
 from utils.constants import SMALL_NUMBER, OUTPUT
-from utils.np_utils import f1_score, softmax, sigmoid, linear_normalize, multiclass_f1_score
+from utils.np_utils import f1_score, softmax, sigmoid, linear_normalize, min_max_normalize, multiclass_f1_score
 from utils.threshold_utils import adaptive_inference, TwoSidedThreshold, InferenceMode
 
 from .threshold_optimizer import ThresholdOptimizer, OptimizerOutput
@@ -52,7 +52,8 @@ class RandomizedThresholdOptimizer(ThresholdOptimizer):
             
             if self.inference_mode == InferenceMode.MULTICLASS:
                 logits_concat = np.concatenate([np.expand_dims(logits[op], axis=1) for op in logit_ops], axis=1)
-                probabilities = softmax(logits_concat, axis=-1)
+                probabilities = min_max_normalize(logits_concat, axis=-1)
+                # probabilities = softmax(logits_concat, axis=-1)
             else:
                 logits_concat = np.concatenate([logits[op] for op in logit_ops], axis=-1)
                 probabilities = sigmoid(logits_concat)

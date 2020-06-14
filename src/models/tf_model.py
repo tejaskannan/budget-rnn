@@ -382,7 +382,7 @@ class TFModel(Model):
         # Create dictionary to map accuracy operations to loss operations
         accuracy_loss_dict: Dict[str, str] = dict()
         assert len(self.accuracy_op_names) == len(self.loss_op_names) or len(self.loss_op_names) == 1, f'Misaligned accuracy and loss operations.'
-        if len(self.loss_op_names):
+        if len(self.loss_op_names) == 1:
             accuracy_loss_dict = {acc_op: self.loss_op_names[0] for acc_op in self.accuracy_op_names}
         else:
             accuracy_loss_dict = {acc_op: loss_op for acc_op, loss_op in zip(self.accuracy_op_names, self.loss_op_names)}
@@ -443,7 +443,6 @@ class TFModel(Model):
                     print(f'Train Batch {train_batch_counter}. Avg loss so far: {avg_train_loss_so_far:.4f}', end='\r')
 
                 train_batch_counter += 1
-
             print()
 
             # Perform validation
@@ -518,6 +517,7 @@ class TFModel(Model):
                 # For classification tasks, we want to maximize accuracy
                 if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
                     valid_acc = epoch_valid_acc[op_name]
+                    
                     if valid_acc > best_valid_metric_dict[op_name]:
                         # Save the corresponding loss operation
                         loss_op_name = accuracy_loss_dict[op_name]

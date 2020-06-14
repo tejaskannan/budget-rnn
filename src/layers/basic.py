@@ -159,6 +159,8 @@ def mlp(inputs: tf.Tensor,
     if not should_activate_final:
         activations[-1] = None
 
+    states = []
+
     # Apply hidden layers
     intermediate = inputs
     for i, (hidden_size, activation) in enumerate(zip(hidden_sizes, activations[:-1])):
@@ -171,6 +173,8 @@ def mlp(inputs: tf.Tensor,
                              compression_seed='{0}{1}'.format(compression_seed, i))
 
         intermediate = tf.nn.dropout(intermediate, keep_prob=dropout_keep_rate)
+
+        states.append(intermediate)
 
     # Apply the output layer
     result = dense(inputs=intermediate,
@@ -185,7 +189,7 @@ def mlp(inputs: tf.Tensor,
     if should_dropout_final:
         result = tf.nn.dropout(result, keep_prob=dropout_keep_rate)
 
-    return result
+    return result, states
 
 
 def weighted_average(inputs: tf.Tensor,

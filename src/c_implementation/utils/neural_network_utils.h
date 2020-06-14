@@ -5,7 +5,8 @@
 
 struct InferenceResult {
     int16_t prediction;
-    uint8_t num_levels;
+    uint8_t numLevels;
+    uint8_t hasStoppedEarly;
 };
 typedef struct InferenceResult InferenceResult;
 

@@ -15,11 +15,11 @@ from layers.output_layers import OutputType, compute_binary_classification_outpu
 from layers.embedding_layer import embedding_layer
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
-from utils.tfutils import pool_rnn_outputs
+from utils.tfutils import pool_rnn_outputs, expand_to_matrix
 from utils.misc import sample_sequence_batch
 from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS, OUTPUT_SEED
 from utils.constants import NODE_REGEX_FORMAT, DROPOUT_KEEP_RATE, MODEL, SCHEDULED_MODEL, NUM_CLASSES
-from utils.constants import INPUT_SCALER, OUTPUT_SCALER, INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE
+from utils.constants import INPUT_SCALER, OUTPUT_SCALER, INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE, EMBEDDING_SEED
 from utils.loss_utils import f1_score_loss, binary_classification_loss
 from utils.rnn_utils import *
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
@@ -205,7 +205,7 @@ class AdaptiveModel(TFModel):
         with self.sess.graph.as_default():
             transform_name = get_transform_name(level, self.hypers.model_params['share_transform_weights'])
             aggregation_name = get_aggregation_name(level, self.hypers.model_params['share_transform_weights'])
-            embedding_name = get_embedding_name()
+            embedding_name = get_embedding_name(level, self.hypers.model_params.get('share_embedding_weights', True))
             output_name = get_output_layer_name(level, self.hypers.model_params['share_output_weights'])
 
             # Compute FLOPS for the transformation layer and aggregation dense layer
@@ -240,7 +240,7 @@ class AdaptiveModel(TFModel):
             # Get FLOPS for the embedding layer. We do this in a `marginal' way because there is no need to ever re-compute
             # an embedding (they are all independent). Thus, the number of additional embedding computations is equal
             # to the number of operations on the first level.
-            embedding_regex = ['.*{0}-dense/.*'.format(get_embedding_name()), '.*{0}-filter-[0-9]+/.*'.format(get_embedding_name())]
+            embedding_regex = ['.*{0}-dense/.*'.format(embedding_name), '.*{0}-filter-[0-9]+/.*'.format(embedding_name)]
             embedding_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
                                     .with_node_names(show_name_regexes=embedding_regex) \
                                     .order_by('flops').build()
@@ -260,7 +260,7 @@ class AdaptiveModel(TFModel):
             cell = get_cell_level_name(level, self.hypers.model_params['share_cell_weights'])
             output = get_output_layer_name(level, self.hypers.model_params['share_output_weights'])
             rnn = get_rnn_level_name(level)
-            embedding = get_embedding_name()
+            embedding_name = get_embedding_name(level, self.hypers.model_params.get('share_embedding_weights', True))
             combine_states = get_combine_states_name(rnn, self.hypers.model_params['share_rnn_weights'])
 
             # Compute FLOPS from RNN operations
@@ -284,7 +284,7 @@ class AdaptiveModel(TFModel):
                 else:
                     output_regex = '.*{0}.*_{1}.*'.format(output, level)
             else:
-                output_regex = NODE_REGEX_FORMAT.format(ouput)
+                output_regex = NODE_REGEX_FORMAT.format(output)
 
             single_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
                                 .with_node_names(show_name_regexes=[output_regex]) \
@@ -295,7 +295,7 @@ class AdaptiveModel(TFModel):
             # Get FLOPS for the embedding layer. We do this in a `marginal' way because there is no need to ever re-compute
             # an embedding (they are all independent). Thus, the number of additional embedding computations is equal
             # to the number of operations on the first level.
-            embedding_regex = ['.*{0}-dense/.*'.format(get_embedding_name()), '.*{0}-filter-[0-9]+/.*'.format(get_embedding_name())]
+            embedding_regex = ['.*{0}-dense/.*'.format(embedding_name), '.*{0}-filter-[0-9]+/.*'.format(embedding_name)]
             embedding_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
                                     .with_node_names(show_name_regexes=embedding_regex) \
                                     .order_by('flops').build()
@@ -371,6 +371,14 @@ class AdaptiveModel(TFModel):
         for batch_num, batch in enumerate(test_batch_generator):
             feed_dict = self.batch_to_feed_dict(batch, is_train=False)
 
+            #inputs = batch[INPUTS]
+            #print(inputs)
+
+            #with self.sess.graph.as_default():
+            #    embedding_kernel = [var for var in self.trainable_vars if get_embedding_name() in var.name and 'kernel' in var.name][0]
+            #    expanded_matrix = expand_to_matrix(embedding_kernel, size=15, matrix_dims=(3, 20), name=EMBEDDING_SEED)
+            #    print(self.sess.run(expanded_matrix))
+
             # Execute predictions and time results
             latencies: List[float] = []
             logits_list: List[np.ndarray] = []
@@ -428,6 +436,9 @@ class AdaptiveModel(TFModel):
             else:
                 self._make_rnn_model(is_train)
 
+            # print(self.trainable_vars)
+
+
     def _make_bow_model(self, is_train: bool):
         outputs: List[tf.Tensor] = []
         prev_attn_weights: List[tf.Tensor] = []  # List of [B, T, 1] tensors
@@ -446,6 +457,7 @@ class AdaptiveModel(TFModel):
             state_name = get_states_name(i)
             accuracy_name = get_accuracy_name(i)
             f1_score_name = get_f1_score_name(i)
+            embedding_name = get_embedding_name(i, self.hypers.model_params.get('share_embedding_weights', True))
 
             # Create the embedding layer, [B, T, D]
             input_sequence = embedding_layer(inputs=self._placeholders[input_name],
@@ -455,7 +467,7 @@ class AdaptiveModel(TFModel):
                                              params=self.hypers.model_params['embedding_layer_params'],
                                              seq_length=self.samples_per_seq,
                                              input_shape=self.metadata[INPUT_SHAPE],
-                                             name_prefix=get_embedding_name())
+                                             name_prefix=embedding_name)
 
             # Transform the input sequence, [B, T, D]
             transformed_sequence = mlp(inputs=input_sequence,
@@ -551,6 +563,8 @@ class AdaptiveModel(TFModel):
             state_name = get_states_name(i)
             accuracy_name = get_accuracy_name(i)
             f1_score_name = get_f1_score_name(i)
+            embedding_name = get_embedding_name(i, self.hypers.model_params.get('share_embedding_weights', True))
+
 
             # Create the embedding layer
             input_sequence = embedding_layer(inputs=self._placeholders[input_name],
@@ -560,8 +574,11 @@ class AdaptiveModel(TFModel):
                                              params=self.hypers.model_params['embedding_layer_params'],
                                              seq_length=self.samples_per_seq,
                                              input_shape=self.metadata[INPUT_SHAPE],
-                                             name_prefix=get_embedding_name(),
+                                             name_prefix=embedding_name,
                                              compression_fraction=self.hypers.model_params.get('compression_fraction'))
+
+
+            self._ops['embedding-{0}'.format(i)] = input_sequence
 
             # Create the RNN Cell
             cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
@@ -611,9 +628,11 @@ class AdaptiveModel(TFModel):
             # [B, D]
             rnn_output = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
 
+            self._ops['rnn-output-{0}'.format(i)] = rnn_output
+
             # [B, K]
             output_size = num_output_features if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[NUM_CLASSES]
-            output = mlp(inputs=rnn_output,
+            output, hidden_states = mlp(inputs=rnn_output,
                          output_size=output_size,
                          hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
                          activations=self.hypers.model_params['output_hidden_activation'],
@@ -622,6 +641,8 @@ class AdaptiveModel(TFModel):
                          name=output_layer_name,
                          compression_fraction=self.hypers.model_params.get('compression_fraction'),
                          compression_seed=OUTPUT_SEED)
+
+            self._ops['output-hidden-{0}'.format(i)] = hidden_states
 
             if self.output_type == OutputType.BINARY_CLASSIFICATION:
                 classification_output = compute_binary_classification_output(model_output=output,
@@ -690,12 +711,16 @@ class AdaptiveModel(TFModel):
         losses = tf.stack(losses)  # [N], N is the number of sequences
         weighted_losses = tf.reduce_sum(losses * self._placeholders['loss_weights'], axis=-1)  # Scalar
 
-        # Apply level-wise layer penalty to get better results at higher layers
-        rolled_losses = tf.roll(losses, shift=1, axis=0)  # [N]
-        mask = tf.cast(tf.range(start=0, limit=tf.shape(losses)[0]) > 0, dtype=tf.float32)  # [N]
-        penalty = tf.reduce_sum(tf.nn.leaky_relu(mask * (losses - rolled_losses), alpha=0.01))
+        # Apply level-wise layer penalty to get better results at higher levels
+        if self.hypers.model_params.get('enforce_level_penalty', True):
+            rolled_losses = tf.roll(losses, shift=1, axis=0)  # [N]
+            mask = tf.cast(tf.range(start=0, limit=tf.shape(losses)[0]) > 0, dtype=tf.float32)  # [N]
+            penalty = tf.reduce_sum(tf.nn.leaky_relu(mask * (losses - rolled_losses), alpha=0.01))
 
-        self._ops[LOSS] = weighted_losses + penalty
+            self._ops[LOSS] = weighted_losses + penalty
+        else:
+            print('========== HERE ==========')
+            self._ops[LOSS] = weighted_losses
 
         # Add any regularization to the loss function
         reg_loss = self.regularize_weights(name=self.hypers.model_params.get('regularization_name'),

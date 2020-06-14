@@ -8,6 +8,7 @@
 #include "utils/neural_network_utils.h"
 #include "math/matrix_ops.h"
 #include "memory.h"
+#include "controller/pid_control.h"
 
 #ifndef MAIN_GUARD
 #define MAIN_GUARD

@@ -7,6 +7,8 @@
 #define STRING_TEST_GUARD
 
 void test_append_int(void);
-
+void test_length(void);
+void test_copy(void);
+void test_replace(void);
 
 #endif

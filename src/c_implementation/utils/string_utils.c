@@ -15,6 +15,8 @@ uint16_t string_length(char *str) {
 }
 
 char *string_copy(char *output, char *str, uint16_t n) {
+    output[n] = '\0';  // Ensure the string is null-terminated
+
     for (; n > 0; n--) {
         output[n - 1] = str[n - 1];
     }

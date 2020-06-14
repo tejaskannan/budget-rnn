@@ -17,9 +17,10 @@ MATRIX = 'MAT'
 FUSION = 'FUSION'
 COMBINE_STATES = 'combine-states'
 LAYER_REGEX = re.compile('.*/.*-([0-9]+).*')
-RNN_WEIGHT_REGEX = re.compile('.*/(rnn-cell)-cell-([0-9+])-(.*):.*')
+RNN_WEIGHT_REGEX = re.compile('.*/(rnn-cell).*-cell-([0-9+])-(.*):.*')
 MULTI_RNN_CELL_REGEX = re.compile('.*transform-(layer-cell)-([0-9]+)/([^/]+)/([^:]+)')
 INDEX_REGEX = re.compile('.*([0-9]+).*')
+LEVEL_REGEX = re.compile('.*level[_-]([0-9]+).*')
 
 NAME_FORMAT = '{0}_{1}_{2}'
 LAYER_ARRAY_FORMAT = 'static void * {0}[{1}] = {{ {2} }};'
@@ -231,7 +232,7 @@ def get_transform_name(weight_name: str) -> Tuple[str, int]:
             return get_dense_name(weight_name)
 
 
-def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], num_bits: int, thresholds: Optional[List[float]]):
+def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], num_bits: int, thresholds: Optional[List[float]], level: Optional[int]):
     # Dictionary to hold all variables
     weight_variables: List[str] = []
     dtype = 'dtype'  # The true data type is set via a typedef in the C implementation
@@ -241,6 +242,13 @@ def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], nu
 
     # Store the embedding layer variables
     for weight_name, weight_value in sorted(model_parameters.items()):
+
+        if args.level is not None:
+            match = LEVEL_REGEX.match(weight_name)
+
+            weight_level = int(match.group(1))
+            if weight_level != args.level - 1:
+                continue
 
         # We transpose all 2d weights to standardize matrix and vector formats.
         # Tensorflow uses the transpose version of weight matrices.
@@ -304,7 +312,7 @@ def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], nu
 
         layer_names.extend([layer_weight_var, num_layers])
 
-    # Get the model type and output type
+    # Get the model hyper-parameters
     hypers = get_hypers(model_path)
     model_class = hypers.model
     model_type = hypers.model_params['model_type']
@@ -312,10 +320,16 @@ def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], nu
     state_size = hypers.model_params['state_size']
     output_hidden_units = hypers.model_params['output_hidden_units']
     transform_type = hypers.model_params.get('rnn_cell_type', 'dense')
-    seq_length = int(hypers.seq_length)
-    samples_per_seq = int(seq_length * hypers.model_params.get('sample_frac', 1.0))
-    num_sequences = int(seq_length / samples_per_seq)
     is_compressed = 1 if hypers.model_params.get('compression_fraction', 1.0) < 1.0 else 0
+
+    if level is None:
+        seq_length = int(hypers.seq_length)
+        samples_per_seq = int(seq_length * hypers.model_params.get('sample_frac', 1.0))
+        num_sequences = int(seq_length / samples_per_seq)
+    else:
+        samples_per_seq = int(hypers.seq_length * hypers.model_params.get('sample_frac', 1.0))
+        seq_length = level * samples_per_seq
+        num_sequences = level
 
     # Get the input and output scalers
     metadata = get_metadata(model_path)
@@ -352,11 +366,11 @@ def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], nu
         rnn_layer = collect_recurrent_layer(var_names, use_tf_style=True)
     elif (model_class == 'adaptive' and model_type != 'bow'):
         rnn_layer = collect_recurrent_layer(var_names, use_tf_style=False)
-        fusion_layer = collect_dense_layer(var_names, layer_name='fusion', activation='sigmoid', activate_final=False)
+        fusion_layer = collect_dense_layer(var_names, layer_name='fusion', activation='sigmoid', activate_final=True)
 
     # Convert the output thresholds to fixed point numbers
     if thresholds is None:
-        thresholds = [1.0 for _ in range(len(num_sequences))]
+        thresholds = [1.0 for _ in range(num_sequences)]
 
     thresholds = [to_fixed_point(x, num_bits) for x in thresholds]
 
@@ -373,7 +387,8 @@ def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], nu
         'state_size': state_size,
         'seq_length': seq_length,
         'transform_type': transform_type,
-        'samples_per_seq': samples_per_seq
+        'samples_per_seq': samples_per_seq,
+        'is_compressed': is_compressed
     }
     save_by_file_suffix(model_parameters, 'model_parameters.pkl.gz')
 
@@ -382,7 +397,8 @@ def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], nu
         output_file.write('#include "math/matrix.h"\n')
         output_file.write('#include "layers/cells.h"\n')
         output_file.write('#include "layers/layers.h"\n')
-        output_file.write('#include "utils/neural_network_utils.h\n"')
+        output_file.write('#include "utils/neural_network_utils.h"\n')
+        output_file.write('#include "utils/utils.h"\n')
         output_file.write('#include "math/matrix_ops.h"\n')
         output_file.write('#include "math/fixed_point_ops.h"\n\n')
 
@@ -424,7 +440,7 @@ def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], nu
         output_file.write('\n')
 
         # Write the function prototype
-        output_file.write('InferenceResult *execute_model(matrix *inputs[SEQ_LENGTH], InferenceResult *result);\n')
+        output_file.write('InferenceResult *execute_model(matrix *inputs[SEQ_LENGTH], InferenceResult *result, int16_t num_sequences);\n')
 
         output_file.write('#endif\n')
 
@@ -434,6 +450,7 @@ if __name__ == '__main__':
     parser.add_argument('--model-path', type=str, required=True)
     parser.add_argument('--precision', type=int, required=True)
     parser.add_argument('--optimized-test-log', type=str)
+    parser.add_argument('--level', type=int, help='Level to keep (1-indexed)')
     args = parser.parse_args()
 
     assert args.precision > 0 and args.precision < 16, 'The precision must be in [1, 15]'
@@ -445,4 +462,4 @@ if __name__ == '__main__':
         opt_test_log = list(read_by_file_suffix(args.optimized_test_log))[0]
         thresholds = opt_test_log['THRESHOLDS']
 
-    convert_network(args.model_path, model_parameters, num_bits=args.precision, thresholds=thresholds)
+    convert_network(args.model_path, model_parameters, num_bits=args.precision, thresholds=thresholds, level=args.level)

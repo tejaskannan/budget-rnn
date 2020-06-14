@@ -91,8 +91,10 @@ def get_aggregation_name(level_index: int, should_share_weights: bool) -> str:
     return f'{AGGREGATION_NAME}_{level_index}'
 
 
-def get_embedding_name() -> str:
-    return EMBEDDING_NAME
+def get_embedding_name(level_index: int, should_share_weights: bool) -> str:
+    if should_share_weights:
+        return EMBEDDING_NAME
+    return '{0}_level_{1}'.format(EMBEDDING_NAME, level_index)
 
 
 def get_combine_states_name(name_prefix: Optional[str], should_share_weights: bool) -> str:
