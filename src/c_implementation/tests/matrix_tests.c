@@ -769,8 +769,9 @@ void test_threshold_prediction(void) {
     matrix *vec = matrix_allocate(5, 1);
     load_data(vec, vecData, PRECISION);
 
+    dtype temp_buffer[vec->numRows];
     int16_t threshold = (1 << (PRECISION - 2)) | (1 << (PRECISION - 3));  // 0.375
-    int8_t pred = threshold_prediction(vec, threshold, PRECISION);
+    int8_t pred = threshold_prediction(vec, threshold, PRECISION, temp_buffer);
 
     assert(2 == pred);
 
@@ -784,8 +785,9 @@ void test_threshold_prediction_multiple(void) {
     matrix *vec = matrix_allocate(6, 1);
     load_data(vec, vecData, PRECISION);
 
+    dtype temp_buffer[vec->numRows];
     int16_t threshold = 1;
-    int8_t pred = threshold_prediction(vec, threshold, PRECISION);
+    int8_t pred = threshold_prediction(vec, threshold, PRECISION, temp_buffer);
 
     assert(5 == pred);
 
@@ -799,8 +801,9 @@ void test_threshold_prediction_none(void) {
     matrix *vec = matrix_allocate(6, 1);
     load_data(vec, vecData, PRECISION);
 
+    dtype temp_buffer[vec->numRows];
     int16_t threshold = int_to_fp(4, PRECISION);
-    int8_t pred = threshold_prediction(vec, threshold, PRECISION);
+    int8_t pred = threshold_prediction(vec, threshold, PRECISION, temp_buffer);
 
     assert(-1 == pred);
 

@@ -7,7 +7,7 @@ from utils.constants import TRANSFORM_SEED, EMBEDDING_SEED, AGGREGATE_SEED, OUTP
 
 
 INCLUDE_HEADER = '#include "neural_network.h"\n'
-METHOD_DEF = 'InferenceResult *execute_model(matrix *inputs[SEQ_LENGTH], InferenceResult *result, int16_t num_sequences) {\n'
+METHOD_DEF = 'InferenceResult *execute_model(matrix *inputs[SEQ_LENGTH], InferenceResult *result, uint16_t num_sequences) {\n'
 DATA_ARRAY = 'static dtype DATA_ARRAY[{0}];\n'
 
 
@@ -216,6 +216,7 @@ def write_adaptive_graph(model_params: Dict[str, str]):
         temp_states_size = (12 + samples_per_seq) * state_size + int(reduce(lambda x, y: x + y, output_hidden_units)) + num_outputs
         output_file.write(DATA_ARRAY.format(temp_states_size))
         output_file.write('matrix *prev_states[SAMPLES_PER_SEQ];\n')
+        output_file.write('dtype threshold_buffer[NUM_OUTPUT_FEATURES];\n')
         output_file.write('\n')
 
         # Create function definition and enclosing for loop
@@ -284,7 +285,6 @@ def write_adaptive_graph(model_params: Dict[str, str]):
         output_file.write('\t\t\t\tfusion_stack = stack(fusion_stack, state, prev_states[j]);\n')
 
         # For now, we only support single-layer RNN cells
-        print(model_params['fusion'])
         fusion_layer = create_dense_layer('fusion_stack', 'fusion_gate', model_params['fusion'], hidden_vars=[], seed='{0}0'.format(FUSION_SEED), prefix='\t\t\t\t', linear_output=False)
         output_file.write(fusion_layer)
         output_file.write('\n')
@@ -306,14 +306,16 @@ def write_adaptive_graph(model_params: Dict[str, str]):
         output_file.write('\n\n')
 
         if model_params['output_type'] == 'multi_classification':
-            output_file.write('\t\tint16_t prediction = threshold_prediction(output, THRESHOLDS[i], FIXED_POINT_PRECISION);\n')
+            output_file.write('\t\tint16_t prediction = threshold_prediction(output, THRESHOLDS[i], FIXED_POINT_PRECISION, threshold_buffer);\n')
             output_file.write('\t\tif (prediction != -1) {\n')
             output_file.write('\t\t\tresult->numLevels = i;\n')
             output_file.write('\t\t\tresult->prediction = prediction;\n')
+            output_file.write('\t\t\tresult->hasStoppedEarly = 1;\n')
             output_file.write('\t\t\tbreak;\n')
-            output_file.write('\t\t} else if (i == NUM_SEQUENCES - 1) {\n')
+            output_file.write('\t\t} else if (i == num_sequences - 1) {\n')
             output_file.write('\t\t\tresult->numLevels = i;\n')
             output_file.write('\t\t\tresult->prediction = argmax(output);\n')
+            output_file.write('\t\t\tresult->hasStoppedEarly = 0;\n')
             output_file.write('\t\t}\n')
         elif model_params['output_type'] == 'binary_classification':
             output_file.write('\t\tint16_t prediction = (int16_t) output->data[0] > 0;\n')

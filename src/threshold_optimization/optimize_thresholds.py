@@ -12,6 +12,8 @@ from utils.rnn_utils import get_prediction_name
 from utils.testing_utils import ClassificationMetric
 from utils.file_utils import extract_model_name, read_by_file_suffix, save_by_file_suffix
 from threshold_optimization.genetic_optimizer import GeneticThresholdOptimizer
+from threshold_optimization.greedy_optimizer import GreedyThresholdOptimizer
+from threshold_optimization.optimizer import ThresholdOptimizer
 
 
 def make_dataset(model_name: str, save_folder: str, dataset_type: str, dataset_folder: Optional[str]) -> Dataset:
@@ -55,29 +57,38 @@ def get_serialized_info(model_path: str, dataset_folder: Optional[str]) -> Tuple
     return model, dataset, test_log
 
 
-def compute_thresholds(model: AdaptiveModel, opt_params: Dict[str, Any], flops_per_level: List[float]) -> Dict[str, float]:
+def compute_thresholds(model: AdaptiveModel, opt_params: Dict[str, Any], flops_per_level: List[float], name: str) -> Dict[str, float]:
     best_accuracy = None
     best_optimizer = None
 
-    for trial in range(opt_params['trials']):
-        print('Beginning model {0}'.format(trial + 1))
-
-        threshold_optimizer = GeneticThresholdOptimizer(model=model, params=opt_params)
+    if name == 'greedy':
+        threshold_optimizer = GreedyThresholdOptimizer(model=model, params=opt_params)
         threshold_optimizer.fit(dataset, series=DataSeries.VALID)
+        best_optimizer = threshold_optimizer
+    elif name == 'genetic':
 
-        print('Evaluating model {0} on Validation Set.'.format(trial + 1))
-        valid_results = threshold_optimizer.score(dataset, series=DataSeries.VALID, flops_per_level=flops_per_level)
-        acc = valid_results[ClassificationMetric.ACCURACY.name]
+        for trial in range(opt_params['trials']):
+            print('Beginning model {0}'.format(trial + 1))
 
-        print('==========')
+            threshold_optimizer = GeneticThresholdOptimizer(model=model, params=opt_params)
+            threshold_optimizer.fit(dataset, series=DataSeries.VALID)
 
-        if best_accuracy is None or acc > best_accuracy:
-            best_accuracy = acc
-            best_optimizer = threshold_optimizer
+            print('Evaluating model {0} on Validation Set.'.format(trial + 1))
+            valid_results = threshold_optimizer.score(dataset, series=DataSeries.VALID, flops_per_level=flops_per_level)
+            acc = valid_results[ClassificationMetric.ACCURACY.name]
+
+            print('==========')
+
+            if best_accuracy is None or acc > best_accuracy:
+                best_accuracy = acc
+                best_optimizer = threshold_optimizer
+    else:
+        raise ValueError('Unknown optimizer: {0}'.format(name))
 
     print('Completed optimization. Starting testing.')
     test_results = best_optimizer.score(dataset, series=DataSeries.TEST, flops_per_level=flops_per_level)
     print('Completed Testing. Accuracy: {0:.4f}. Avg Levels: {1:.4f}.'.format(test_results[ClassificationMetric.ACCURACY.name], test_results[ClassificationMetric.LEVEL.name]))
+    print('Thresholds: {0}'.format(test_results['THRESHOLDS']))
 
     return test_results
 
@@ -86,7 +97,7 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--model-path', type=str, required=True)
     parser.add_argument('--optimizer-params', type=str, nargs='+')
-    parser.add_argument('--name', type=str, required=True)
+    parser.add_argument('--name', type=str, choices=['genetic', 'greedy'], required=True)
     parser.add_argument('--dataset-folder', type=str)
     args = parser.parse_args()
 
@@ -108,7 +119,13 @@ if __name__ == '__main__':
     flops_per_level = [test_log[name][ClassificationMetric.FLOPS.name] for name in prediction_names]
 
     for opt_params in params:
-        test_results = compute_thresholds(model, opt_params, flops_per_level)
+        test_results = compute_thresholds(model, opt_params, flops_per_level, name=args.name)
 
-        optimized_test_log_path = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format('genetic', opt_params['level_penalty'], opt_params['population_size'],  model_name))
+        if args.name == 'genetic':
+            optimized_test_log_path = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format('genetic', opt_params['level_penalty'], opt_params['population_size'],  model_name))
+        elif args.name == 'greedy':
+            optimized_test_log_path = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format('greedy', opt_params['level_penalty'], opt_params['trials'],  model_name))
+        else:
+            raise ValueError('Unknown optimizer: {0}'.format(args.name))
+
         save_by_file_suffix([test_results], optimized_test_log_path)

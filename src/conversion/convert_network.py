@@ -427,11 +427,11 @@ def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], nu
         output_file.write('#define {0} {1}\n'.format('NUM_SEQUENCES', num_sequences))
         output_file.write('#define {0} {1}\n'.format('NUM_INPUT_FEATURES', num_input_features))
         output_file.write('#define {0} {1}\n'.format('NUM_OUTPUT_FEATURES', num_output_features))
-        output_file.write(C_VAR_FORMAT.format('int16_t', 'INPUT_MEAN[{0}]'.format(num_input_features), seq_to_str(input_mean)) + '\n')
-        output_file.write(C_VAR_FORMAT.format('int16_t', 'INPUT_STD[{0}]'.format(num_input_features), seq_to_str(input_std)) + '\n')
-        output_file.write(C_VAR_FORMAT.format('int16_t', 'OUTPUT_MEAN[{0}]'.format(num_output_features), seq_to_str(output_mean)) + '\n')
-        output_file.write(C_VAR_FORMAT.format('int16_t', 'OUTPUT_STD[{0}]'.format(num_output_features), seq_to_str(output_std)) + '\n\n')
-        output_file.write(C_VAR_FORMAT.format('int16_t', 'THRESHOLDS[{0}]'.format(num_sequences), seq_to_str(thresholds)) + '\n\n')
+        output_file.write(C_VAR_FORMAT.format('const int16_t', 'INPUT_MEAN[{0}]'.format(num_input_features), seq_to_str(input_mean)) + '\n')
+        output_file.write(C_VAR_FORMAT.format('const int16_t', 'INPUT_STD[{0}]'.format(num_input_features), seq_to_str(input_std)) + '\n')
+        output_file.write(C_VAR_FORMAT.format('const int16_t', 'OUTPUT_MEAN[{0}]'.format(num_output_features), seq_to_str(output_mean)) + '\n')
+        output_file.write(C_VAR_FORMAT.format('const int16_t', 'OUTPUT_STD[{0}]'.format(num_output_features), seq_to_str(output_std)) + '\n\n')
+        output_file.write(C_VAR_FORMAT.format('const int16_t', 'THRESHOLDS[{0}]'.format(num_sequences), seq_to_str(thresholds)) + '\n\n')
 
         for weight_var in weight_variables:
             output_file.write(weight_var)
@@ -440,7 +440,7 @@ def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], nu
         output_file.write('\n')
 
         # Write the function prototype
-        output_file.write('InferenceResult *execute_model(matrix *inputs[SEQ_LENGTH], InferenceResult *result, int16_t num_sequences);\n')
+        output_file.write('InferenceResult *execute_model(matrix *inputs[SEQ_LENGTH], InferenceResult *result, uint16_t num_sequences);\n')
 
         output_file.write('#endif\n')
 

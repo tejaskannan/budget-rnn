@@ -33,3 +33,29 @@ def threshold_predictions(predictions: np.ndarray, thresholds: np.ndarray) -> Tu
     predicted_classes = predicted_class_per_level[batch_indices, levels]  # [B]
 
     return predicted_classes, levels
+
+
+def optimal_levels(logits: np.ndarray, labels: np.ndarray) -> np.ndarray:
+    """
+    Finds the first level which predicts the output correctly. If no level, exists
+    the optimal level is 0 (to minimize computation).
+
+    Args:
+        logits: A [B, L, C] array of log probabilities for each sample (B), level (L), and class (C)
+        labels: A [B] array of labels
+    """
+    max_levels = logits.shape[1]
+
+    # Compute the level-wise predictions
+    predicted_classes = np.argmax(logits, axis=-1)  # [B, L]
+    expanded_labels = np.reshape(labels, newshape=(-1, 1))  # [B, 1]
+    correct_predictions = (predicted_classes == expanded_labels).astype(float)  # [B, L]
+
+    # Create the indices mask
+    indices = np.expand_dims(np.arange(start=0, stop=max_levels), axis=0)  # [B, 1]
+    predictions_mask = (1.0 - correct_predictions) * BIG_NUMBER
+    masked_indices = predictions_mask + indices  # [B, L]
+
+    min_levels = np.min(masked_indices, axis=-1)  # [B]
+    optimal_levels = np.where(min_levels > max_levels, 0, min_levels)
+    return optimal_levels

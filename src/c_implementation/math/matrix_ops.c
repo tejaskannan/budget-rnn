@@ -1,5 +1,8 @@
 #include "matrix_ops.h"
 
+// Temporary buffer for hash strings
+static char hash_str[100];
+
 
 matrix *matrix_allocate(int8_t numRows, int8_t numCols) {
     matrix *mat = (matrix *) alloc(sizeof(matrix));
@@ -319,7 +322,7 @@ int16_t argmax(matrix *vec) {
 }
 
 
-int8_t threshold_prediction(matrix *logits, int16_t threshold, int16_t precision) {
+int8_t threshold_prediction(matrix *logits, int16_t threshold, int16_t precision, dtype *temp_buffer) {
     /**
      * Returns the highest-probability class if the normalized log probability is above the given threshold.
      * If the threshold is not satisfied, then the function returns -1.
@@ -329,11 +332,10 @@ int8_t threshold_prediction(matrix *logits, int16_t threshold, int16_t precision
     }
 
     // Allocate a temp matrix
-    dtype data[logits->numRows * logits->numCols];
     matrix temp;
     temp.numRows = logits->numRows;
     temp.numCols = logits->numCols;
-    temp.data = data;
+    temp.data = temp_buffer;
     matrix *tempMat = &temp;
 
     tempMat = matrix_replace(tempMat, logits);
@@ -355,7 +357,7 @@ int8_t threshold_prediction(matrix *logits, int16_t threshold, int16_t precision
 }
 
 
-matrix *normalize(matrix *vec, int16_t *mean, int16_t *std, int16_t precision) {
+matrix *normalize(matrix *vec, const int16_t *mean, const int16_t *std, int16_t precision) {
     /**
      * Normalizes the vector to a standard normal distribution. This operation is in-place,
      * so the original vector is mutated.
@@ -389,7 +391,6 @@ matrix *hashed_matrix_vector_product(matrix *result, matrix *mat, matrix *vec, c
     uint16_t n = string_length(seed);
 
     // Create the hashing seed by pre-prending the given prefix.
-    char hash_str[n + 2 * MAX_NUM_DIGITS + 2];
     string_copy(hash_str, seed, n);
     hash_str[n + 2 * MAX_NUM_DIGITS + 1] = '\0';  // Ensure the string is null-terminated
 
@@ -417,11 +418,6 @@ matrix *hashed_matrix_vector_product(matrix *result, matrix *mat, matrix *vec, c
             num_digits += append_int_to_str(hash_str + n + num_digits, second_index);
             hash_str[n + num_digits] = 's';
             hash_str[n + num_digits + 1] = '\0';
-
-            // Construct the hashing seed.
-           // hash_str[n] = (uint8_t) (i_offset + '0');
-           // hash_str[n+1] = (uint8_t) (j_offset + '0');
-           // hash_str[n+2] = (uint8_t) 's';
 
             mat_index = pearson_hash(hash_str, n + num_digits) % mat->numRows;
             sign = 2 * (pearson_hash(hash_str, n + num_digits + 1) % 2)  - 1;

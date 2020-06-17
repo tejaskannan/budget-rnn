@@ -22,9 +22,9 @@
     matrix *matrix_replace(matrix *dst, matrix *src);
     matrix *stack(matrix *result, matrix *vec1, matrix *vec2);
     int16_t argmax(matrix *vec);
-    matrix *normalize(matrix *vec, int16_t *mean, int16_t *std, int16_t precision);
+    matrix *normalize(matrix *vec, const int16_t *mean, const int16_t *std, int16_t precision);
     matrix *hashed_matrix_vector_product(matrix *result, matrix *mat, matrix *vec, char *seed, uint8_t should_transpose, int16_t precision);
-    int8_t threshold_prediction(matrix *logits, int16_t threshold, int16_t precision);
+    int8_t threshold_prediction(matrix *logits, int16_t threshold, int16_t precision, dtype *temp_buffer);
     int16_t matrix_sum(matrix *mat);
     int16_t matrix_min(matrix *mat);
 
