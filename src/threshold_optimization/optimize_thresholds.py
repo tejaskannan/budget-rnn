@@ -57,7 +57,7 @@ def get_serialized_info(model_path: str, dataset_folder: Optional[str]) -> Tuple
     return model, dataset, test_log
 
 
-def compute_thresholds(model: AdaptiveModel, opt_params: Dict[str, Any], flops_per_level: List[float], name: str) -> Dict[str, float]:
+def compute_thresholds(model: AdaptiveModel, opt_params: Dict[str, Any], flops_per_level: List[float], name: str) -> Tuple[Dict[str, float], ThresholdOptimizer]:
     best_accuracy = None
     best_optimizer = None
 
@@ -90,7 +90,7 @@ def compute_thresholds(model: AdaptiveModel, opt_params: Dict[str, Any], flops_p
     print('Completed Testing. Accuracy: {0:.4f}. Avg Levels: {1:.4f}.'.format(test_results[ClassificationMetric.ACCURACY.name], test_results[ClassificationMetric.LEVEL.name]))
     print('Thresholds: {0}'.format(test_results['THRESHOLDS']))
 
-    return test_results
+    return test_results, best_optimizer
 
 
 if __name__ == '__main__':
@@ -119,13 +119,8 @@ if __name__ == '__main__':
     flops_per_level = [test_log[name][ClassificationMetric.FLOPS.name] for name in prediction_names]
 
     for opt_params in params:
-        test_results = compute_thresholds(model, opt_params, flops_per_level, name=args.name)
+        test_results, optimizer = compute_thresholds(model, opt_params, flops_per_level, name=args.name)
+        identifier = optimizer.identifier
 
-        if args.name == 'genetic':
-            optimized_test_log_path = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format('genetic', opt_params['level_penalty'], opt_params['population_size'],  model_name))
-        elif args.name == 'greedy':
-            optimized_test_log_path = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format('greedy', opt_params['level_penalty'], opt_params['trials'],  model_name))
-        else:
-            raise ValueError('Unknown optimizer: {0}'.format(args.name))
-
+        optimized_test_log_path = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format(args.name, identifier[0], identifier[1], model_name))
         save_by_file_suffix([test_results], optimized_test_log_path)

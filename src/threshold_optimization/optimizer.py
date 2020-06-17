@@ -1,6 +1,6 @@
 import numpy as np
 from sklearn.metrics import f1_score
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 from dataset.dataset import Dataset, DataSeries
 from models.adaptive_model import AdaptiveModel
@@ -17,9 +17,12 @@ class ThresholdOptimizer:
         self._model = model
         self._thresholds = None
         self._num_levels = model.num_outputs
-        self._level_penalty = params['level_penalty']
+        self._level_penalty = params.get('level_penalty', 0.0)
 
     def fit(self, dataset: Dataset, series: DataSeries):
+        raise NotImplementedError()
+
+    def identifier(self) -> Tuple[Any, Any]:
         raise NotImplementedError()
 
     def score(self, dataset: Dataset, series: DataSeries, flops_per_level: List[float], thresholds: Optional[np.ndarray] = None):
