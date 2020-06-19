@@ -213,8 +213,6 @@ class StandardModel(TFModel):
                 final_state = rnn_states.read(index=last_index)  # [L, B, D] where L is the number of RNN layers
                 final_state = tf.concat(tf.unstack(final_state, axis=0), axis=-1)  # [B, D * L]
 
-                print(final_state)
-
                 # [B, D]
                 aggregated = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
         elif self.model_type == StandardModelType.BIRNN:
@@ -257,14 +255,17 @@ class StandardModel(TFModel):
 
         # Create the output layer
         output_size = self.metadata[NUM_OUTPUT_FEATURES] if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[NUM_CLASSES]
-        output = mlp(inputs=aggregated,
-                     output_size=output_size,
-                     hidden_sizes=self.hypers.model_params['output_hidden_units'],
-                     activations=self.hypers.model_params['output_hidden_activation'],
-                     dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                     name=OUTPUT_LAYER_NAME,
-                     compression_fraction=self.hypers.model_params.get('compression_fraction'),
-                     compression_seed=OUTPUT_SEED)
+        output, _ = mlp(inputs=aggregated,
+                        output_size=output_size,
+                        hidden_sizes=self.hypers.model_params['output_hidden_units'],
+                        activations=self.hypers.model_params['output_hidden_activation'],
+                        dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                        should_bias_final=True,
+                        should_activate_final=False,
+                        should_dropout_final=False,
+                        name=OUTPUT_LAYER_NAME,
+                        compression_fraction=self.hypers.model_params.get('compression_fraction'),
+                        compression_seed=OUTPUT_SEED)
 
         if self.output_type == OutputType.BINARY_CLASSIFICATION:
             classification_output = compute_binary_classification_output(model_output=output,
@@ -309,6 +310,7 @@ class StandardModel(TFModel):
             labels = tf.squeeze(expected_output, axis=-1)
 
             sample_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=labels)
+
             self._ops[LOSS] = tf.reduce_mean(sample_loss)
         else:
             self._ops[LOSS] = tf.reduce_mean(tf.square(predictions - expected_output))
