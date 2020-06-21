@@ -50,13 +50,13 @@ def fuse_states(curr_state: tf.Tensor,
         concat_states = tf.concat([curr_state, prev_state], axis=-1)  # [B, 2 * D]
 
         # [B, D]
-        update_weight = dense(inputs=concat_states,
-                              units=state_size,
-                              name=name,
-                              activation='sigmoid',
-                              use_bias=True,
-                              compression_fraction=compression_fraction,
-                              compression_seed=compression_seed)
+        update_weight, _ = dense(inputs=concat_states,
+                                 units=state_size,
+                                 name=name,
+                                 activation='sigmoid',
+                                 use_bias=True,
+                                 compression_fraction=compression_fraction,
+                                 compression_seed=compression_seed)
 
         return update_weight * curr_state + (1.0 - update_weight) * prev_state
     else:
@@ -103,7 +103,7 @@ def dynamic_rnn(inputs: tf.Tensor,
 
     fusion_layers: List[FusionLayer] = []
     if previous_states is not None and fusion_mode.lower() == 'gate':
-    
+
         # Initialize all variables before the while loop
         for i in range(rnn_layers):
             if compression_fraction is None or compression_fraction >= 1:
@@ -121,6 +121,7 @@ def dynamic_rnn(inputs: tf.Tensor,
                                                    shape=(1, state_size),
                                                    initializer=tf.initializers.glorot_uniform(),
                                                    trainable=True)
+
     # While loop step
     def step(index, state, outputs, states, gates):
         step_inputs = tf.gather(inputs, indices=index, axis=1)  # [B, D]

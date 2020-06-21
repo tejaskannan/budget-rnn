@@ -27,14 +27,22 @@ class RNNSampleDataset(Dataset):
 
         # Add noise to training inputs
         if is_train and metadata.get(INPUT_NOISE, 0.0) > SMALL_NUMBER:
-            input_noise = np.random.normal(loc=0.0, scale=metadata[INPUT_NOISE], size=normalized_input.shape)
+            noise_scale = metadata[INPUT_NOISE]
+            input_noise = np.random.uniform(low=-noise_scale, high=noise_scale, size=normalized_input.shape)
             normalized_input = np.array(normalized_input) + input_noise
 
         # Re-map labels for classification problems
         output = sample[OUTPUT]
         if metadata[NUM_CLASSES] > 0:
             label_map = metadata[LABEL_MAP]
-            output = label_map[output]
+
+            # Design decision: If the output is not known, then we choose a random
+            # label. An unknown label means the label is not present during training.
+            # In this situation, we expect the models to perform akin to random guessing.
+            if output not in label_map:
+                output = np.random.choice(list(label_map.values()))
+            else:
+                output = label_map[output]
 
         # Normalize outputs (Scaler expects a 2D input)
         output_scaler = metadata[OUTPUT_SCALER]

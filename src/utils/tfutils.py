@@ -7,9 +7,6 @@ from utils.constants import SMALL_NUMBER
 from utils.hashing import pearson_hash
 
 
-NODES_TO_SKIP = ['initializer', 'dropout']
-
-
 def get_optimizer(name: str, learning_rate: float, learning_rate_decay: float, global_step: tf.Variable, decay_steps: int = 100000, momentum: Optional[float] = None):
     momentum = momentum if momentum is not None else 0.0
     name = name.lower()
@@ -179,7 +176,7 @@ def expand_to_matrix(vec: tf.Tensor, size: int, matrix_dims: Tuple[int, int], na
 
             sign_hash = pearson_hash('{0}{1}{2}s'.format(name, i, j)) % 2
             sign = 2 * sign_hash - 1  # Map onto {-1, 1}
-            
+
             indices.append(index)
             signs.append(sign)
 
@@ -256,23 +253,24 @@ def tf_f1_score(predictions: tf.Tensor, labels: tf.Tensor) -> tf.Tensor:
     return 2 * (precision * recall) / (precision + recall + SMALL_NUMBER)
 
 
-def tf_rnn_cell(cell_type: str, num_units: int, activation: str, layers: int, dropout_keep_rate: tf.Tensor, name_prefix: Optional[str]) -> tf.nn.rnn_cell.MultiRNNCell:
+def tf_rnn_cell(cell_type: str, num_units: int, activation: str, layers: int, name_prefix: Optional[str]) -> tf.nn.rnn_cell.MultiRNNCell:
 
     def make_cell(cell_type: str, num_units: int, activation: str, name: str):
         if cell_type == 'vanilla':
             return tf.nn.rnn_cell.BasicRNNCell(num_units=num_units,
-                                            activation=get_activation(activation),
-                                            name=name)
+                                               activation=get_activation(activation),
+                                               name=name)
         elif cell_type == 'gru':
             return tf.nn.rnn_cell.GRUCell(num_units=num_units,
-                                       activation=get_activation(activation),
-                                       kernel_initializer=tf.glorot_uniform_initializer(),
-                                       name=name)
+                                          activation=get_activation(activation),
+                                          kernel_initializer=tf.glorot_uniform_initializer(),
+                                          bias_initializer=tf.random_uniform_initializer(minval=-0.7, maxval=0.7),
+                                          name=name)
         elif cell_type == 'lstm':
             return tf.nn.rnn_cell.LSTMCell(num_units=num_units,
-                                        activation=get_activation(activation),
-                                        initializer=tf.glorot_uniform_initializer(),
-                                        name=name)
+                                           activation=get_activation(activation),
+                                           initializer=tf.glorot_uniform_initializer(),
+                                           name=name)
         raise ValueError(f'Unknown cell type: {cell_type}')
 
     cell_type = cell_type.lower()
@@ -281,14 +279,9 @@ def tf_rnn_cell(cell_type: str, num_units: int, activation: str, layers: int, dr
     for i in range(layers):
         name = f'{name_prefix}-{i}'
         cell = make_cell(cell_type, num_units, activation, name)
-        cell = tf.nn.rnn_cell.DropoutWrapper(cell=cell,
-                                             input_keep_prob=dropout_keep_rate,
-                                             state_keep_prob=dropout_keep_rate,
-                                             output_keep_prob=dropout_keep_rate)
         cells.append(cell)
 
     return tf.nn.rnn_cell.MultiRNNCell(cells)
-
 
 
 def get_rnn_state(state: Union[tf.Tensor, tf.nn.rnn_cell.LSTMStateTuple, Tuple[tf.Tensor, ...], Tuple[tf.nn.rnn_cell.LSTMStateTuple, ...]]) -> tf.Tensor:
@@ -304,26 +297,3 @@ def get_rnn_state(state: Union[tf.Tensor, tf.nn.rnn_cell.LSTMStateTuple, Tuple[t
         return tf.concat(states, axis=-1)
     else:
         return state
-
-
-def get_total_flops(node: Optional[tf.profiler.GraphNodeProto]) -> int:
-    """
-    Returns the total number of floating point ops in the rooted computational graph.
-    """
-    if node is None:
-        return 0
-
-    total_flops = node.total_float_ops
-    for child in node.children:
-
-        child_name = child.name.lower()
-        should_skip = False
-        for name in NODES_TO_SKIP:
-            if name not in child.name.lower():
-                should_skip = True
-                break
-
-        if not should_skip:
-            total_flops += get_total_flops(child)
-
-    return total_flops

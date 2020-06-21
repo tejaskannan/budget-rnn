@@ -1,30 +1,26 @@
 import tensorflow as tf
-
 import numpy as np
 import re
 import time
 from collections import namedtuple, defaultdict, OrderedDict
 from typing import List, Optional, Tuple, Dict, Any, Set, Union, DefaultDict, Iterable
-from sklearn.preprocessing import StandardScaler
 
 from models.tf_model import TFModel
-from layers.basic import rnn_cell, mlp
+from layers.basic import rnn_cell, mlp, dense
 from layers.cells.cells import make_rnn_cell, MultiRNNCell
-from layers.rnn import dynamic_rnn, dropped_rnn, RnnOutput
+from layers.rnn import dynamic_rnn, RnnOutput
 from layers.output_layers import OutputType, compute_binary_classification_output, compute_multi_classification_output
-from layers.embedding_layer import embedding_layer
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs, expand_to_matrix
 from utils.misc import sample_sequence_batch
-from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS, OUTPUT_SEED
+from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, OUTPUT, INPUTS, LOSS, OUTPUT_SEED
 from utils.constants import NODE_REGEX_FORMAT, DROPOUT_KEEP_RATE, MODEL, SCHEDULED_MODEL, NUM_CLASSES
-from utils.constants import INPUT_SCALER, OUTPUT_SCALER, INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE, EMBEDDING_SEED
+from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE, EMBEDDING_SEED
 from utils.loss_utils import f1_score_loss, binary_classification_loss
 from utils.rnn_utils import *
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
 from utils.np_utils import sigmoid
-from utils.threshold_utils import lower_threshold_predictions, TwoSidedThreshold
 
 
 class AdaptiveModel(TFModel):
@@ -371,14 +367,6 @@ class AdaptiveModel(TFModel):
         for batch_num, batch in enumerate(test_batch_generator):
             feed_dict = self.batch_to_feed_dict(batch, is_train=False)
 
-            #inputs = batch[INPUTS]
-            #print(inputs)
-
-            #with self.sess.graph.as_default():
-            #    embedding_kernel = [var for var in self.trainable_vars if get_embedding_name() in var.name and 'kernel' in var.name][0]
-            #    expanded_matrix = expand_to_matrix(embedding_kernel, size=15, matrix_dims=(3, 20), name=EMBEDDING_SEED)
-            #    print(self.sess.run(expanded_matrix))
-
             # Execute predictions and time results
             latencies: List[float] = []
             logits_list: List[np.ndarray] = []
@@ -407,7 +395,7 @@ class AdaptiveModel(TFModel):
 
         # Stack all labels into a single array
         labels = np.vstack(labels)
-        
+
         result = defaultdict(dict)
         for model_name in predictions_dict.keys():
 
@@ -421,7 +409,7 @@ class AdaptiveModel(TFModel):
                     metric_value = get_binary_classification_metric(metric_name, predictions, labels, latency, levels, flops)
                 else:
                     metric_value = get_multi_classification_metric(metric_name, predictions, labels, latency, levels, flops, self.metadata[NUM_CLASSES])
-                
+
                 result[model_name][metric_name.name] = metric_value
 
             # Remove first latency to remove outliers due to startup costs
@@ -435,9 +423,6 @@ class AdaptiveModel(TFModel):
                 self._make_bow_model(is_train)
             else:
                 self._make_rnn_model(is_train)
-
-            # print(self.trainable_vars)
-
 
     def _make_bow_model(self, is_train: bool):
         outputs: List[tf.Tensor] = []
@@ -470,15 +455,15 @@ class AdaptiveModel(TFModel):
                                              name_prefix=embedding_name)
 
             # Transform the input sequence, [B, T, D]
-            transformed_sequence = mlp(inputs=input_sequence,
-                                       output_size=self.hypers.model_params['state_size'],
-                                       hidden_sizes=self.hypers.model_params['transform_units'],
-                                       activations=self.hypers.model_params['transform_activation'],
-                                       dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                                       should_activate_final=True,
-                                       should_bias_final=True,
-                                       should_dropout_final=True,
-                                       name=transform_name)
+            transformed_sequence, _ = mlp(inputs=input_sequence,
+                                          output_size=self.hypers.model_params['state_size'],
+                                          hidden_sizes=self.hypers.model_params['transform_units'],
+                                          activations=self.hypers.model_params['transform_activation'],
+                                          dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                                          should_activate_final=True,
+                                          should_bias_final=True,
+                                          should_dropout_final=True,
+                                          name=transform_name)
 
             # Compute attention weights for aggregation. We do this explicitly here
             # to save the normalized weights. This avoids redundant computation.
@@ -488,9 +473,9 @@ class AdaptiveModel(TFModel):
                                            use_bias=True,
                                            kernel_initializer=tf.glorot_uniform_initializer(),
                                            name=aggregation_name)
-        
+
             # For the first sequence, we have no already-processed samples to integrate.
-            if i  == 0:
+            if i == 0:
                 normalized_attn_weights = tf.nn.softmax(attn_weights, axis=1, name='{0}-{1}-softmax'.format(aggregation_name, i))
                 weighted_sequence = tf.math.multiply(transformed_sequence, normalized_attn_weights, name='{0}-{1}-multiply'.format(aggregation_name, i))
 
@@ -512,12 +497,12 @@ class AdaptiveModel(TFModel):
 
             # [B, K]
             output_size = num_output_features if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[NUM_CLASSES]
-            output = mlp(inputs=aggregated_sequence,
-                         output_size=output_size,
-                         hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
-                         activations=self.hypers.model_params['output_hidden_activation'],
-                         dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                         name=output_layer_name)
+            output, _ = mlp(inputs=aggregated_sequence,
+                            output_size=output_size,
+                            hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
+                            activations=self.hypers.model_params['output_hidden_activation'],
+                            dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                            name=output_layer_name)
 
             if self.output_type == OutputType.BINARY_CLASSIFICATION:
                 classification_output = compute_binary_classification_output(model_output=output,
@@ -542,8 +527,10 @@ class AdaptiveModel(TFModel):
         combined_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), outputs), axis=1)
         self._ops[ALL_PREDICTIONS_NAME] = combined_outputs
 
-
     def _make_rnn_model(self, is_train: bool):
+        """
+        Builds an Adaptive RNN model.
+        """
         outputs: List[tf.Tensor] = []
         states_list: List[tf.TensorArray] = []
         prev_state: Optional[tf.Tensor] = None
@@ -565,27 +552,20 @@ class AdaptiveModel(TFModel):
             f1_score_name = get_f1_score_name(i)
             embedding_name = get_embedding_name(i, self.hypers.model_params.get('share_embedding_weights', True))
 
-
-            # Create the embedding layer
-            input_sequence = embedding_layer(inputs=self._placeholders[input_name],
-                                             units=self.hypers.model_params['state_size'],
-                                             dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                                             use_conv=self.hypers.model_params['use_conv_embedding'],
-                                             params=self.hypers.model_params['embedding_layer_params'],
-                                             seq_length=self.samples_per_seq,
-                                             input_shape=self.metadata[INPUT_SHAPE],
-                                             name_prefix=embedding_name,
-                                             compression_fraction=self.hypers.model_params.get('compression_fraction'))
-
-
-            self._ops['embedding-{0}'.format(i)] = input_sequence
+            # Create the embedding layer. Output is a [B, T, D] tensor where T is the seq length of this level.
+            input_sequence, _ = dense(inputs=self._placeholders[input_name],
+                                      units=self.hypers.model_params['state_size'],
+                                      activation=self.hypers.model_params['embedding_activation'],
+                                      use_bias=True,
+                                      name=embedding_name,
+                                      compression_seed=EMBEDDING_SEED,
+                                      compression_fraction=self.hypers.model_params.get('compression_fraction'))
 
             # Create the RNN Cell
             cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
                                  input_units=self.hypers.model_params['state_size'],
                                  output_units=self.hypers.model_params['state_size'],
                                  activation=self.hypers.model_params['rnn_activation'],
-                                 dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
                                  num_layers=self.hypers.model_params['rnn_layers'],
                                  name=cell_name,
                                  compression_fraction=self.hypers.model_params.get('compression_fraction'))
@@ -595,7 +575,7 @@ class AdaptiveModel(TFModel):
 
             # Set the initial state for chunked model types
             if prev_state is not None:
-                if self.model_type == AdaptiveModelType.CASCADE or self.hypers.model_params['link_levels']:
+                if self.model_type == AdaptiveModelType.CASCADE:
                     initial_state = prev_state
 
             # Set previous states for the Sample model type
@@ -612,7 +592,7 @@ class AdaptiveModel(TFModel):
                                   should_share_weights=self.hypers.model_params['share_rnn_weights'],
                                   fusion_mode=self.hypers.model_params.get('fusion_mode'),
                                   compression_fraction=self.hypers.model_params.get('compression_fraction'))
-            rnn_outputs = rnn_out.outputs
+            rnn_outputs = rnn_out.outputs  # [B, T, D]
             rnn_states = rnn_out.states
             rnn_gates = rnn_out.gates
 
@@ -627,22 +607,19 @@ class AdaptiveModel(TFModel):
 
             # [B, D]
             rnn_output = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
-
-            self._ops['rnn-output-{0}'.format(i)] = rnn_output
+            rnn_output = tf.nn.dropout(rnn_output, keep_prob=self._placeholders[DROPOUT_KEEP_RATE])
 
             # [B, K]
             output_size = num_output_features if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[NUM_CLASSES]
-            output, hidden_states = mlp(inputs=rnn_output,
-                         output_size=output_size,
-                         hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
-                         activations=self.hypers.model_params['output_hidden_activation'],
-                         should_bias_final=True,
-                         dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                         name=output_layer_name,
-                         compression_fraction=self.hypers.model_params.get('compression_fraction'),
-                         compression_seed=OUTPUT_SEED)
-
-            self._ops['output-hidden-{0}'.format(i)] = hidden_states
+            output, _ = mlp(inputs=rnn_output,
+                            output_size=output_size,
+                            hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
+                            activations=self.hypers.model_params['output_hidden_activation'],
+                            should_bias_final=True,
+                            dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                            name=output_layer_name,
+                            compression_fraction=self.hypers.model_params.get('compression_fraction'),
+                            compression_seed=OUTPUT_SEED)
 
             if self.output_type == OutputType.BINARY_CLASSIFICATION:
                 classification_output = compute_binary_classification_output(model_output=output,
@@ -728,7 +705,6 @@ class AdaptiveModel(TFModel):
         if reg_loss is not None:
             self._ops[LOSS] += reg_loss
 
-
     def anytime_generator(self, feed_dict: Dict[tf.Tensor, List[Any]],
                           max_num_levels: int) -> Optional[Iterable[np.ndarray]]:
         """
@@ -739,7 +715,7 @@ class AdaptiveModel(TFModel):
 
             # Setup the partial run with the output operations and input placeholders
             prediction_ops = [self.ops[get_prediction_name(i)] for i in range(num_levels)]
-            
+
             if self.output_type == OutputType.REGRESSION:
                 logit_ops = []
             else:
