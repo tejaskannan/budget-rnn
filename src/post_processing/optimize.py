@@ -107,7 +107,8 @@ def evaluate_thresholds(model: AdaptiveModel,
         # Concatenate logits into a 2D array (logit_ops is already ordered by level)
         if mode == InferenceMode.MULTICLASS:
             logits_concat = np.concatenate([np.expand_dims(logits[op], axis=1) for op in logit_ops], axis=1)
-            probabilities = softmax(logits_concat, axis=-1)
+            # probabilities = softmax(logits_concat, axis=-1)
+            probabilities = min_max_normalize(logits_concat, axis=-1)
         else:
             logits_concat = np.squeeze(np.concatenate([logits[op] for op in logit_ops], axis=-1))
             probabilities = sigmoid(logits_concat)

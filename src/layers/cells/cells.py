@@ -10,19 +10,23 @@ def make_rnn_cell(cell_type: str,
                   input_units: int,
                   output_units: int,
                   activation: str,
-                  dropout_keep_rate: tf.Tensor,
                   name: str,
                   num_layers: Optional[int] = None,
                   use_skip_connections: bool = False,
                   compression_fraction: Optional[float] = None):
     if num_layers is None:
-        return make_single_rnn_cell(cell_type, input_units, output_units, activation, dropout_keep_rate, name, use_skip_connections, compression_fraction=compression_fraction)
+        return make_single_rnn_cell(cell_type=cell_type,
+                                    input_units=input_units,
+                                    output_units=output_units,
+                                    activation=activation,
+                                    name=name,
+                                    use_skip_connections=use_skip_connections,
+                                    compression_fraction=compression_fraction)
 
     return MultiRNNCell(num_layers=num_layers,
                         input_units=input_units,
                         output_units=output_units,
                         activation=activation,
-                        dropout_keep_rate=dropout_keep_rate,
                         cell_type=cell_type,
                         name=name,
                         use_skip_connections=use_skip_connections,
@@ -33,7 +37,6 @@ def make_single_rnn_cell(cell_type: str,
                          input_units: int,
                          output_units: int,
                          activation: str,
-                         dropout_keep_rate: tf.Tensor,
                          name: str,
                          use_skip_connections: bool = False,
                          compression_fraction: Optional[float] = None,
@@ -44,30 +47,28 @@ def make_single_rnn_cell(cell_type: str,
         return GRU(input_units=input_units,
                    output_units=output_units,
                    activation=activation,
-                   dropout_keep_rate=dropout_keep_rate,
                    name=name,
                    layer=layer,
                    use_skip_connections=use_skip_connections,
                    compression_fraction=compression_fraction)
-    if cell_type == 'vanilla':
+    elif cell_type == 'vanilla':
         return VanillaCell(input_units=input_units,
                            output_units=output_units,
                            activation=activation,
-                           dropout_keep_rate=dropout_keep_rate,
                            name=name,
                            layer=layer,
                            use_skip_connections=use_skip_connections,
                            compression_fraction=compression_fraction)
-    if cell_type == 'lstm':
+    elif cell_type == 'lstm':
         return LSTM(input_units=input_units,
                     output_units=output_units,
                     activation=activation,
-                    dropout_keep_rate=dropout_keep_rate,
                     name=name,
                     layer=layer,
                     use_skip_connections=use_skip_connections,
                     compression_fraction=compression_fraction)
-    raise ValueError(f'Unknown cell name {cell_type}!')
+    else:
+        raise ValueError(f'Unknown cell name {0}!'.format(cell_type))
 
 
 class RNNCell:
@@ -76,7 +77,6 @@ class RNNCell:
                  input_units: int,
                  output_units: int,
                  activation: str,
-                 dropout_keep_rate: tf.Tensor,
                  name: str,
                  layer: int,
                  use_skip_connections: bool,
@@ -89,7 +89,6 @@ class RNNCell:
             input_units: Number of dimensions of the input vectors
             output_units: Number of dimensions of the output vectors
             activation: Name of the activation function (i.e. tanh)
-            dropout_keep_rate: Dropout keep rate for gate values
             name: Name of the RNN Cell
             layer: Layer at which this cell exists (within a multi-layered RNN cell)
             use_skip_connections: Whether to allow skip connections through this cell
@@ -99,7 +98,6 @@ class RNNCell:
         self.input_units = input_units
         self.output_units = output_units
         self.activation = get_activation(activation)
-        self.dropout_keep_rate = dropout_keep_rate
         self.initializer = tf.initializers.glorot_uniform()
         self.state_size = output_units if state_size is None else state_size
         self.use_skip_connections = use_skip_connections
@@ -149,14 +147,13 @@ class MultiRNNCell(RNNCell):
                  input_units: int,
                  output_units: int,
                  activation: str,
-                 dropout_keep_rate: tf.Tensor,
                  name: str,
                  cell_type: str,
                  use_skip_connections: bool = False,
                  state_size: Optional[int] = None,
                  compression_fraction: Optional[float] = None):
         assert num_layers >= 1, 'Must provide at least one layer'
-        super().__init__(input_units, output_units, activation, dropout_keep_rate, name, 0, use_skip_connections, state_size, compression_fraction)
+        super().__init__(input_units, output_units, activation, name, 0, use_skip_connections, state_size, compression_fraction)
         self.num_layers = num_layers
 
         self.cells: List[RNNCell] = []
@@ -165,7 +162,6 @@ class MultiRNNCell(RNNCell):
                                         input_units=input_units if i == 0 else output_units,
                                         output_units=output_units,
                                         activation=activation,
-                                        dropout_keep_rate=dropout_keep_rate,
                                         name=f'{name}-cell-{i}',
                                         layer=i,
                                         use_skip_connections=use_skip_connections,
@@ -267,60 +263,58 @@ class GRU(RNNCell):
             state = skip_gate * state + (1.0 - skip_gate) * skip_input
 
         # Create the update and reset vectors
-        update_state_vector = dense(inputs=state,
-                                    units=self.output_units,
-                                    use_bias=False,
-                                    activation=None,
-                                    name='{0}-W-update'.format(self.name),
-                                    compression_fraction=self.compression_fraction,
-                                    compression_seed='{0}W{1}{2}'.format(TRANSFORM_SEED, UPDATE_SEED, self.layer))
-        update_input_vector = dense(inputs=inputs,
-                                    units=self.output_units,
-                                    use_bias=False,
-                                    activation=None,
-                                    name='{0}-U-update'.format(self.name),
-                                    compression_fraction=self.compression_fraction,
-                                    compression_seed='{0}U{1}{2}'.format(TRANSFORM_SEED, UPDATE_SEED, self.layer))
+        update_state_vector, _ = dense(inputs=state,
+                                       units=self.output_units,
+                                       use_bias=False,
+                                       activation=None,
+                                       name='{0}-W-update'.format(self.name),
+                                       compression_fraction=self.compression_fraction,
+                                       compression_seed='{0}W{1}{2}'.format(TRANSFORM_SEED, UPDATE_SEED, self.layer))
+        update_input_vector, _ = dense(inputs=inputs,
+                                       units=self.output_units,
+                                       use_bias=False,
+                                       activation=None,
+                                       name='{0}-U-update'.format(self.name),
+                                       compression_fraction=self.compression_fraction,
+                                       compression_seed='{0}U{1}{2}'.format(TRANSFORM_SEED, UPDATE_SEED, self.layer))
         update_gate = tf.math.sigmoid(update_state_vector + update_input_vector + self.b_update)
 
-        reset_state_vector = dense(inputs=state,
-                                   units=self.output_units,
-                                   use_bias=False,
-                                   activation=None,
-                                   name='{0}-W-reset'.format(self.name),
-                                   compression_fraction=self.compression_fraction,
-                                   compression_seed='{0}W{1}{2}'.format(TRANSFORM_SEED, RESET_SEED, self.layer))
-        reset_input_vector = dense(inputs=inputs,
-                                   units=self.output_units,
-                                   use_bias=False,
-                                   activation=None,
-                                   name='{0}-U-reset'.format(self.name),
-                                   compression_fraction=self.compression_fraction,
-                                   compression_seed='{0}U{1}{2}'.format(TRANSFORM_SEED, RESET_SEED, self.layer))
+        reset_state_vector, _ = dense(inputs=state,
+                                      units=self.output_units,
+                                      use_bias=False,
+                                      activation=None,
+                                      name='{0}-W-reset'.format(self.name),
+                                      compression_fraction=self.compression_fraction,
+                                      compression_seed='{0}W{1}{2}'.format(TRANSFORM_SEED, RESET_SEED, self.layer))
+        reset_input_vector, _ = dense(inputs=inputs,
+                                      units=self.output_units,
+                                      use_bias=False,
+                                      activation=None,
+                                      name='{0}-U-reset'.format(self.name),
+                                      compression_fraction=self.compression_fraction,
+                                      compression_seed='{0}U{1}{2}'.format(TRANSFORM_SEED, RESET_SEED, self.layer))
         reset_gate = tf.math.sigmoid(reset_state_vector + reset_input_vector + self.b_reset)
 
-        update_with_dropout = tf.nn.dropout(update_gate, keep_prob=self.dropout_keep_rate)
-        reset_with_dropout = tf.nn.dropout(reset_gate, keep_prob=self.dropout_keep_rate)
-
         # Create the candidate state
-        candidate_reset = dense(inputs=state * reset_with_dropout,
-                                units=self.output_units,
-                                use_bias=False,
-                                activation=None,
-                                name='{0}-W'.format(self.name),
-                                compression_fraction=self.compression_fraction,
-                                compression_seed='{0}W{1}{2}'.format(TRANSFORM_SEED, CANDIDATE_SEED, self.layer))
-        candidate_input = dense(inputs=inputs,
-                                units=self.output_units,
-                                use_bias=False,
-                                activation=None,
-                                name='{0}-U'.format(self.name),
-                                compression_fraction=self.compression_fraction,
-                                compression_seed='{0}U{1}{2}'.format(TRANSFORM_SEED, CANDIDATE_SEED, self.layer))
+        candidate_reset, _ = dense(inputs=state * reset_gate,
+                                   units=self.output_units,
+                                   use_bias=False,
+                                   activation=None,
+                                   name='{0}-W'.format(self.name),
+                                   compression_fraction=self.compression_fraction,
+                                   compression_seed='{0}W{1}{2}'.format(TRANSFORM_SEED, CANDIDATE_SEED, self.layer))
+        candidate_input, _ = dense(inputs=inputs,
+                                   units=self.output_units,
+                                   use_bias=False,
+                                   activation=None,
+                                   name='{0}-U'.format(self.name),
+                                   compression_fraction=self.compression_fraction,
+                                   compression_seed='{0}U{1}{2}'.format(TRANSFORM_SEED, CANDIDATE_SEED, self.layer))
+
         candidate_state = self.activation(candidate_reset + candidate_input + self.b)
 
         # Form the next state using the update gate
-        next_state = update_with_dropout * state + (1.0 - update_with_dropout) * candidate_state
+        next_state = update_gate * state + (1.0 - update_gate) * candidate_state
 
         return next_state, next_state, [update_gate, reset_gate]
 
@@ -362,9 +356,8 @@ class VanillaCell(RNNCell):
             state = skip_gate * state + (1.0 - skip_gate) * skip_input
 
         candidate_vector = tf.matmul(state, self.W) + tf.matmul(inputs, self.U) + self.b
-        candidate_vector_with_dropout = tf.nn.dropout(candidate_vector, keep_prob=self.dropout_keep_rate)
 
-        next_state = self.activation(candidate_vector_with_dropout)
+        next_state = self.activation(candidate_vector)
         return next_state, next_state, [candidate_vector]
 
 
@@ -477,15 +470,11 @@ class LSTM(RNNCell):
         read_gate = tf.math.sigmoid(read_vector)
         forget_gate = tf.math.sigmoid(forget_vector)
 
-        write_with_dropout = tf.nn.dropout(write_gate, keep_prob=self.dropout_keep_rate)
-        read_with_dropout = tf.nn.dropout(read_gate, keep_prob=self.dropout_keep_rate)
-        forget_with_dropout = tf.nn.dropout(forget_gate, keep_prob=self.dropout_keep_rate)
-
         candidate_vector = tf.matmul(state_h, self.W) + tf.matmul(inputs, self.U) + self.b
         candidate_state = self.activation(candidate_vector)
 
-        next_c = forget_with_dropout * state_c + write_with_dropout * candidate_state
-        next_h = read_with_dropout * tf.nn.tanh(next_c)
+        next_c = forget_gate * state_c + write_gate * candidate_state
+        next_h = read_gate * tf.nn.tanh(next_c)
 
         next_state = tf.concat([next_c, next_h], axis=-1)
 

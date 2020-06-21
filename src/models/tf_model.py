@@ -26,7 +26,7 @@ class TFModel(Model):
 
     def __init__(self, hyper_parameters: HyperParameters, save_folder: str, is_train: bool):
         super().__init__(hyper_parameters, save_folder, is_train)
-        
+
         self._sess = tf.Session(graph=tf.Graph())
 
         self._optimizer = None
@@ -36,7 +36,7 @@ class TFModel(Model):
         self._is_made = False
 
         # Get the model output type
-        self._output_type = OutputType[self.hypers.model_params['output_type'].upper()] 
+        self._output_type = OutputType[self.hypers.model_params['output_type'].upper()]
 
         # Dictionary with inference operations
         self._inference_ops: Dict[str, tf.Tensor] = dict()
@@ -215,7 +215,7 @@ class TFModel(Model):
     def predict_regression(self, test_batch_generator: Iterable[Any],
                            batch_size: int,
                            max_num_batches: Optional[int],
-                           flops_dict: Optional[Dict[str, int]])-> DefaultDict[str, Dict[str, float]]:
+                           flops_dict: Optional[Dict[str, int]]) -> DefaultDict[str, Dict[str, float]]:
         raise NotImplementedError()
 
     def batch_to_feed_dict(self, batch: Dict[str, np.ndarray], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
@@ -344,7 +344,7 @@ class TFModel(Model):
         for op in self.sess.graph.get_operations():
             for output_name in map(lambda t: t.name, op.outputs):
                 if output_name in output_names:
-                    output_nodes.append(op.name) 
+                    output_nodes.append(op.name)
 
         # Freeze the corresponding graph
         with self.sess.graph.as_default():
@@ -374,7 +374,7 @@ class TFModel(Model):
 
         loss_dict: DefaultDict[str, List[float]] = defaultdict(list)
         acc_dict: DefaultDict[str, List[float]] = defaultdict(list)
-        
+
         # Initialize dictionary to hold metrics to measure improvement
         init_metric_value = BIG_NUMBER if self.output_type == OutputType.REGRESSION else -BIG_NUMBER
         best_valid_metric_dict: DefaultDict[str, float] = defaultdict(lambda: init_metric_value)
@@ -382,7 +382,7 @@ class TFModel(Model):
         # Create dictionary to map accuracy operations to loss operations
         accuracy_loss_dict: Dict[str, str] = dict()
         assert len(self.accuracy_op_names) == len(self.loss_op_names) or len(self.loss_op_names) == 1, f'Misaligned accuracy and loss operations.'
-        if len(self.loss_op_names):
+        if len(self.loss_op_names) == 1:
             accuracy_loss_dict = {acc_op: self.loss_op_names[0] for acc_op in self.accuracy_op_names}
         else:
             accuracy_loss_dict = {acc_op: loss_op for acc_op, loss_op in zip(self.accuracy_op_names, self.loss_op_names)}
@@ -402,7 +402,7 @@ class TFModel(Model):
             train_generator = dataset.minibatch_generator(DataSeries.TRAIN,
                                                           batch_size=self.hypers.batch_size,
                                                           metadata=self.metadata,
-                                                          should_shuffle=True,
+                                                          should_shuffle=True,  # TODO: Change this back to shuffling
                                                           drop_incomplete_batches=drop_incomplete_batches)
 
             epoch_train_loss: DefaultDict[str, float] = defaultdict(float)
@@ -411,6 +411,7 @@ class TFModel(Model):
             train_batch_counter = 1
             for batch in train_generator:
                 feed_dict = self.batch_to_feed_dict(batch, is_train=True)
+
                 ops_to_run = [self.optimizer_op_name, self.global_step_op_name] + self.loss_op_names
 
                 if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
@@ -443,7 +444,6 @@ class TFModel(Model):
                     print(f'Train Batch {train_batch_counter}. Avg loss so far: {avg_train_loss_so_far:.4f}', end='\r')
 
                 train_batch_counter += 1
-
             print()
 
             # Perform validation
@@ -465,6 +465,7 @@ class TFModel(Model):
                     ops_to_run += self.accuracy_op_names
 
                 ops_to_run += self.loss_op_names
+                ops_to_run.append('logits')
                 valid_results = self.execute(feed_dict, ops_to_run)
 
                 batch_loss = 0.0
@@ -493,7 +494,6 @@ class TFModel(Model):
                     print(f'Valid Batch {valid_batch_counter}. Avg loss so far: {avg_valid_loss_so_far:.4f}', end='\r')
 
                 valid_batch_counter += 1
-
             print()
 
             # Log train and validation metrics for each epoch
@@ -518,6 +518,7 @@ class TFModel(Model):
                 # For classification tasks, we want to maximize accuracy
                 if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
                     valid_acc = epoch_valid_acc[op_name]
+
                     if valid_acc > best_valid_metric_dict[op_name]:
                         # Save the corresponding loss operation
                         loss_op_name = accuracy_loss_dict[op_name]
@@ -569,7 +570,7 @@ class TFModel(Model):
         if len(reg_values) == 0:
             return None
 
-        return tf.reduce_sum(tf.stack(reg_values)) 
+        return tf.reduce_sum(tf.stack(reg_values))
 
     def save(self, name: str, data_folders: Dict[DataSeries, str], loss_ops: Optional[List[str]], loss_var_dict: Dict[str, List[str]]):
         """

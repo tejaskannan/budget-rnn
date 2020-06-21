@@ -77,17 +77,18 @@ if __name__ == '__main__':
     model, dataset, test_log = get_serialized_info(args.model_path, dataset_folder=None)
     
     if args.optimized_test_log is None:
-        thresholds = np.full(shape=(model.num_outputs, ), fill_value=model.num_outputs)
+        thresholds = np.full(shape=(model.num_outputs, ), fill_value=1.0)
     else:
         opt_test_log = list(read_by_file_suffix(args.optimized_test_log))[0]
         thresholds = np.array(opt_test_log['THRESHOLDS'])
 
     # Execute model on the validation set and collect levels
     levels: List[np.ndarray] = []
+    labels: List[np.ndarray] = []
     accuracy: List[np.ndarray] = []
 
     logit_ops = [get_logits_name(i) for i in range(model.num_outputs)]
-    data_generator = dataset.minibatch_generator(series=DataSeries.VALID,
+    data_generator = dataset.minibatch_generator(series=DataSeries.TEST,
                                                  batch_size=model.hypers.batch_size,
                                                  metadata=model.metadata,
                                                  should_shuffle=False)
@@ -108,13 +109,15 @@ if __name__ == '__main__':
         levels.append(level)
 
         true_values = np.squeeze(batch[OUTPUT])
+        labels.append(true_values)
         accuracy.append((true_values == pred).astype(float))
 
     levels = np.concatenate(levels, axis=0)
     accuracy = np.concatenate(accuracy, axis=0)
+    labels = np.concatenate(labels, axis=0)
 
-    controller = PIController(kp=0.5, ki=0.125, output_range=[1, model.num_outputs])
-    y_pred = 1
+    controller = PIController(kp=0.25, ki=0.0625, output_range=[1, model.num_outputs])
+    y_pred = int(model.num_outputs / 2)  # Initialize to the median
     y_true = levels + 1
 
     max_time = len(y_true)
@@ -124,10 +127,17 @@ if __name__ == '__main__':
     for t in range(max_time):
         predictions.append(y_pred)
         errors.append(y_true[t] - y_pred)
-        y_pred = controller.step(y_true=y_true[t], y_pred=y_pred, time=t)
+
+        # In a realistic situation, we don't know the number of levels if we did not collect enough data.
+        # Thus, we use the average gap as the 'true' label to smooth out errors.
+        target = y_true[t]
+        if y_true[t] - y_pred > 0:
+            target = int((model.num_outputs - y_pred) / 2) + y_pred
+
+        y_pred = controller.step(y_true=target, y_pred=y_pred, time=t)
 
     with plt.style.context('ggplot'):
-        fig, (ax1, ax2, ax3) = plt.subplots(nrows=3, ncols=1, sharex=True)
+        fig, (ax1, ax2, ax3, ax4) = plt.subplots(nrows=4, ncols=1, sharex=True)
 
         times = list(range(max_time))
         ax1.plot(times, predictions, label='prediction')
@@ -143,7 +153,12 @@ if __name__ == '__main__':
         ax3.plot(times, cumulative_accuracy, label='accuracy')
         ax3.legend()
         ax3.set_title('Model Accuracy over Time')
-        ax3.set_xlabel('Time')
+
+        ax4.plot(times, labels, label='true labels')
+        ax4.legend()
+        ax4.set_title('True Labels over Time')
+        ax4.set_ylabel('Label Number')
+        ax4.set_xlabel('Time')
 
         plt.tight_layout()
         plt.show()

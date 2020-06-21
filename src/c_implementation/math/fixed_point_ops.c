@@ -44,6 +44,33 @@ int16_t int_to_fp(int16_t x, int16_t precision) {
 }
 
 
+int16_t fp_round_to_int(int16_t x, int16_t precision) {
+    int8_t should_invert_sign = 0;
+    if (x < 0) {
+        should_invert_sign = 1;
+        x = fp_neg(x);
+    }
+
+    int16_t fractionMask = (1 << precision) - 1;
+    int16_t fractionalPart = x & fractionMask;
+    int16_t integerPart = x & ~(fractionMask);
+    
+    int16_t roundedVal;
+    int16_t one_half = 1 << (precision - 1);
+    if (fractionalPart >= one_half) {
+        roundedVal = fp_add(integerPart, int_to_fp(1, precision));
+    } else {
+        roundedVal = integerPart;
+    }
+
+
+    if (should_invert_sign) {
+        return fp_neg(roundedVal);
+    }
+    return roundedVal;
+}
+
+
 int16_t fp_relu(int16_t x, int16_t precision) {
     UNUSED(precision);
     if (x >= 0) {
@@ -150,7 +177,8 @@ int16_t fp_sigmoid(int16_t x, int16_t precision) {
     int16_t one = 1 << precision;
     int16_t one_half = 1 << (precision - 1);
 
-    int16_t tanh = fp_tanh(fp_mul(x, one_half, precision), precision);
+    int16_t half_x = fp_mul(x, one_half, precision);
+    int16_t tanh = fp_tanh(half_x, precision);
     int16_t result = fp_mul(fp_add(tanh, one), one_half, precision);
 
     if (should_invert_sign) {

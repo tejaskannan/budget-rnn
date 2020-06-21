@@ -1,5 +1,5 @@
 import tensorflow as tf
-from typing import Optional, List, Union, Any
+from typing import Optional, List, Union, Any, Tuple
 
 from utils.tfutils import get_activation, get_regularizer, expand_to_matrix
 from utils.constants import BIG_NUMBER
@@ -20,7 +20,7 @@ def pool_sequence(embeddings: tf.Tensor, pool_mode: str, name: str = 'pool-layer
         return tf.reduce_mean(embeddings, axis=-2, name=name)
     elif pool_mode == 'max':
         return tf.reduce_max(embeddings, axis=-2, name=name)
-    elif pool_mode=='attention':
+    elif pool_mode == 'attention':
         attention_weights = tf.layers.dense(inputs=embeddings,
                                             units=1,
                                             activation=tf.nn.leaky_relu,
@@ -40,7 +40,7 @@ def dense(inputs: tf.Tensor,
           name: str,
           use_bias: bool = False,
           compression_fraction: Optional[float] = None,
-          compression_seed: Optional[str] = None) -> tf.Tensor:
+          compression_seed: Optional[str] = None) -> Tuple[tf.Tensor, tf.Tensor]:
     """
     Creates a dense, feed-forward layer with the given parameters.
 
@@ -55,7 +55,8 @@ def dense(inputs: tf.Tensor,
             from HashNets (http://proceedings.mlr.press/v37/chenc15.pdf)
         compression_seed: The prefix seed to use when hashing. Must be non-None when the compression fraction is non-None.
     Returns:
-        The transformed inputs in a [B, ..., K] tensor.
+        A tuple of 2 elements: (1) the transformed inputs in a [B, ..., K] tensor and (2) the transformed inputs without the activation function.
+            This second entry is included for debugging purposes.
     """
     assert compression_fraction is None or (0 <= compression_fraction and compression_fraction < 1), 'If given, the compression fraction must be in [0, 1)'
 
@@ -67,7 +68,7 @@ def dense(inputs: tf.Tensor,
     bias_name = '{0}-bias'.format(name)
 
     if compression_fraction is None:
-        # This is a standard weight matrix        
+        # This is a standard weight matrix
         W = tf.get_variable(name=weight_name,
                             shape=[input_units, units],
                             initializer=tf.initializers.glorot_uniform(),
@@ -95,17 +96,19 @@ def dense(inputs: tf.Tensor,
         # Bias vector of size [K]
         b = tf.get_variable(name=bias_name,
                             shape=[1, units],
-                            initializer=tf.initializers.glorot_uniform(),
+                            initializer=tf.initializers.random_uniform(minval=-0.7, maxval=0.7),
                             trainable=True)
 
         transformed = transformed + b
+
+    pre_activation = transformed
 
     # Apply the activation function if specified
     activation_fn = get_activation(activation)
     if activation_fn is not None:
         transformed = activation_fn(transformed)
 
-    return transformed
+    return transformed, pre_activation
 
 
 def mlp(inputs: tf.Tensor,
@@ -120,7 +123,7 @@ def mlp(inputs: tf.Tensor,
         regularization_name: Optional[str] = None,
         regularization_scale: float = 0.01,
         compression_fraction: Optional[float] = None,
-        compression_seed: Optional[float] = None) -> tf.Tensor:
+        compression_seed: Optional[float] = None) -> Tuple[tf.Tensor, List[tf.Tensor]]:
     """
     Defines a multi-layer perceptron with the given hidden sizes, output size, and activations.
 
@@ -143,7 +146,8 @@ def mlp(inputs: tf.Tensor,
         compression_fraction: Optional compression fraction to train network with compressed weights.
         compression_seed: Optional name of compression seed. Must be provided when compression fraction is given.
     Returns:
-        A tensor containing the inputs transformed by the MLP.
+        A tuple with two elements: (1) A tensor containing the inputs transformed by the MLP and (2) a list
+            of the intermediate state (included for debugging purposes)
     """
     if hidden_sizes is None:
         hidden_sizes = []
@@ -159,33 +163,37 @@ def mlp(inputs: tf.Tensor,
     if not should_activate_final:
         activations[-1] = None
 
+    states = []
+
     # Apply hidden layers
     intermediate = inputs
     for i, (hidden_size, activation) in enumerate(zip(hidden_sizes, activations[:-1])):
-        intermediate = dense(inputs=intermediate,
-                             units=hidden_size,
-                             activation=activation,
-                             use_bias=True,
-                             name='{0}-hidden-{1}'.format(name, i),
-                             compression_fraction=compression_fraction,
-                             compression_seed='{0}{1}'.format(compression_seed, i))
+        intermediate, _ = dense(inputs=intermediate,
+                                units=hidden_size,
+                                activation=activation,
+                                use_bias=True,
+                                name='{0}-hidden-{1}'.format(name, i),
+                                compression_fraction=compression_fraction,
+                                compression_seed='{0}{1}'.format(compression_seed, i))
 
         intermediate = tf.nn.dropout(intermediate, keep_prob=dropout_keep_rate)
 
+        states.append(intermediate)
+
     # Apply the output layer
-    result = dense(inputs=intermediate,
-                   units=output_size,
-                   activation=activations[-1],
-                   use_bias=should_bias_final,
-                   name='{0}-output'.format(name),
-                   compression_fraction=compression_fraction,
-                   compression_seed=compression_seed)
+    result, _ = dense(inputs=intermediate,
+                      units=output_size,
+                      activation=activations[-1],
+                      use_bias=should_bias_final,
+                      name='{0}-output'.format(name),
+                      compression_fraction=compression_fraction,
+                      compression_seed=compression_seed)
 
     # Apply dropout to the final layer if specified
     if should_dropout_final:
         result = tf.nn.dropout(result, keep_prob=dropout_keep_rate)
 
-    return result
+    return result, states
 
 
 def weighted_average(inputs: tf.Tensor,

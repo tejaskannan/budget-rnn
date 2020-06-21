@@ -1,5 +1,8 @@
 #include "matrix_ops.h"
 
+// Temporary buffer for hash strings
+static char hash_str[100];
+
 
 matrix *matrix_allocate(int8_t numRows, int8_t numCols) {
     matrix *mat = (matrix *) alloc(sizeof(matrix));
@@ -237,6 +240,39 @@ matrix *matrix_set(matrix *mat, int16_t value) {
 }
 
 
+int16_t matrix_sum(matrix *mat) {
+    /**
+     * Computes the sum of all elements in the matrix
+     */
+    int16_t sum = 0;
+    uint16_t i;
+    for (i = mat->numRows * mat->numCols; i > 0; i--) {
+        sum = fp_add(mat->data[i - 1], sum);
+    }
+
+    return sum;
+}
+
+
+int16_t matrix_min(matrix *mat) {
+    /**
+     * Computes the minimum value over all elements in the matrix
+     */
+    int16_t min_value = 32767;  // 2^15 - 1
+    int16_t val;
+    uint16_t i;
+    for (i = mat->numRows * mat->numCols; i > 0; i--) {
+        val = mat->data[i - 1];
+        if (val < min_value) {
+            min_value = val;
+        }
+    }
+
+    return min_value;
+}
+
+
+
 matrix *stack(matrix *result, matrix *vec1, matrix *vec2) {
     /**
      * Stacks the two vectors into a larger vector.
@@ -286,7 +322,42 @@ int16_t argmax(matrix *vec) {
 }
 
 
-matrix *normalize(matrix *vec, int16_t *mean, int16_t *std, int16_t precision) {
+int8_t threshold_prediction(matrix *logits, int16_t threshold, int16_t precision, dtype *temp_buffer) {
+    /**
+     * Returns the highest-probability class if the normalized log probability is above the given threshold.
+     * If the threshold is not satisfied, then the function returns -1.
+     */
+    if (logits->numCols != 1) {
+        return -1;
+    }
+
+    // Allocate a temp matrix
+    matrix temp;
+    temp.numRows = logits->numRows;
+    temp.numCols = logits->numCols;
+    temp.data = temp_buffer;
+    matrix *tempMat = &temp;
+
+    tempMat = matrix_replace(tempMat, logits);
+
+    int16_t min_logit = matrix_min(logits);
+    tempMat = scalar_add(tempMat, tempMat, fp_neg(min_logit));
+    
+    int16_t logit_sum = matrix_sum(tempMat);
+    int16_t normalize_factor = fp_div(int_to_fp(1, precision), logit_sum, precision);
+    tempMat = scalar_product(tempMat, tempMat, normalize_factor, precision);
+
+    int16_t max_class = argmax(tempMat);
+    int16_t max_logit = tempMat->data[max_class];
+
+    if (max_logit > threshold) {
+        return max_class;
+    }
+    return -1;
+}
+
+
+matrix *normalize(matrix *vec, const int16_t *mean, const int16_t *std, int16_t precision) {
     /**
      * Normalizes the vector to a standard normal distribution. This operation is in-place,
      * so the original vector is mutated.
@@ -307,7 +378,7 @@ matrix *normalize(matrix *vec, int16_t *mean, int16_t *std, int16_t precision) {
 }
 
 
-matrix *hashed_matrix_vector_product(matrix *result, matrix *mat, matrix *vec, char *seed, int16_t precision) {
+matrix *hashed_matrix_vector_product(matrix *result, matrix *mat, matrix *vec, char *seed, uint8_t should_transpose, int16_t precision) {
     /**
      * Computes the matrix vector product using the hashing trick where the matrix is compressed into a vector.
      */
@@ -320,12 +391,12 @@ matrix *hashed_matrix_vector_product(matrix *result, matrix *mat, matrix *vec, c
     uint16_t n = string_length(seed);
 
     // Create the hashing seed by pre-prending the given prefix.
-    char hash_str[n+4];
     string_copy(hash_str, seed, n);
-    hash_str[n+3] = '\0';  // Ensure the string is null-terminated
+    hash_str[n + 2 * MAX_NUM_DIGITS + 1] = '\0';  // Ensure the string is null-terminated
 
     // Compute the matrix vector product
-    uint16_t i, j, i_offset, j_offset, mat_index;
+    uint16_t i, j, i_offset, j_offset, mat_index, num_digits;
+    uint16_t first_index, second_index;
     int8_t sign;
     for (i = result->numRows; i > 0; i--) {
         i_offset = i - 1;
@@ -335,13 +406,21 @@ matrix *hashed_matrix_vector_product(matrix *result, matrix *mat, matrix *vec, c
         for (j = vec->numRows; j > 0; j--) {
             j_offset = j - 1;
 
-            // Construct the hashing seed.
-            hash_str[n] = (uint8_t) (i_offset + '0');
-            hash_str[n+1] = (uint8_t) (j_offset + '0');
-            hash_str[n+2] = (uint8_t) 's';
+            if (should_transpose) {
+                first_index = j_offset;
+                second_index = i_offset;
+            } else {
+                first_index = i_offset;
+                second_index = j_offset;
+            }
 
-            mat_index = pearson_hash(hash_str, n + 2) % mat->numRows;
-            sign = 2 * (pearson_hash(hash_str, n + 3) % 2)  - 1;
+            num_digits = append_int_to_str(hash_str + n, first_index);
+            num_digits += append_int_to_str(hash_str + n + num_digits, second_index);
+            hash_str[n + num_digits] = 's';
+            hash_str[n + num_digits + 1] = '\0';
+
+            mat_index = pearson_hash(hash_str, n + num_digits) % mat->numRows;
+            sign = 2 * (pearson_hash(hash_str, n + num_digits + 1) % 2)  - 1;
 
             result->data[i_offset] = fp_add(sign * fp_mul(mat->data[mat_index], vec->data[j_offset], precision), result->data[i_offset]);
         }

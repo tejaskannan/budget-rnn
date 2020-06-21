@@ -6,8 +6,8 @@ CC=$(CCBIN) -Wall -Wextra -std=c99 -pedantic -g -Wno-unused-variable
 
 default: model
 
-model: utils/seeds.h utils/utils.h utils/string_utils.h math/matrix.h memory.h math/fixed_point_ops.h math/hashing.h math/matrix_ops.h layers/cells.h layers/layers.h neural_network.h main.h memory.c utils/string_utils.c math/fixed_point_ops.c math/hashing.c math/matrix_ops.c layers/layers.c neural_network.c main.c
-	$(CC) -o model memory.c utils/string_utils.c math/fixed_point_ops.c math/hashing.c math/matrix_ops.c layers/layers.c neural_network.c main.c
+model: utils/seeds.h utils/utils.h utils/neural_network_utils.h utils/string_utils.h math/matrix.h memory.h math/fixed_point_ops.h math/hashing.h math/matrix_ops.h controller/pid_control.h layers/cells.h layers/layers.h neural_network.h main.h memory.c utils/string_utils.c math/fixed_point_ops.c math/hashing.c math/matrix_ops.c controller/pid_control.c layers/layers.c neural_network.c main.c
+	$(CC) -o model memory.c utils/string_utils.c math/fixed_point_ops.c math/hashing.c math/matrix_ops.c controller/pid_control.c layers/layers.c neural_network.c main.c
 
 matrix_test: utils/utils.h utils/string_utils.h math/matrix.h memory.h math/fixed_point_ops.h math/hashing.h math/matrix_ops.h tests/matrix_tests.h memory.c utils/string_utils.c math/fixed_point_ops.c math/hashing.c math/matrix_ops.c tests/matrix_tests.c
 	$(CC) -o matrix_test memory.c utils/string_utils.c math/fixed_point_ops.c math/hashing.c math/matrix_ops.c tests/matrix_tests.c
@@ -20,6 +20,9 @@ memory_test: utils/utils.h tests/memory_tests.h tests/memory_tests.c memory.h me
 
 hashing_test: math/hashing.h tests/hashing_tests.h math/hashing.c tests/hashing_tests.c
 	$(CC) -o hashing_tests math/hashing.c tests/hashing_tests.c
+
+string_test: utils/string_utils.h tests/string_tests.h utils/string_utils.c tests/string_tests.c
+	$(CC) -o string_tests utils/string_utils.c tests/string_tests.c
 
 clean: rnnmodel
 	rm -f *.o model *.dSYM

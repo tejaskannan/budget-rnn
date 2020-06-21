@@ -7,8 +7,8 @@
 
     struct matrix {
         dtype *data;
-        int8_t numRows;
-        int8_t numCols;
+        int16_t numRows;
+        int16_t numCols;
     };
     typedef struct matrix matrix;
 

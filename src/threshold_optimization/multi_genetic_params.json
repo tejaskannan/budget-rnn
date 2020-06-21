@@ -1,0 +1,14 @@
+{
+    "precision": 10,
+    "batch_size": 64,
+    "iterations": 128,
+    "population_size": 128,
+    "crossover_rate": 0.8,
+    "crossover_strategy": "weighted_avg",
+    "mutation_rate": 0.05,
+    "mutation_norm": 0.02,
+    "steady_state_fraction": 0.05,
+    "level_penalty": 0.25,
+    "should_sort_thresholds": true,
+    "trials": 2
+}

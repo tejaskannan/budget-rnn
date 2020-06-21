@@ -1,8 +1,8 @@
 {
     "name": "multiclass_genetic",
     "batch_size": 256,
-    "iterations": 256,
-    "instances": 4,
+    "iterations": 16,
+    "instances": 1,
     "level_weight": 0.05,
     "mode": "multiclass",
     "opt_params": {

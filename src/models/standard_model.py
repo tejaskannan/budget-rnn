@@ -1,7 +1,6 @@
 import tensorflow as tf
 import numpy as np
 import time
-from sklearn.preprocessing import StandardScaler
 from enum import Enum, auto
 from collections import defaultdict
 from typing import Optional, Dict, List, Any, DefaultDict, Iterable
@@ -9,16 +8,14 @@ from typing import Optional, Dict, List, Any, DefaultDict, Iterable
 from models.tf_model import TFModel
 from layers.rnn import dynamic_rnn
 from layers.cells.cells import make_rnn_cell
-from layers.basic import mlp, pool_sequence
+from layers.basic import mlp, pool_sequence, dense
 from layers.output_layers import OutputType, compute_binary_classification_output, compute_multi_classification_output
-from layers.embedding_layer import embedding_layer
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.misc import sample_sequence_batch
 from utils.tfutils import pool_rnn_outputs, get_activation, tf_rnn_cell, get_rnn_state
-from utils.constants import ACCURACY, ONE_HALF, OUTPUT, INPUTS, LOSS, PREDICTION, F1_SCORE, LOGITS, NODE_REGEX_FORMAT
-from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, INPUT_SCALER, OUTPUT_SCALER, SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, INPUT_NOISE
-from utils.constants import LABEL_MAP, REV_LABEL_MAP, NUM_CLASSES
+from utils.constants import ACCURACY, OUTPUT, INPUTS, LOSS, PREDICTION, F1_SCORE, LOGITS, NODE_REGEX_FORMAT
+from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, NUM_CLASSES
 from utils.constants import AGGREGATE_SEED, TRANSFORM_SEED, OUTPUT_SEED, EMBEDDING_SEED
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
 from utils.loss_utils import binary_classification_loss, f1_score_loss
@@ -121,32 +118,39 @@ class StandardModel(TFModel):
         with tf.variable_scope(MODEL, reuse=tf.AUTO_REUSE):
             self._make_model(is_train)
 
+        # print(self.trainable_vars)
+
+        writer = tf.summary.FileWriter('./graphs', graph=self.sess.graph)
+        writer.flush()
+        writer.close()
+
     def _make_model(self, is_train: bool):
+        """
+        Builds the comptuation graph based on the model type.
+        """
         # Embed the input sequence into a [B, T, D] tensor
-        input_sequence = embedding_layer(inputs=self._placeholders[INPUTS],
-                                         units=self.hypers.model_params['state_size'],
-                                         dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                                         use_conv=self.hypers.model_params['use_conv_embedding'],
-                                         params=self.hypers.model_params['embedding_layer_params'],
-                                         seq_length=self.metadata[SEQ_LENGTH],
-                                         input_shape=self.metadata[INPUT_SHAPE],
-                                         name_prefix=EMBEDDING_LAYER_NAME,
-                                         compression_fraction=self.hypers.model_params.get('compression_fraction'))
+        input_sequence, _ = dense(inputs=self._placeholders[INPUTS],
+                                  units=self.hypers.model_params['state_size'],
+                                  activation=self.hypers.model_params['embedding_activation'],
+                                  use_bias=True,
+                                  name=EMBEDDING_LAYER_NAME,
+                                  compression_fraction=self.hypers.model_params.get('compression_fraction'),
+                                  compression_seed=EMBEDDING_SEED)
 
         # Apply the transformation layer
         if self.model_type == StandardModelType.NBOW:
             # Apply the MLP transformation. Outputs a [B, T, D] tensor
-            transformed = mlp(inputs=input_sequence,
-                              output_size=self.hypers.model_params['state_size'],
-                              hidden_sizes=self.hypers.model_params['mlp_hidden_units'],
-                              activations=self.hypers.model_params['mlp_activation'],
-                              dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                              should_activate_final=True,
-                              should_bias_final=True,
-                              should_dropout_final=True,
-                              name=TRANSFORM_LAYER_NAME,
-                              compression_fraction=self.hypers.model_params.get('compression_fraction'),
-                              compression_seed=TRANSFORM_SEED)
+            transformed, _ = mlp(inputs=input_sequence,
+                                 output_size=self.hypers.model_params['state_size'],
+                                 hidden_sizes=self.hypers.model_params['mlp_hidden_units'],
+                                 activations=self.hypers.model_params['mlp_activation'],
+                                 dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                                 should_activate_final=True,
+                                 should_bias_final=True,
+                                 should_dropout_final=True,
+                                 name=TRANSFORM_LAYER_NAME,
+                                 compression_fraction=self.hypers.model_params.get('compression_fraction'),
+                                 compression_seed=TRANSFORM_SEED)
 
             aggregated = pool_sequence(transformed, pool_mode=self.hypers.model_params['pool_mode'], name=AGGREGATION_LAYER_NAME)
         elif self.model_type == StandardModelType.CNN:
@@ -160,37 +164,34 @@ class StandardModel(TFModel):
                                            use_bias=True,
                                            kernel_initializer=tf.glorot_uniform_initializer(),
                                            name=TRANSFORM_LAYER_NAME)
-            # Apply dropout
-            transformed = tf.nn.dropout(transformed, keep_rate=self._placeholders[DROPOUT_KEEP_RATE])
 
             aggregated = pool_sequence(transformed, pool_mode=self.hypers.model_params['pool_mode'], name=AGGREGATION_LAYER_NAME)
         elif self.model_type == StandardModelType.RNN:
             compression_fraction = self.hypers.model_params.get('compression_fraction')
 
             # We either use a tensorflow cell or a custom RNN cell depending on whether we
-            # are compressing the trainable parameters
-            if compression_fraction is None:            
+            # are compressing the trainable parameters. The compressed cell uses the custom implementation.
+            if compression_fraction is None:
                 cell = tf_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
                                    num_units=self.hypers.model_params['state_size'],
                                    activation=self.hypers.model_params['rnn_activation'],
                                    layers=self.hypers.model_params['rnn_layers'],
-                                   dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
                                    name_prefix=TRANSFORM_LAYER_NAME)
 
                 initial_state = cell.zero_state(batch_size=tf.shape(input_sequence)[0], dtype=tf.float32)
-                transformed, state = tf.nn.dynamic_rnn(cell=cell,
+                rnn_outputs, state = tf.nn.dynamic_rnn(cell=cell,
                                                        inputs=input_sequence,
                                                        initial_state=initial_state,
                                                        dtype=tf.float32,
                                                        scope=RNN_NAME)
                 final_state = get_rnn_state(state)
-                aggregated = pool_rnn_outputs(transformed, final_state, pool_mode=self.hypers.model_params['pool_mode'], name=AGGREGATION_LAYER_NAME)
+
+                aggregated = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'], name=AGGREGATION_LAYER_NAME)
             else:
                 cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
                                      input_units=self.hypers.model_params['state_size'],
                                      output_units=self.hypers.model_params['state_size'],
                                      activation=self.hypers.model_params['rnn_activation'],
-                                     dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
                                      num_layers=self.hypers.model_params['rnn_layers'],
                                      name=TRANSFORM_LAYER_NAME,
                                      compression_fraction=self.hypers.model_params.get('compression_fraction'))
@@ -213,8 +214,6 @@ class StandardModel(TFModel):
                 final_state = rnn_states.read(index=last_index)  # [L, B, D] where L is the number of RNN layers
                 final_state = tf.concat(tf.unstack(final_state, axis=0), axis=-1)  # [B, D * L]
 
-                print(final_state)
-
                 # [B, D]
                 aggregated = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
         elif self.model_type == StandardModelType.BIRNN:
@@ -222,15 +221,13 @@ class StandardModel(TFModel):
                                   num_units=self.hypers.model_params['state_size'],
                                   activation=self.hypers.model_params['rnn_activation'],
                                   layers=self.hypers.model_params['rnn_layers'],
-                                  dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                                  name_prefix=f'{TRANSFORM_LAYER_NAME}-fw')
-            
+                                  name_prefix=f'{0}-fw'.format(TRANSFORM_LAYER_NAME))
+
             bw_cell = tf_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
                                   num_units=self.hypers.model_params['state_size'],
                                   activation=self.hypers.model_params['rnn_activation'],
                                   layers=self.hypers.model_params['rnn_layers'],
-                                  dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                                  name_prefix=f'{TRANSFORM_LAYER_NAME}-bw')
+                                  name_prefix=f'{0}-bw'.format(TRANSFORM_LAYER_NAME))
 
             batch_size = tf.shape(input_sequence)[0]
             fw_initial_state = fw_cell.zero_state(batch_size=batch_size, dtype=tf.float32)
@@ -243,7 +240,7 @@ class StandardModel(TFModel):
                                                                  initial_state_bw=bw_initial_state,
                                                                  dtype=tf.float32,
                                                                  scope=BIRNN_NAME)
-            # Concatenate forward and backward states
+            # Concatenate forward and backward states / outputs
             transformed = tf.concat(transformed, axis=-1)
 
             fw_state, bw_state = state
@@ -253,18 +250,24 @@ class StandardModel(TFModel):
 
             aggregated = pool_rnn_outputs(transformed, final_state, pool_mode=self.hypers.model_params['pool_mode'], name=AGGREGATION_LAYER_NAME)
         else:
-            raise ValueError(f'Unknown transformation type: {self.model_type}')
+            raise ValueError(f'Unknown transformation type: {0}'.format(self.model_type))
+
+        # Apply dropout to the aggregated state
+        aggregated = tf.nn.dropout(aggregated, keep_prob=self._placeholders[DROPOUT_KEEP_RATE])
 
         # Create the output layer
         output_size = self.metadata[NUM_OUTPUT_FEATURES] if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[NUM_CLASSES]
-        output = mlp(inputs=aggregated,
-                     output_size=output_size,
-                     hidden_sizes=self.hypers.model_params['output_hidden_units'],
-                     activations=self.hypers.model_params['output_hidden_activation'],
-                     dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                     name=OUTPUT_LAYER_NAME,
-                     compression_fraction=self.hypers.model_params.get('compression_fraction'),
-                     compression_seed=OUTPUT_SEED)
+        output, _ = mlp(inputs=aggregated,
+                        output_size=output_size,
+                        hidden_sizes=self.hypers.model_params['output_hidden_units'],
+                        activations=self.hypers.model_params['output_hidden_activation'],
+                        dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                        should_bias_final=True,
+                        should_activate_final=False,
+                        should_dropout_final=False,
+                        name=OUTPUT_LAYER_NAME,
+                        compression_fraction=self.hypers.model_params.get('compression_fraction'),
+                        compression_seed=OUTPUT_SEED)
 
         if self.output_type == OutputType.BINARY_CLASSIFICATION:
             classification_output = compute_binary_classification_output(model_output=output,
@@ -309,6 +312,7 @@ class StandardModel(TFModel):
             labels = tf.squeeze(expected_output, axis=-1)
 
             sample_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=labels)
+
             self._ops[LOSS] = tf.reduce_mean(sample_loss)
         else:
             self._ops[LOSS] = tf.reduce_mean(tf.square(predictions - expected_output))
@@ -342,7 +346,7 @@ class StandardModel(TFModel):
                 total_flops += flops.total_float_ops * self.metadata[SEQ_LENGTH]
 
             # Get FLOPS for operations that are applied to the entire sequence. We include the embedding layer
-            # here because it has a well-defined sequence length so Tensorflow will automatically account for 
+            # here because it has a well-defined sequence length so Tensorflow will automatically account for
             # the multiplier
             single_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), [OUTPUT_LAYER_NAME, EMBEDDING_LAYER_NAME, AGGREGATION_LAYER_NAME]))
             single_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \

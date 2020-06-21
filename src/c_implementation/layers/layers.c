@@ -9,7 +9,7 @@ matrix *dense(matrix *result, matrix *input, matrix *W, matrix *b, int16_t (*act
     // If the weights are compressed, then we use the hashing trick to compute the matrix multiplication. Otherwise,
     // we  perform standard matrix multiplication.
     if (is_compressed) {
-        result = hashed_matrix_vector_product(result, W, input, seed, precision);
+        result = hashed_matrix_vector_product(result, W, input, seed, 1, precision);
     } else { 
         result = matrix_multiply(result, W, input, precision);
     }
@@ -25,7 +25,6 @@ matrix *dense(matrix *result, matrix *input, matrix *W, matrix *b, int16_t (*act
 
 matrix *apply_gate(matrix *result, matrix *gate, matrix *first, matrix *second, matrix *temp, int16_t precision) {
     // Create the vector for 1 - gate
-    // matrix *opp_gate = matrix_allocate(gate->numRows, gate->numCols);
     temp = scalar_product(temp, gate, int_to_fp(-1, precision), precision);
     temp = scalar_add(temp, temp, int_to_fp(1, precision));
 
@@ -47,19 +46,19 @@ matrix *apply_gru(matrix *result, matrix *input, matrix *state, GRU *gru, GRUTem
     matrix *inputTemp = temp->inputTemp;
     matrix *tempGate = temp->gateTemp;
 
-    char hash_seed[8];
+    char hash_seed[7];
     replace(hash_seed, TRANSFORM_SEED, 0);
-    hash_seed[6] = (char) (layer + '0');
-    hash_seed[7] = '\0'; // Make sure the seed is null-terminated
+    hash_seed[5] = (char) (layer + '0');
+    hash_seed[6] = '\0'; // Make sure the seed is null-terminated
 
     // Create the update state
     if (is_compressed) {
-        hash_seed[3] = 'U';
-        replace(hash_seed, UPDATE_SEED, 4);
-        inputTemp = hashed_matrix_vector_product(inputTemp, gru->uUpdate, input, hash_seed, precision);
+        hash_seed[2] = 'U';
+        replace(hash_seed, UPDATE_SEED, 3);
+        inputTemp = hashed_matrix_vector_product(inputTemp, gru->uUpdate, input, hash_seed, 1, precision);
 
-        hash_seed[3] = 'W';
-        update = hashed_matrix_vector_product(inputTemp, gru->wUpdate, state, hash_seed, precision);
+        hash_seed[2] = 'W';
+        update = hashed_matrix_vector_product(update, gru->wUpdate, state, hash_seed, 1, precision);
     } else {
         inputTemp = matrix_multiply(inputTemp, gru->uUpdate, input, precision);
         update = matrix_multiply(update, gru->wUpdate, state, precision);
@@ -71,12 +70,12 @@ matrix *apply_gru(matrix *result, matrix *input, matrix *state, GRU *gru, GRUTem
 
     // Create the reset state
     if (is_compressed) {
-        hash_seed[3] = 'U';
-        replace(hash_seed, UPDATE_SEED, 4);
-        inputTemp = hashed_matrix_vector_product(inputTemp, gru->uReset, input, hash_seed, precision);
+        hash_seed[2] = 'U';
+        replace(hash_seed, RESET_SEED, 3);
+        inputTemp = hashed_matrix_vector_product(inputTemp, gru->uReset, input, hash_seed, 1, precision);
         
-        hash_seed[3] = 'W';
-        reset = hashed_matrix_vector_product(reset, gru->wReset, state, hash_seed, precision);
+        hash_seed[2] = 'W';
+        reset = hashed_matrix_vector_product(reset, gru->wReset, state, hash_seed, 1, precision);
     } else {
         inputTemp = matrix_multiply(inputTemp, gru->uReset, input, precision);
         reset = matrix_multiply(reset, gru->wReset, state, precision);
@@ -89,12 +88,12 @@ matrix *apply_gru(matrix *result, matrix *input, matrix *state, GRU *gru, GRUTem
 
     // Create the candidate state
     if (is_compressed) {
-        hash_seed[3] = 'U';
-        replace(hash_seed, CANDIDATE_SEED, 4);
-        inputTemp = hashed_matrix_vector_product(inputTemp, gru->uCandidate, input, hash_seed, precision);
+        hash_seed[2] = 'U';
+        replace(hash_seed, CANDIDATE_SEED, 3);
+        inputTemp = hashed_matrix_vector_product(inputTemp, gru->uCandidate, input, hash_seed, 1, precision);
 
-        hash_seed[3] = 'W';
-        candidate = hashed_matrix_vector_product(candidate, gru->wCandidate, reset, hash_seed, precision);
+        hash_seed[2] = 'W';
+        candidate = hashed_matrix_vector_product(candidate, gru->wCandidate, reset, hash_seed, 1, precision);
     } else {
         inputTemp = matrix_multiply(inputTemp, gru->uCandidate, input, precision);
         candidate = matrix_multiply(candidate, gru->wCandidate, reset, precision);

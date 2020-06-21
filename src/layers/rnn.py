@@ -50,18 +50,13 @@ def fuse_states(curr_state: tf.Tensor,
         concat_states = tf.concat([curr_state, prev_state], axis=-1)  # [B, 2 * D]
 
         # [B, D]
-        update_weight = dense(inputs=concat_states,
-                              units=state_size,
-                              name=name,
-                              activation='sigmoid',
-                              use_bias=True,
-                              compression_fraction=compression_fraction,
-                              compression_seed=compression_seed)
-
-       # transform = tf.matmul(concat_states, fusion_layer.dense) + fusion_layer.bias  # [B, D]
-
-       # activation = get_activation(fusion_layer.activation)
-       # update_weight = activation(transform)  # [B, D]
+        update_weight, _ = dense(inputs=concat_states,
+                                 units=state_size,
+                                 name=name,
+                                 activation='sigmoid',
+                                 use_bias=True,
+                                 compression_fraction=compression_fraction,
+                                 compression_seed=compression_seed)
 
         return update_weight * curr_state + (1.0 - update_weight) * prev_state
     else:
@@ -108,7 +103,7 @@ def dynamic_rnn(inputs: tf.Tensor,
 
     fusion_layers: List[FusionLayer] = []
     if previous_states is not None and fusion_mode.lower() == 'gate':
-    
+
         # Initialize all variables before the while loop
         for i in range(rnn_layers):
             if compression_fraction is None or compression_fraction >= 1:
@@ -126,11 +121,6 @@ def dynamic_rnn(inputs: tf.Tensor,
                                                    shape=(1, state_size),
                                                    initializer=tf.initializers.glorot_uniform(),
                                                    trainable=True)
-            # Collect the fusion layer
-            #layer = FusionLayer(dense=state_transform,
-            #                    bias=state_transform_bias,
-            #                    activation='linear_sigmoid')
-            #fusion_layers.append(layer)
 
     # While loop step
     def step(index, state, outputs, states, gates):
@@ -151,7 +141,6 @@ def dynamic_rnn(inputs: tf.Tensor,
         for i in range(rnn_layers):
             curr = state[i, :, :]
             prev = prev_state[i, :, :] if prev_state is not None else None
-            # fusion_layer = fusion_layers[i] if i < len(fusion_layers) else None
 
             combined = fuse_states(curr_state=curr,
                                    prev_state=prev,
