@@ -690,6 +690,7 @@ class AdaptiveModel(TFModel):
 
         losses = tf.stack(losses)  # [N], N is the number of sequences
         weighted_losses = tf.reduce_sum(losses * self._placeholders['loss_weights'], axis=-1)  # Scalar
+        self._ops[LOSS] = weighted_losses
 
         # Apply level-wise layer penalty to get better results at higher levels
         #if self.hypers.model_params.get('enforce_level_penalty', True):
