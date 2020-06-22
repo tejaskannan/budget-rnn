@@ -66,9 +66,9 @@ def get_multi_classification_metric(metric_name: ClassificationMetric,
     if metric_name == ClassificationMetric.ACCURACY:
         return float(np.average(np.equal(model_output, expected_output).astype(float)))
     elif metric_name == ClassificationMetric.RECALL:
-        return float(recall_score(expected_output, model_output, average='micro'))
+        return float(recall_score(expected_output, model_output, average='macro'))
     elif metric_name == ClassificationMetric.PRECISION:
-        return float(precision_score(expected_output, model_output, average='micro'))
+        return float(precision_score(expected_output, model_output, average='macro'))
     elif metric_name == ClassificationMetric.MICRO_F1_SCORE:
         return float(f1_score(expected_output, model_output, average='micro'))
     elif metric_name == ClassificationMetric.MACRO_F1_SCORE:
