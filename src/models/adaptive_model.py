@@ -13,10 +13,10 @@ from layers.output_layers import OutputType, compute_binary_classification_outpu
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs, expand_to_matrix
-from utils.misc import sample_sequence_batch
+from utils.misc import sample_sequence_batch, batch_sample_noise
 from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, OUTPUT, INPUTS, LOSS, OUTPUT_SEED
 from utils.constants import NODE_REGEX_FORMAT, DROPOUT_KEEP_RATE, MODEL, SCHEDULED_MODEL, NUM_CLASSES
-from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE, EMBEDDING_SEED
+from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE, EMBEDDING_SEED, AGGREGATE_SEED
 from utils.loss_utils import f1_score_loss, binary_classification_loss
 from utils.rnn_utils import *
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
@@ -95,6 +95,7 @@ class AdaptiveModel(TFModel):
 
         # Sample the batch down to the correct sequence length
         input_batch = sample_sequence_batch(input_batch, seq_length=self.metadata[SEQ_LENGTH])
+        input_batch = batch_sample_noise(input_batch, noise_weight=self.hypers.batch_noise)
 
         # Extract parameters
         seq_length = self.metadata[SEQ_LENGTH]
@@ -444,15 +445,14 @@ class AdaptiveModel(TFModel):
             f1_score_name = get_f1_score_name(i)
             embedding_name = get_embedding_name(i, self.hypers.model_params.get('share_embedding_weights', True))
 
-            # Create the embedding layer, [B, T, D]
-            input_sequence = embedding_layer(inputs=self._placeholders[input_name],
-                                             units=self.hypers.model_params['state_size'],
-                                             dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                                             use_conv=self.hypers.model_params['use_conv_embedding'],
-                                             params=self.hypers.model_params['embedding_layer_params'],
-                                             seq_length=self.samples_per_seq,
-                                             input_shape=self.metadata[INPUT_SHAPE],
-                                             name_prefix=embedding_name)
+            # Create the embedding layer. Output is a [B, T, D] tensor where T is the seq length of this level.
+            input_sequence, _ = dense(inputs=self._placeholders[input_name],
+                                      units=self.hypers.model_params['state_size'],
+                                      activation=self.hypers.model_params['embedding_activation'],
+                                      use_bias=True,
+                                      name=embedding_name,
+                                      compression_seed=EMBEDDING_SEED,
+                                      compression_fraction=self.hypers.model_params.get('compression_fraction'))
 
             # Transform the input sequence, [B, T, D]
             transformed_sequence, _ = mlp(inputs=input_sequence,
@@ -465,31 +465,34 @@ class AdaptiveModel(TFModel):
                                           should_dropout_final=True,
                                           name=transform_name)
 
-            # Compute attention weights for aggregation. We do this explicitly here
-            # to save the normalized weights. This avoids redundant computation.
-            attn_weights = tf.layers.dense(inputs=transformed_sequence,
-                                           units=1,
-                                           activation=self.hypers.model_params['attn_activation'],
-                                           use_bias=True,
-                                           kernel_initializer=tf.glorot_uniform_initializer(),
-                                           name=aggregation_name)
+            # Compute attention weights for aggregation. We only compute the
+            # weights for this sequence to avoid redundant computation.
+            attn_weights, _ = dense(inputs=transformed_sequence,
+                                    units=1,
+                                    activation=self.hypers.model_params['attn_activation'],
+                                    use_bias=True,
+                                    name=aggregation_name,
+                                    compression_seed=AGGREGATE_SEED,
+                                    compression_fraction=self.hypers.model_params.get('compression_fraction'))
 
-            # For the first sequence, we have no already-processed samples to integrate.
+            # For the first sequence, we have no already-processed samples to integrate. As a note, we would generally normalize the attention
+            # weights via a softmax layer. With fixed point operations, softmax is unstable. We thus avoid the requirement of a softmax
+            # operation at inference time.
             if i == 0:
-                normalized_attn_weights = tf.nn.softmax(attn_weights, axis=1, name='{0}-{1}-softmax'.format(aggregation_name, i))
-                weighted_sequence = tf.math.multiply(transformed_sequence, normalized_attn_weights, name='{0}-{1}-multiply'.format(aggregation_name, i))
-
+                weighted_sequence = tf.math.multiply(transformed_sequence, attn_weights, name='{0}-{1}-multiply'.format(aggregation_name, i))  # [B, T, D]
                 aggregated_sequence = tf.reduce_sum(weighted_sequence, axis=1, name='{0}-{1}-aggregate'.format(aggregation_name, i))  # [B, D]
             else:
                 # [B, L * T, 1] where L is the current level number (starting at 1)
                 attn_weights_concat = tf.concat(prev_attn_weights + [attn_weights], axis=1)
-                normalized_attn_weights = tf.nn.softmax(attn_weights_concat, axis=1, name='{0}-{1}-softmax'.format(aggregation_name, i))
 
                 # [B, L * T, D] tensor of previous transformed inputs
                 seq_concat = tf.concat(prev_samples + [transformed_sequence], axis=1)
-                weighted_sequence = tf.math.multiply(seq_concat, normalized_attn_weights, name='{0}-{1}-multiply'.format(aggregation_name, i))
+                weighted_sequence = tf.math.multiply(seq_concat, attn_weights_concat, name='{0}-{1}-multiply'.format(aggregation_name, i))
 
                 aggregated_sequence = tf.reduce_sum(weighted_sequence, axis=1, name='{0}-{1}-aggregate'.format(aggregation_name, i))  # [B, D]
+
+            # Apply dropout to the aggregated sequences
+            aggregated_sequences = tf.nn.dropout(aggregated_sequence, keep_prob=self._placeholders[DROPOUT_KEEP_RATE])
 
             # Save results of this level to avoid redundant computation
             prev_attn_weights.append(attn_weights)
@@ -689,15 +692,15 @@ class AdaptiveModel(TFModel):
         weighted_losses = tf.reduce_sum(losses * self._placeholders['loss_weights'], axis=-1)  # Scalar
 
         # Apply level-wise layer penalty to get better results at higher levels
-        if self.hypers.model_params.get('enforce_level_penalty', True):
-            rolled_losses = tf.roll(losses, shift=1, axis=0)  # [N]
-            mask = tf.cast(tf.range(start=0, limit=tf.shape(losses)[0]) > 0, dtype=tf.float32)  # [N]
-            penalty = tf.reduce_sum(tf.nn.leaky_relu(mask * (losses - rolled_losses), alpha=0.01))
+        #if self.hypers.model_params.get('enforce_level_penalty', True):
+        #    rolled_losses = tf.roll(losses, shift=1, axis=0)  # [N]
+        #    mask = tf.cast(tf.range(start=0, limit=tf.shape(losses)[0]) > 0, dtype=tf.float32)  # [N]
+        #    penalty = tf.reduce_sum(tf.nn.leaky_relu(mask * (losses - rolled_losses), alpha=0.01))
 
-            self._ops[LOSS] = weighted_losses + penalty
-        else:
-            print('========== HERE ==========')
-            self._ops[LOSS] = weighted_losses
+        #    self._ops[LOSS] = weighted_losses + penalty
+        #else:
+        #    print('========== HERE ==========')
+        #    self._ops[LOSS] = weighted_losses
 
         # Add any regularization to the loss function
         reg_loss = self.regularize_weights(name=self.hypers.model_params.get('regularization_name'),

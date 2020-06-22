@@ -12,11 +12,11 @@ from layers.basic import mlp, pool_sequence, dense
 from layers.output_layers import OutputType, compute_binary_classification_output, compute_multi_classification_output
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
-from utils.misc import sample_sequence_batch
+from utils.misc import sample_sequence_batch, batch_sample_noise
 from utils.tfutils import pool_rnn_outputs, get_activation, tf_rnn_cell, get_rnn_state
 from utils.constants import ACCURACY, OUTPUT, INPUTS, LOSS, PREDICTION, F1_SCORE, LOGITS, NODE_REGEX_FORMAT
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, NUM_CLASSES
-from utils.constants import AGGREGATE_SEED, TRANSFORM_SEED, OUTPUT_SEED, EMBEDDING_SEED
+from utils.constants import AGGREGATE_SEED, TRANSFORM_SEED, OUTPUT_SEED, EMBEDDING_SEED, SMALL_NUMBER
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
 from utils.loss_utils import binary_classification_loss, f1_score_loss
 from .base_model import Model
@@ -81,7 +81,11 @@ class StandardModel(TFModel):
         seq_length = self.metadata[SEQ_LENGTH]
 
         # Sample the input batch down to the correct length
-        input_batch = sample_sequence_batch(input_batch, seq_length=seq_length)
+        # input_batch = sample_sequence_batch(input_batch, seq_length=seq_length)
+
+        # Add noise to batch during training
+        if is_train and self.hypers.batch_noise > SMALL_NUMBER:
+            input_batch = batch_sample_noise(input_batch, noise_weight=self.hypers.batch_noise)
 
         feed_dict = {
             self._placeholders[INPUTS]: input_batch,

@@ -296,7 +296,7 @@ class GRU(RNNCell):
         reset_gate = tf.math.sigmoid(reset_state_vector + reset_input_vector + self.b_reset)
 
         # Create the candidate state
-        candidate_reset, _ = dense(inputs=state * reset_gate,
+        candidate_reset, _ = dense(inputs=tf.math.multiply(state, reset_gate),
                                    units=self.output_units,
                                    use_bias=False,
                                    activation=None,

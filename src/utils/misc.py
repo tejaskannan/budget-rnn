@@ -37,3 +37,23 @@ def sample_sequence_batch(batch: np.ndarray, seq_length: int) -> np.ndarray:
         sampled_batch.append(sequence[sampled_indices])
 
     return np.array(sampled_batch)  # [B, K, D]
+
+
+def batch_sample_noise(input_features: np.ndarray, noise_weight: float) -> np.ndarray:
+    """
+    Applies noise by combining features in the batch using a weighted average. The idea
+    is that a small fraction of features from a different sample should not change
+    the classification label.
+
+    Args:
+        inputs_features: A [B, T, D] array of features vectors with dimension D for each sequence element (T) in the batch (B)
+        noise_weight: A value in [0, 1) to use as the weighted average weight.
+    Returns:
+        A [B, T, D] array of noisy features.
+    """
+    assert noise_weight >= 0 and noise_weight < 1, 'Noise weight must be in [0, 1). Got {0}'.format(noise_weight)
+
+    input_copy = np.copy(input_features)
+    np.random.shuffle(input_copy)
+
+    return (1.0 - noise_weight) * input_features + noise_weight * input_copy
