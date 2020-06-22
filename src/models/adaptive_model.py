@@ -13,7 +13,7 @@ from layers.output_layers import OutputType, compute_binary_classification_outpu
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs, expand_to_matrix
-from utils.misc import sample_sequence_batch
+from utils.misc import sample_sequence_batch, batch_sample_noise
 from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, OUTPUT, INPUTS, LOSS, OUTPUT_SEED
 from utils.constants import NODE_REGEX_FORMAT, DROPOUT_KEEP_RATE, MODEL, SCHEDULED_MODEL, NUM_CLASSES
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE, EMBEDDING_SEED, AGGREGATE_SEED
@@ -95,6 +95,7 @@ class AdaptiveModel(TFModel):
 
         # Sample the batch down to the correct sequence length
         input_batch = sample_sequence_batch(input_batch, seq_length=self.metadata[SEQ_LENGTH])
+        input_batch = batch_sample_noise(input_batch, noise_weight=self.hypers.batch_noise)
 
         # Extract parameters
         seq_length = self.metadata[SEQ_LENGTH]
@@ -691,15 +692,15 @@ class AdaptiveModel(TFModel):
         weighted_losses = tf.reduce_sum(losses * self._placeholders['loss_weights'], axis=-1)  # Scalar
 
         # Apply level-wise layer penalty to get better results at higher levels
-        if self.hypers.model_params.get('enforce_level_penalty', True):
-            rolled_losses = tf.roll(losses, shift=1, axis=0)  # [N]
-            mask = tf.cast(tf.range(start=0, limit=tf.shape(losses)[0]) > 0, dtype=tf.float32)  # [N]
-            penalty = tf.reduce_sum(tf.nn.leaky_relu(mask * (losses - rolled_losses), alpha=0.01))
+        #if self.hypers.model_params.get('enforce_level_penalty', True):
+        #    rolled_losses = tf.roll(losses, shift=1, axis=0)  # [N]
+        #    mask = tf.cast(tf.range(start=0, limit=tf.shape(losses)[0]) > 0, dtype=tf.float32)  # [N]
+        #    penalty = tf.reduce_sum(tf.nn.leaky_relu(mask * (losses - rolled_losses), alpha=0.01))
 
-            self._ops[LOSS] = weighted_losses + penalty
-        else:
-            print('========== HERE ==========')
-            self._ops[LOSS] = weighted_losses
+        #    self._ops[LOSS] = weighted_losses + penalty
+        #else:
+        #    print('========== HERE ==========')
+        #    self._ops[LOSS] = weighted_losses
 
         # Add any regularization to the loss function
         reg_loss = self.regularize_weights(name=self.hypers.model_params.get('regularization_name'),

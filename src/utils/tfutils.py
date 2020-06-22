@@ -99,7 +99,7 @@ def pool_rnn_outputs(outputs: tf.Tensor, final_state: tf.Tensor, pool_mode: str,
         return tf.reduce_sum(outputs, axis=-2, name=name)
     elif pool_mode == 'max':
         return tf.reduce_max(outputs, axis=-2, name=name)
-    elif pool_mode == 'mean':
+    elif pool_mode in ('mean', 'average'):
         return tf.reduce_mean(outputs, axis=-2, name=name)
     elif pool_mode == 'final_state':
         return final_state

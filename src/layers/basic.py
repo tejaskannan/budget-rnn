@@ -76,8 +76,8 @@ def dense(inputs: tf.Tensor,
     else:
         assert compression_seed is not None, 'The seed value must be non-None when compressing weights'
 
-        # Create the compressed weight vector
-        num_weights = int(compression_fraction * (input_units * units))
+        # Create the compressed weight vector (minimum of 1 weight)
+        num_weights = max(int(compression_fraction * (input_units * units)), 1)
         w = tf.get_variable(name=weight_name,
                             shape=[num_weights],
                             initializer=tf.initializers.glorot_uniform(),
