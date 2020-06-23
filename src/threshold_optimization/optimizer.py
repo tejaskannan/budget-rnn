@@ -8,7 +8,7 @@ from utils.rnn_utils import get_logits_name
 from utils.testing_utils import ClassificationMetric
 from utils.np_utils import round_to_precision, min_max_normalize, clip_by_norm
 from utils.constants import BIG_NUMBER, SMALL_NUMBER, OUTPUT
-from utils.adaptive_inference import threshold_predictions, optimal_levels
+from utils.adaptive_inference import threshold_predictions, optimal_levels, normalize_logits
 
 
 class ThresholdOptimizer:
@@ -54,8 +54,9 @@ class ThresholdOptimizer:
             logits_concat = np.concatenate([np.expand_dims(logits[op], axis=1) for op in logit_ops], axis=1)
 
             # Normalize logits and round to fixed point representation
-            normalized_logits = min_max_normalize(logits_concat, axis=-1)
-            normalized_logits = round_to_precision(normalized_logits, precision=self._precision)
+            # normalized_logits = min_max_normalize(logits_concat, axis=-1)
+            # normalized_logits = round_to_precision(normalized_logits, precision=self._precision)
+            normalized_logits = normalize_logits(logits_concat, precision=self._precision)
 
             batch_predictions, batch_levels = threshold_predictions(normalized_logits, thresholds=thresholds)
             batch_labels = np.squeeze(batch[OUTPUT])

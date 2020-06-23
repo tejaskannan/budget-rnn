@@ -103,13 +103,16 @@ class AdaptiveModel(TFModel):
         num_sequences = self.num_sequences
         num_outputs = self.num_outputs
 
-        loss_weights = self.hypers.model_params.get('loss_weights')
-        if loss_weights is None:
+        loss_weights = self.hypers.model_params.get('loss_weights', False)
+        if not loss_weights:
             loss_weights = np.ones(shape=num_outputs, dtype=float)
-        elif isinstance(loss_weights, float):
-            loss_weights = [loss_weights] * num_outputs
-        elif len(loss_weights) == 1:
-            loss_weights = loss_weight * num_outputs
+        else:
+            loss_weights = np.linspace(start=self.sample_frac, stop=1.0, endpoint=True, num=self.num_sequences)
+
+       # elif isinstance(loss_weights, float):
+       #     loss_weights = [loss_weights] * num_outputs
+       # elif len(loss_weights) == 1:
+       #     loss_weights = loss_weight * num_outputs
 
         assert len(loss_weights) == num_outputs, f'Loss weights ({len(loss_weights)}) must match the number of outputs ({num_outputs}).'
 
@@ -690,22 +693,21 @@ class AdaptiveModel(TFModel):
 
         losses = tf.stack(losses)  # [N], N is the number of sequences
         weighted_losses = tf.reduce_sum(losses * self._placeholders['loss_weights'], axis=-1)  # Scalar
-        self._ops[LOSS] = weighted_losses
 
         # Apply level-wise layer penalty to get better results at higher levels
-        #if self.hypers.model_params.get('enforce_level_penalty', True):
-        #    rolled_losses = tf.roll(losses, shift=1, axis=0)  # [N]
-        #    mask = tf.cast(tf.range(start=0, limit=tf.shape(losses)[0]) > 0, dtype=tf.float32)  # [N]
-        #    penalty = tf.reduce_sum(tf.nn.leaky_relu(mask * (losses - rolled_losses), alpha=0.01))
+        if self.hypers.model_params.get('enforce_level_penalty', True):
+            rolled_losses = tf.roll(losses, shift=1, axis=0)  # [N]
+            mask = tf.cast(tf.range(start=0, limit=tf.shape(losses)[0]) > 0, dtype=tf.float32)  # [N]
+            # penalty = tf.reduce_sum(tf.nn.relu(mask * (losses - rolled_losses)))
+            penalty = tf.reduce_sum(tf.nn.leaky_relu(mask * (losses - rolled_losses), alpha=0.01))
 
-        #    self._ops[LOSS] = weighted_losses + penalty
-        #else:
-        #    print('========== HERE ==========')
-        #    self._ops[LOSS] = weighted_losses
+            self._ops[LOSS] = weighted_losses + penalty
+        else:
+            self._ops[LOSS] = weighted_losses
 
         # Add any regularization to the loss function
         reg_loss = self.regularize_weights(name=self.hypers.model_params.get('regularization_name'),
-                                           scale=self.hypers.model_params.get('regularization_scale', 0.01))
+                                           scale=self.hypers.model_params.get('regularization_scale', 0.0))
         if reg_loss is not None:
             self._ops[LOSS] += reg_loss
 
