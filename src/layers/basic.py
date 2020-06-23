@@ -5,11 +5,14 @@ from utils.tfutils import get_activation, get_regularizer, expand_to_matrix
 from utils.constants import BIG_NUMBER
 
 
-def pool_sequence(embeddings: tf.Tensor, pool_mode: str, name: str = 'pool-layer') -> tf.Tensor:
+def pool_sequence(embeddings: tf.Tensor, pool_mode: str, name: str, compression_fraction: Optional[float], compression_seed: Optional[str]) -> tf.Tensor:
     """
     Args:
         embeddings: A [B, T, K] tensor
         pool_mode: Pooling strategy
+        name: Name of this layer
+        compression_fraction: Optional compression fraction for attention aggregation
+        compression_seed: Optional compression seed for attention aggregation
     Returns:
         A [B, K] tensor containing the pooled vectors for each sequence
     """
@@ -21,14 +24,21 @@ def pool_sequence(embeddings: tf.Tensor, pool_mode: str, name: str = 'pool-layer
     elif pool_mode == 'max':
         return tf.reduce_max(embeddings, axis=-2, name=name)
     elif pool_mode == 'attention':
-        attention_weights = tf.layers.dense(inputs=embeddings,
-                                            units=1,
-                                            activation=tf.nn.leaky_relu,
-                                            use_bias=True,
-                                            kernel_initializer=tf.glorot_uniform_initializer(),
-                                            name='{0}-dense'.format(name))
-        normalized_weights = tf.nn.softmax(attention_weights, axis=-2, name='{0}-normalize'.format(name))  # [B, T, 1]
-        weighted_vectors = tf.math.multiply(embeddings, normalized_weights, name='{0}-scale'.format(name))  # [B, T, K]
+        attention_weights, _ = dense(inputs=embeddings,
+                                     units=1,
+                                     activation='sigmoid',
+                                     name=name,
+                                     use_bias=True,
+                                     compression_fraction=compression_fraction,
+                                     compression_seed=compression_seed)  # [B, T, 1]
+        #attention_weights = tf.layers.dense(inputs=embeddings,
+        #                                    units=1,
+        #                                    activation=tf.math.sigmoid,
+        #                                    use_bias=True,
+        #                                    kernel_initializer=tf.glorot_uniform_initializer(),
+        #                                    name='{0}-dense'.format(name))
+        #normalized_weights = tf.nn.softmax(attention_weights, axis=-2, name='{0}-normalize'.format(name))  # [B, T, 1]
+        weighted_vectors = tf.math.multiply(embeddings, attention_weights, name='{0}-scale'.format(name))  # [B, T, K]
         return tf.reduce_sum(weighted_vectors, axis=-2, name='{0}-aggregate'.format(name))  # [B, K]
     else:
         raise ValueError(f'Unknown pool mode {pool_mode}!')
