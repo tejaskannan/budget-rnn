@@ -155,8 +155,12 @@ class StandardModel(TFModel):
                                  name=TRANSFORM_LAYER_NAME,
                                  compression_fraction=self.hypers.model_params.get('compression_fraction'),
                                  compression_seed=TRANSFORM_SEED)
-
-            aggregated = pool_sequence(transformed, pool_mode=self.hypers.model_params['pool_mode'], name=AGGREGATION_LAYER_NAME)
+            # [B, D]
+            aggregated = pool_sequence(transformed,
+                                       pool_mode=self.hypers.model_params['pool_mode'],
+                                       name=AGGREGATION_LAYER_NAME,
+                                       compression_fraction=self.hypers.model_params.get('compression_fraction'),
+                                       compression_seed=AGGREGATE_SEED)
         elif self.model_type == StandardModelType.CNN:
             # Apply the 1 dimensional CNN transformation. Outputs a [B, T, D] tensor
             transformed = tf.layers.conv1d(inputs=input_sequence,
@@ -168,8 +172,12 @@ class StandardModel(TFModel):
                                            use_bias=True,
                                            kernel_initializer=tf.glorot_uniform_initializer(),
                                            name=TRANSFORM_LAYER_NAME)
-
-            aggregated = pool_sequence(transformed, pool_mode=self.hypers.model_params['pool_mode'], name=AGGREGATION_LAYER_NAME)
+            # [B, D]
+            aggregated = pool_sequence(transformed,
+                                       pool_mode=self.hypers.model_params['pool_mode'],
+                                       name=AGGREGATION_LAYER_NAME,
+                                       compression_fraction=self.hypers.model_params.get('compression_fraction'),
+                                       compression_seed=AGGREGATE_SEED)
         elif self.model_type == StandardModelType.RNN:
             compression_fraction = self.hypers.model_params.get('compression_fraction')
 

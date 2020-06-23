@@ -49,7 +49,7 @@ def fuse_states(curr_state: tf.Tensor,
     elif mode in ('gate', 'gate_layer', 'gate-layer'):
         concat_states = tf.concat([curr_state, prev_state], axis=-1)  # [B, 2 * D]
 
-        # [B, D]
+        # [B, 1]
         update_weight, _ = dense(inputs=concat_states,
                                  units=1,
                                  name=name,
@@ -119,7 +119,7 @@ def dynamic_rnn(inputs: tf.Tensor,
 
             state_transform_bias = tf.get_variable(name='{0}-{1}-bias'.format(combine_layer_name, i),
                                                    shape=(1, 1),
-                                                   initializer=tf.initializers.glorot_uniform(),
+                                                   initializer=tf.initializers.random_uniform(minval=-0.7, maxval=0.7),
                                                    trainable=True)
 
     # While loop step
