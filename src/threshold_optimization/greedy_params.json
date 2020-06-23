@@ -1,9 +1,8 @@
 {
     "precision": 10,
-    "batch_size": 64,
-    "tolerance": 1e-2,
-    "level_penalty": 0.01,
+    "batch_size": 2000,
     "should_sort_thresholds": true,
-    "anneal_penalty": false,
+    "budget_type": "power",
+    "budget_value": 47,
     "trials": 10
 }

@@ -8,7 +8,7 @@ from utils.rnn_utils import get_logits_name
 from utils.testing_utils import ClassificationMetric
 from utils.np_utils import round_to_precision, min_max_normalize, clip_by_norm
 from utils.constants import BIG_NUMBER, SMALL_NUMBER, OUTPUT
-from utils.adaptive_inference import threshold_predictions
+from utils.adaptive_inference import threshold_predictions, normalize_logits
 from threshold_optimization.optimizer import ThresholdOptimizer
 
 
@@ -76,7 +76,8 @@ class GreedyThresholdOptimizer(ThresholdOptimizer):
         data_generator = dataset.minibatch_generator(series=series,
                                                      batch_size=self._batch_size,
                                                      metadata=self._model.metadata,
-                                                     should_shuffle=False)
+                                                     should_shuffle=False,
+                                                     drop_incomplete_batches=False)
 
         normalized_logits: List[np.ndarray] = []
         labels: List[np.ndarray] = []
@@ -90,8 +91,9 @@ class GreedyThresholdOptimizer(ThresholdOptimizer):
             logits_concat = np.concatenate([np.expand_dims(logits[op], axis=1) for op in logit_ops], axis=1)
 
             # Normalize logits and round to fixed point representation
-            normalized_batch_logits = min_max_normalize(logits_concat, axis=-1)
-            normalized_batch_logits = round_to_precision(normalized_batch_logits, precision=self._precision)
+            #normalized_batch_logits = min_max_normalize(logits_concat, axis=-1)
+            #normalized_batch_logits = round_to_precision(normalized_batch_logits, precision=self._precision)
+            normalized_batch_logits = normalize_logits(logits_concat, precision=self._precision)
 
             normalized_logits.append(normalized_batch_logits)
             labels.append(np.squeeze(batch[OUTPUT]))

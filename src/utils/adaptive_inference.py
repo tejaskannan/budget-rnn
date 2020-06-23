@@ -1,7 +1,39 @@
 import numpy as np
 from typing import Tuple
 
+from utils.np_utils import min_max_normalize, round_to_precision
 from utils.constants import BIG_NUMBER
+
+
+def tanh_approx(x: np.ndarray) -> np.ndarray:
+    """
+    Approximation of tanh using polynomials. We use this equation during inference with fixed point operations.
+    """
+    return np.clip(x * (0.5 + np.square(0.25 * x)) / (0.5 + np.square(0.5 * x)), a_min=-1, a_max=1)
+
+
+def normalize_logits(logits: np.ndarray, precision: int) -> np.ndarray:
+    """
+    Normalizes the logits for thresholded predictions
+
+    Args:
+        logits: A [B, L, C] array of normalized log probabilities
+        precision: Fixed point precision to evaluate under
+    Returns:
+        A [B, L, C] normalized logits array
+    """
+    if logits.shape[-1] > 2:
+        normalized_logits = min_max_normalize(logits, axis=-1)
+    else:
+        # When the number of classes is 2, we use the sigmoid function to approximate
+        # the behavior of softmax.
+        sigmoid_diff = 0.5 * (tanh_approx(0.5 * (logits[:, :, 0] - logits[:, :, 1])) + 1)  # [B, L]
+        sigmoid_diff = np.expand_dims(sigmoid_diff, axis=-1)  # [B, L, 1]
+
+        normalized_logits = np.concatenate([sigmoid_diff, 1 - sigmoid_diff], axis=-1)  # [B, L, 2]
+
+    return round_to_precision(normalized_logits, precision)
+
 
 
 def threshold_predictions(predictions: np.ndarray, thresholds: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
