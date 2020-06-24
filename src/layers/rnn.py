@@ -39,8 +39,6 @@ def fuse_states(curr_state: tf.Tensor,
         return curr_state
     elif mode == 'sum':
         return curr_state + prev_state
-    elif mode in ('sum-tanh', 'sum_tanh'):
-        return tf.nn.tanh(curr_state + prev_state)
     elif mode in ('avg', 'average'):
         return (curr_state + prev_state) / 2.0
     elif mode in ('max', 'max-pool', 'max_pool'):
@@ -71,7 +69,8 @@ def dynamic_rnn(inputs: tf.Tensor,
                 name: Optional[str] = None,
                 should_share_weights: bool = False,
                 fusion_mode: Optional[str] = None,
-                compression_fraction: Optional[float] = None) -> RnnOutput:
+                compression_fraction: Optional[float] = None,
+                should_reverse: bool = False) -> RnnOutput:
     """
     Implementation of a recurrent neural network which allows for complex state passing.
 
@@ -85,6 +84,7 @@ def dynamic_rnn(inputs: tf.Tensor,
         should_share_weights: Whether or not to share weights for any added trainable parameters
         fusion_mode: Optional fusion mode for combining states between levels
         compression_fraction: Optional fraction for which we should compress weights
+        should_reverse: Whether to reverse the sequence
     Returns:
         A tuple of 3 tensor arrays
             (1) The outputs of each cell
@@ -124,40 +124,56 @@ def dynamic_rnn(inputs: tf.Tensor,
 
     # While loop step
     def step(index, state, outputs, states, gates):
-        step_inputs = tf.gather(inputs, indices=index, axis=1)  # [B, D]
+        # Get the sequence element based on the direction of processing
+        data_index = index if not should_reverse else sequence_length - index - 1
+        step_inputs = tf.gather(inputs, indices=data_index, axis=1)  # [B, D]
 
-        skip_inputs: Optional[tf.Tensor] = None
-        if skip_width is not None:
-            skip_inputs = tf.where(tf.math.less(index - skip_width, 0),
-                                   x=state,
-                                   y=states.read(index=index - skip_width))  # [B, D]
-
-        # Get states
+        # Collect states
         combined_state = state
         prev_state = previous_states.read(index) if previous_states is not None else None
 
-        # Fuse together the states
-        combined_state: List[tf.Tensor] = []
-        for i in range(rnn_layers):
-            curr = state[i, :, :]
-            prev = prev_state[i, :, :] if prev_state is not None else None
+        # Fuse together the states. We do the fusion before when processing the forward direction.
+        if not should_reverse:
+            combined_state: List[tf.Tensor] = []
+            for i in range(rnn_layers):
+                curr = state[i, :, :]
+                prev = prev_state[i, :, :] if prev_state is not None else None
 
-            combined = fuse_states(curr_state=curr,
-                                   prev_state=prev,
-                                   mode=fusion_mode,
-                                   state_size=state_size,
-                                   name='{0}-{1}'.format(combine_layer_name, i),
-                                   compression_fraction=compression_fraction,
-                                   compression_seed='{0}{1}'.format(FUSION_SEED, i))
+                combined = fuse_states(curr_state=curr,
+                                       prev_state=prev,
+                                       mode=fusion_mode,
+                                       state_size=state_size,
+                                       name='{0}-{1}'.format(combine_layer_name, i),
+                                       compression_fraction=compression_fraction,
+                                       compression_seed='{0}{1}'.format(FUSION_SEED, i))
 
-            combined_state.append(combined)
+                combined_state.append(combined)
 
         # Convert a stacked state into a list of states
         if not isinstance(combined_state, list):
             combined_state = [combined_state[i, :, :] for i in range(rnn_layers)]
 
         # Apply RNN Cell
-        output, state, gates_tuple = cell(step_inputs, combined_state, skip_input=skip_inputs)
+        output, state, gates_tuple = cell(step_inputs, combined_state, skip_input=None)
+
+        # Fuse together states afterwards if processing in the backward direction
+        if should_reverse:
+            combined_state: List[tf.Tensor] = []
+            for i in range(rnn_layers):
+                curr = state[i]
+                prev = prev_state[i, :, :] if prev_state is not None else None
+
+                combined = fuse_states(curr_state=curr,
+                                       prev_state=prev,
+                                       mode=fusion_mode,
+                                       state_size=state_size,
+                                       name='{0}-{1}'.format(combine_layer_name, i),
+                                       compression_fraction=compression_fraction,
+                                       compression_seed='{0}{1}'.format(FUSION_SEED, i))
+
+                combined_state.append(combined)
+
+            state = combined_state  # List of L [B, D] tensors
 
         # Save outputs
         outputs = outputs.write(index=index, value=output)

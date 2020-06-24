@@ -50,8 +50,8 @@ class TFModel(Model):
         return self._placeholders
 
     @property
-    def optimizer_op_name(self) -> str:
-        return OPTIMIZER_OP
+    def optimizer_op_names(self) -> List[str]:
+        return [OPTIMIZER_OP]
 
     @property
     def loss_op_names(self) -> List[str]:
@@ -286,11 +286,12 @@ class TFModel(Model):
             loss_ops: Optional dictionary mapping loss operations to a list of trainable variables.
                 The learning rates can be individually scaled for each variable.
         """
+        assert len(self.optimizer_op_names) == len(self.loss_op_names), 'Must have the same number of loss ops ({0}) as optimizer ops ({1])'.format(len(self.loss_op_names), len(self.optimizer_op_names))
         optimizer_ops = []
         trainable_vars = self.trainable_vars
 
         # Compute gradients for each loss operation
-        for loss_op in self.loss_op_names:
+        for loss_op, optimizer_op_name in zip(self.loss_op_names, self.optimizer_op_names):
             gradients = tf.gradients(self._ops[loss_op], trainable_vars)
 
             # Clip Gradients
@@ -301,10 +302,12 @@ class TFModel(Model):
 
             # Apply clipped gradients
             optimizer_op = self._optimizer.apply_gradients(pruned_gradients)
-            optimizer_ops.append(optimizer_op)
 
-        # Group all optimizer operations
-        self._ops[self.optimizer_op_name] = tf.group(optimizer_ops)
+            self._ops[optimizer_op_name] = optimizer_op
+            # optimizer_ops.append(optimizer_op)
+
+        # Group all optimizer operations. TODO: Allow filtering of optimizer operations
+        # self._ops[self.optimizer_op_name] = tf.group(optimizer_ops)
 
         # Include the global step operation
         self._ops[self.global_step_op_name] = tf.assign_add(self._global_step, 1)
@@ -394,8 +397,11 @@ class TFModel(Model):
             for loss_op in self.loss_op_names:
                 loss_var_dict[loss_op] = [v.name for v in variables_for_loss_op(self.trainable_vars, self.ops[loss_op])]
 
+        # Dictionary to track whether to continue training variables for each loss operations
+        num_not_improved: Dict[str, int] = {loss_op: 0 for loss_op in self.loss_op_names}
+        has_stopped: Dict[str, bool] = {loss_op: False for loss_op in self.loss_op_names}
+
         # Execute training and validation epochs
-        num_not_improved = 0
         for epoch in range(self.hypers.epochs):
             print(f'-------- Epoch {epoch} --------')
 
@@ -408,22 +414,27 @@ class TFModel(Model):
             epoch_train_loss: DefaultDict[str, float] = defaultdict(float)
             epoch_train_acc: DefaultDict[str, float] = defaultdict(float)
 
+            # Collect the training operations
+            train_ops_to_run = [self.global_step_op_name]
+            train_ops_to_run += list(optimizer_op for optimizer_op, loss_op in zip(self.optimizer_op_names, self.loss_op_names) if not has_stopped[loss_op])
+            train_ops_to_run += list(loss_op for loss_op, stopped_status in has_stopped.items() if not stopped_status)
+
+            if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
+                train_ops_to_run += self.accuracy_op_names
+
             train_batch_counter = 1
             for batch in train_generator:
                 feed_dict = self.batch_to_feed_dict(batch, is_train=True)
 
-                ops_to_run = [self.optimizer_op_name, self.global_step_op_name] + self.loss_op_names
-
-                if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
-                    ops_to_run += self.accuracy_op_names
-
-                train_results = self.execute(feed_dict, ops_to_run)
+                # Run the training operations
+                train_results = self.execute(feed_dict, train_ops_to_run)
 
                 batch_loss = 0.0
                 for loss_op_name in self.loss_op_names:
-                    avg_batch_loss = np.average(train_results[loss_op_name])
-                    batch_loss += avg_batch_loss
-                    epoch_train_loss[loss_op_name] += avg_batch_loss
+                    if loss_op_name in train_results:
+                        avg_batch_loss = np.average(train_results[loss_op_name])
+                        batch_loss += avg_batch_loss
+                        epoch_train_loss[loss_op_name] += avg_batch_loss
 
                 train_loss_agg = np.average(list(epoch_train_loss.values()))
                 avg_train_loss_so_far = train_loss_agg / train_batch_counter
@@ -453,26 +464,27 @@ class TFModel(Model):
                                                           should_shuffle=False,
                                                           drop_incomplete_batches=drop_incomplete_batches)
 
-            epoch_valid_loss: DefaultDict[str, float] = defaultdict(float)
-            epoch_valid_acc: DefaultDict[str, float] = defaultdict(float)
+            epoch_valid_loss: DefaultDict[str, float] = defaultdict(float)  # Map from loss_op -> average epoch loss
+            epoch_valid_acc: DefaultDict[str, float] = defaultdict(float)  # Map from accuracy op -> epoch accuracy
+
+            # Collect the validation ops
+            valid_ops_to_run = list(loss_op for loss_op, stopped_status in has_stopped.items() if not stopped_status)
+            if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
+                valid_ops_to_run += self.accuracy_op_names
 
             valid_batch_counter = 1
             for batch in valid_generator:
                 feed_dict = self.batch_to_feed_dict(batch, is_train=False)
 
-                ops_to_run: List[str] = []
-                if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
-                    ops_to_run += self.accuracy_op_names
-
-                ops_to_run += self.loss_op_names
-                ops_to_run.append('logits')
-                valid_results = self.execute(feed_dict, ops_to_run)
+                # Run the validation operations
+                valid_results = self.execute(feed_dict, valid_ops_to_run)
 
                 batch_loss = 0.0
                 for loss_op_name in self.loss_op_names:
-                    avg_batch_loss = np.average(valid_results[loss_op_name])
-                    batch_loss += avg_batch_loss
-                    epoch_valid_loss[loss_op_name] += avg_batch_loss
+                    if loss_op_name in valid_results:
+                        avg_batch_loss = np.average(valid_results[loss_op_name])
+                        batch_loss += avg_batch_loss
+                        epoch_valid_loss[loss_op_name] += avg_batch_loss
 
                 valid_loss_agg = np.average(list(epoch_valid_loss.values()))
                 avg_valid_loss_so_far = valid_loss_agg / valid_batch_counter
@@ -504,28 +516,50 @@ class TFModel(Model):
 
             # Collect loss operation to save
             metric_ops = self.loss_op_names if self.output_type == OutputType.REGRESSION else self.accuracy_op_names
-            has_improved = False
+            has_improved: Dict[str, bool] = {loss_op: False for loss_op in self.loss_op_names}
             loss_ops_to_save: Set[str] = set()
-            for op_name in metric_ops:
+
+            # When there is a single loss op, we always use the average loss / accuracy
+            if len(self.loss_op_names) == 1:
+                loss_op_name = self.loss_op_names[0]
+
                 # For regression tasks, we want to minimize loss
                 if self.output_type == OutputType.REGRESSION:
-                    valid_loss = epoch_valid_loss[op_name]
-                    if valid_loss < best_valid_metric_dict[op_name]:
-                        loss_ops_to_save.add(op_name)
-                        best_valid_metric_dict[op_name] = valid_loss
-                        has_improved = True
-
-                # For classification tasks, we want to maximize accuracy
-                if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
-                    valid_acc = epoch_valid_acc[op_name]
-
-                    if valid_acc > best_valid_metric_dict[op_name]:
-                        # Save the corresponding loss operation
-                        loss_op_name = accuracy_loss_dict[op_name]
+                    valid_loss = np.average(list(epoch_valid_loss.values()))
+                    if valid_loss < best_valid_metric_dict[loss_op_name]:
                         loss_ops_to_save.add(loss_op_name)
+                        best_valid_metric_dict[loss_op_name] = valid_loss
+                        has_improved[loss_op_name] = True
+                else:
+                    # For classification tasks, we want to maximize accuracy
+                    valid_acc = np.average(list(epoch_valid_acc.values()))
+                    if valid_acc > best_valid_metric_dict[ACCURACY]:
+                        loss_ops_to_save.add(loss_op_name)
+                        best_valid_metric_dict[ACCURACY] = valid_acc
+                        has_improved[loss_op_name] = True
+            else:
+                # For some models, we have many independent loss operations. This helps train multiple models in parallel.
+                # In this case, we treat each loss operation as a separate model for early stopping.
+                for op_name in metric_ops:
+                    # For regression tasks, we want to minimize loss
+                    if self.output_type == OutputType.REGRESSION:
+                        valid_loss = epoch_valid_loss[op_name]
+                        if valid_loss < best_valid_metric_dict[op_name]:
+                            loss_ops_to_save.add(op_name)
+                            best_valid_metric_dict[op_name] = valid_loss
+                            has_improved[op_name] = True
 
-                        best_valid_metric_dict[op_name] = valid_acc
-                        has_improved = True
+                    # For classification tasks, we want to maximize accuracy
+                    if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
+                        valid_acc = epoch_valid_acc[op_name]
+
+                        if valid_acc > best_valid_metric_dict[op_name]:
+                            # Save the corresponding loss operation
+                            loss_op_name = accuracy_loss_dict[op_name]
+                            loss_ops_to_save.add(loss_op_name)
+
+                            best_valid_metric_dict[op_name] = valid_acc
+                            has_improved[loss_op_name] = True
 
             # Save model if necessary
             loss_ops_to_save = list(sorted(loss_ops_to_save))
@@ -533,12 +567,18 @@ class TFModel(Model):
                 print('Saving model for operations: {0}'.format(','.join(loss_ops_to_save)))
                 self.save(name=name, data_folders=dataset.data_folders, loss_ops=loss_ops_to_save, loss_var_dict=loss_var_dict)
 
-            if has_improved:
-                num_not_improved = 0
-            else:
-                num_not_improved += 1
+            # Increment the improvement counter
+            for loss_op, improved_status in has_improved.items():
+                if improved_status:
+                    num_not_improved[loss_op] = 0
+                else:
+                    num_not_improved[loss_op] += 1
 
-            if num_not_improved >= self.hypers.patience:
+                if num_not_improved[loss_op] >= self.hypers.patience:
+                    has_stopped[loss_op] = True
+
+            # Exit of all loss operations have stopped
+            if all(has_stopped.values()):
                 print('Exiting due to Early Stopping')
                 break
 

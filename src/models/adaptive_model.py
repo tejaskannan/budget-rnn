@@ -14,7 +14,7 @@ from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs, expand_to_matrix
 from utils.misc import sample_sequence_batch, batch_sample_noise
-from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, OUTPUT, INPUTS, LOSS, OUTPUT_SEED
+from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, OUTPUT, INPUTS, LOSS, OUTPUT_SEED, OPTIMIZER_OP
 from utils.constants import NODE_REGEX_FORMAT, DROPOUT_KEEP_RATE, MODEL, SCHEDULED_MODEL, NUM_CLASSES
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE, EMBEDDING_SEED, AGGREGATE_SEED
 from utils.loss_utils import f1_score_loss, binary_classification_loss
@@ -76,6 +76,12 @@ class AdaptiveModel(TFModel):
             return [get_loss_name(i) for i in range(self.num_outputs)]
         return [LOSS]
 
+    @property
+    def optimizer_op_names(self) -> List[str]:
+        if self.model_type == AdaptiveModelType.VANILLA and not self.hypers.model_params['share_cell_weights']:
+            return ['{0}_{1}'.format(OPTIMIZER_OP, i) for i in range(self.num_outputs)]
+        return [OPTIMIZER_OP]
+
     def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
         dropout = self.hypers.dropout_keep_rate if is_train else 1.0
         input_batch = np.array(batch[INPUTS])
@@ -109,11 +115,6 @@ class AdaptiveModel(TFModel):
         else:
             loss_weights = np.linspace(start=self.sample_frac, stop=1.0, endpoint=True, num=self.num_sequences)
 
-       # elif isinstance(loss_weights, float):
-       #     loss_weights = [loss_weights] * num_outputs
-       # elif len(loss_weights) == 1:
-       #     loss_weights = loss_weight * num_outputs
-
         assert len(loss_weights) == num_outputs, f'Loss weights ({len(loss_weights)}) must match the number of outputs ({num_outputs}).'
 
         # The loss weights are sorted in ascending order to more-heavily weight larger sample sizes.
@@ -131,7 +132,7 @@ class AdaptiveModel(TFModel):
                 seq_indexes = list(sorted(seq_indexes))
                 sample_tensor = input_batch[:, seq_indexes]
                 feed_dict[input_ph] = sample_tensor
-            elif self.model_type in (AdaptiveModelType.SAMPLE, AdaptiveModelType.LINKED, AdaptiveModelType.BOW):
+            elif self.model_type in (AdaptiveModelType.SAMPLE, AdaptiveModelType.BIDIR_SAMPLE, AdaptiveModelType.LINKED, AdaptiveModelType.BOW):
                 seq_indexes = list(range(i, seq_length, num_sequences))
                 sample_tensor = input_batch[:, seq_indexes]
                 feed_dict[input_ph] = sample_tensor
@@ -539,6 +540,7 @@ class AdaptiveModel(TFModel):
         """
         outputs: List[tf.Tensor] = []
         states_list: List[tf.TensorArray] = []
+        bw_states_list: List[tf.TensorArray] = []
         prev_state: Optional[tf.Tensor] = None
 
         num_output_features = self.metadata[NUM_OUTPUT_FEATURES]
@@ -586,8 +588,10 @@ class AdaptiveModel(TFModel):
 
             # Set previous states for the Sample model type
             prev_states = None
-            if self.model_type == AdaptiveModelType.SAMPLE and i > 0:
+            if self.model_type in (AdaptiveModelType.SAMPLE, AdaptiveModelType.BIDIR_SAMPLE) and i > 0:
                 prev_states = states_list[i-1]
+
+                self._ops['prev_states_{0}'.format(i)] = prev_states.stack()
 
             # Run RNN and collect outputs
             rnn_out = dynamic_rnn(cell=cell,
@@ -614,6 +618,56 @@ class AdaptiveModel(TFModel):
             # [B, D]
             rnn_output = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
             rnn_output = tf.nn.dropout(rnn_output, keep_prob=self._placeholders[DROPOUT_KEEP_RATE])
+
+            # If the model is bidirectional, then we also run the backward direction
+            if self.model_type == AdaptiveModelType.BIDIR_SAMPLE:
+
+                # Create the Bakcward RNN Cell
+                bw_cell_name = get_backward_name(cell_name)
+                bw_cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
+                                        input_units=self.hypers.model_params['state_size'],
+                                        output_units=self.hypers.model_params['state_size'],
+                                        activation=self.hypers.model_params['rnn_activation'],
+                                        num_layers=self.hypers.model_params['rnn_layers'],
+                                        name=bw_cell_name,
+                                        compression_fraction=self.hypers.model_params.get('compression_fraction'))
+
+                # Set previous states
+                bw_prev_states = None
+                if i > 0:
+                    bw_prev_states = bw_states_list[i-1]
+                    self._ops['bw_prev_states_{0}'.format(i)] = bw_prev_states.stack()
+
+                # Run RNN and collect outputs
+                bw_rnn_name = get_backward_name(rnn_level_name)
+                bw_rnn_out = dynamic_rnn(cell=bw_cell,
+                                         inputs=inputs,
+                                         previous_states=bw_prev_states,
+                                         initial_state=initial_state,
+                                         name=bw_rnn_name,
+                                         should_share_weights=self.hypers.model_params['share_rnn_weights'],
+                                         fusion_mode=self.hypers.model_params.get('fusion_mode'),
+                                         compression_fraction=self.hypers.model_params.get('compression_fraction'),
+                                         should_reverse=True)
+                bw_rnn_outputs = bw_rnn_out.outputs  # [B, T, D]
+                bw_rnn_states = bw_rnn_out.states
+                bw_rnn_gates = bw_rnn_out.gates
+
+                # Save previous states
+                bw_states_list.append(bw_rnn_states)
+
+                # Get the final state
+                last_index = tf.shape(inputs)[1] - 1
+                bw_final_output = bw_rnn_outputs.read(index=last_index)
+                bw_final_state = bw_rnn_states.read(index=last_index)  # [L, B, D] where L is the number of RNN layers
+                bw_final_state = tf.concat(tf.unstack(bw_final_state, axis=0), axis=-1)  # [B, D * L]
+
+                # [B, D]
+                bw_rnn_output = pool_rnn_outputs(bw_rnn_outputs, bw_final_state, pool_mode=self.hypers.model_params['pool_mode'])
+                bw_rnn_output = tf.nn.dropout(bw_rnn_output, keep_prob=self._placeholders[DROPOUT_KEEP_RATE])
+
+                # Combine the forward and backward states
+                rnn_output = tf.concat([rnn_output, bw_rnn_output], axis=-1)  # [B, 2 * D]
 
             # [B, K]
             output_size = num_output_features if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[NUM_CLASSES]
