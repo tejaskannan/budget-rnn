@@ -83,6 +83,7 @@ def create_confusion_matrix(model: Model, dataset: Dataset, thresholds: Optional
             predictions, _ = threshold_predictions(normalized_logits, thresholds)
         elif isinstance(model, StandardModel):
             predictions = model.execute(feed_dict, PREDICTION)
+            predictions = predictions[PREDICTION]
         else:
             raise ValueError('Unsupported model type.')
 

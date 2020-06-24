@@ -24,35 +24,37 @@ class GreedyThresholdOptimizer(ThresholdOptimizer):
         
         self._precision = params['precision']
         self._batch_size = params.get('batch_size', model.hypers.batch_size)
-        # self._tolerance = params['tolerance']
         self._should_sort_thresholds = params['should_sort_thresholds']
-        # self._should_anneal_penalty = params['anneal_penalty']
         self._trials = params['trials']
-        
-        # Power Estimates from profiling (constant for now)
-        self._avg_power = np.array([24.085, 32.776, 37.897, 43.952, 48.833, 50.489, 54.710, 57.692, 59.212, 59.251])
 
         # Constraints during optimization
         self._budget_type = BudgetType[params['budget_type'].upper()]
-        self._budget = params['budget_value']
-        self._violation_factor = 100 if self._budget_type == BudgetType.POWER else np.max(self._avg_power) + 100
+        self._budgets = params['budget_values']
+        self._violation_factor = 1000 if self._budget_type == BudgetType.POWER else np.max(self._avg_power) + 1000
+
+        # Convert the budgets into a [S] numpy array
+        if not isinstance(self._budgets, list):
+            self._budgets = [self._budgets]
+        self._budgets = np.array(self._budgets)
+
 
     @property
     def identifier(self) -> Tuple[Any, Any]:
-        return (self._budget_type.name.lower(), self._budget)
+        return (self._budget_type.name.lower(), self._budgets)
 
-    def fitness_function(self, normalized_logits: np.ndarray, labels: np.ndarray, thresholds: np.ndarray, penalty: Optional[float] = None) -> float:
-        predictions, levels = threshold_predictions(normalized_logits, thresholds=thresholds)
+    def fitness_function(self, normalized_logits: np.ndarray, labels: np.ndarray, thresholds: np.ndarray, penalty: Optional[float] = None) -> np.ndarray:
+        predictions, levels = threshold_predictions(normalized_logits, thresholds=thresholds)  # Pair of [S, B] arrays
 
-        assert predictions.shape == labels.shape, 'Misaligned labels ({0}) and predictions ({1})'.format(labels.shape, predictions.shape)
+        labels = np.expand_dims(labels, axis=0)
+        assert predictions.shape[-1] == labels.shape[-1], 'Misaligned labels ({0}) and predictions ({1})'.format(labels.shape, predictions.shape)
 
         penalty_factor = penalty if penalty is not None else self._level_penalty
 
-        accuracy = np.average((predictions == labels).astype(float))
+        accuracy = np.average((predictions == labels).astype(float), axis=-1)  # [S]
 
-        level_counts = np.bincount(levels, minlength=self._num_levels)  # [L]
-        normalized_level_counts = level_counts / np.sum(level_counts)
-        approx_power = np.sum(normalized_level_counts * self._avg_power).astype(float)
+        level_counts = np.vstack([np.bincount(levels[i, :], minlength=self._num_levels) for i in range(levels.shape[0])])  # [S, L]
+        normalized_level_counts = level_counts / np.sum(level_counts, axis=-1, keepdims=True)  # [S, L]
+        approx_power = np.sum(normalized_level_counts * self._avg_power, axis=-1).astype(float)  # [S]
 
         # Determine the objective function based on the budget type
         dual_penalty, fitness = 0.0, 0.0
@@ -60,12 +62,15 @@ class GreedyThresholdOptimizer(ThresholdOptimizer):
             dual_penalty = 100 * (self._budget - accuracy)  # Convert to percentage to match the scale of power values
             fitness = approx_power
         elif self._budget_type == BudgetType.POWER:
-            dual_penalty = approx_power - self._budget
-            fitness = -accuracy
+            dual_penalty = approx_power - self._budgets  # [S]
+            fitness = -accuracy  # [S]
         else:
             raise ValueError('Unknown budget type: {0}'.format(self._budget_type))
 
-        return fitness + self._violation_factor * np.clip(dual_penalty, a_min=0.0, a_max=None)
+        dual_penalty = np.where(dual_penalty < 0, 0.0, self._violation_factor * dual_penalty)
+
+        return fitness + dual_penalty
+        # return fitness + self._violation_factor * np.clip(dual_penalty, a_min=0.0, a_max=None)  # [S]
 
 
     def fit(self, dataset: Dataset, series: DataSeries):
@@ -91,8 +96,6 @@ class GreedyThresholdOptimizer(ThresholdOptimizer):
             logits_concat = np.concatenate([np.expand_dims(logits[op], axis=1) for op in logit_ops], axis=1)
 
             # Normalize logits and round to fixed point representation
-            #normalized_batch_logits = min_max_normalize(logits_concat, axis=-1)
-            #normalized_batch_logits = round_to_precision(normalized_batch_logits, precision=self._precision)
             normalized_batch_logits = normalize_logits(logits_concat, precision=self._precision)
 
             normalized_logits.append(normalized_batch_logits)
@@ -105,7 +108,9 @@ class GreedyThresholdOptimizer(ThresholdOptimizer):
         fp_one = 1 << self._precision
 
         # Greedily optimize each threshold via an exhaustive search over all fixed point values
-        thresholds = np.ones(shape=(self._num_levels, ))
+        thresholds = np.ones(shape=(self._budgets.shape[0], self._num_levels))
+        # thresholds = np.full(shape=(self._num_levels, ), fill_value=0.5)
+        thresholds[:, -1] = 0
 
         # Track previous thresholds to detect convergence
         prev_thresholds = np.copy(thresholds)
@@ -113,30 +118,43 @@ class GreedyThresholdOptimizer(ThresholdOptimizer):
         for trial in range(self._trials):
             print('====== Starting Trial {0} ======'.format(trial))
 
-            for level in range(self._num_levels - 1):
-                
+            for level in reversed(range(self._num_levels - 1)):
+
+                # 1 when constraint violated at this level and 0 when satisfied
+                power_comparison = (self._avg_power[level] > self._budgets).astype(float)
+                if trial == 0 and (power_comparison > SMALL_NUMBER).all():
+                    continue
+
                 # Determine threshold ranges
-                if self._should_sort_thresholds:
-                    max_threshold = int(thresholds[level - 1] * fp_one) if level > 0 else fp_one
+                if self._should_sort_thresholds and trial > 0:
+                    min_threshold = int(thresholds[level + 1] * fp_one)
                 else:
-                    max_threshold = fp_one
+                    min_threshold = 0
 
-                best_t, best_obj = None, None
-                for t in range(max_threshold + 1):
-                    thresholds[level] = t / fp_one
-                    objective = self.fitness_function(normalized_logits, labels, thresholds=thresholds, penalty=self._level_penalty)
+                best_t = np.ones_like(self._budgets)
+                best_obj = np.zeros_like(self._budgets) + BIG_NUMBER
 
-                    if best_obj is None or objective < best_obj:
-                        best_obj = objective
-                        best_t = t / fp_one
+                for t in range(min_threshold, fp_one, 1):
+                    thresholds[:, level] = t / fp_one
+                    objectives = self.fitness_function(normalized_logits, labels, thresholds=thresholds, penalty=self._level_penalty)  # [S]
 
-                
+                    # At the first trial, apply the power comparison mask to avoid wrongly setting values
+                    if trial == 0:
+                        objectives = (power_comparison * BIG_NUMBER) + (1.0 - power_comparison) * objectives
+
+                    best_t = np.where(objectives < best_obj, t / fp_one, best_t)
+                    best_obj = np.minimum(objectives, best_obj)
+
+                   # if best_obj is None or objective < best_obj:
+                   #     best_obj = objective
+                   #     best_t = t / fp_one
+
                 objective_value = best_obj if self._budget_type == BudgetType.ACCURACY else -best_obj
-                print('Completed level {0}. Objective: {1:.4f}'.format(level + 1, objective_value))
+                print('Completed level {0}. Objectives: {1}'.format(level + 1, objective_value))
 
-                thresholds[level] = best_t
+                thresholds[:, level] = best_t
 
-            print('Finished Trial {0}. Objective: {1:.4f}. Thresholds: {2}'.format(trial + 1, objective_value, thresholds))
+            print('Finished Trial {0}. Objectives: {1}. Thresholds: {2}'.format(trial + 1, objective_value, thresholds))
 
             if np.isclose(prev_thresholds, thresholds).all():
                 print('Converged.')

@@ -87,7 +87,8 @@ def compute_thresholds(model: AdaptiveModel, opt_params: Dict[str, Any], flops_p
 
     print('Completed optimization. Starting testing.')
     test_results = best_optimizer.score(dataset, series=DataSeries.TEST, flops_per_level=flops_per_level)
-    print('Completed Testing. Accuracy: {0:.4f}. Avg Levels: {1:.4f}.'.format(test_results[ClassificationMetric.ACCURACY.name], test_results[ClassificationMetric.LEVEL.name]))
+    print('Completed Testing. Accuracy: {0}. Avg Levels: {1}.'.format(test_results[ClassificationMetric.ACCURACY.name], test_results[ClassificationMetric.LEVEL.name]))
+    print('Approximate Power: {0}mW'.format(test_results['APPROX_POWER']))
     print('Thresholds: {0}'.format(test_results['THRESHOLDS']))
 
     return test_results, best_optimizer
@@ -95,7 +96,7 @@ def compute_thresholds(model: AdaptiveModel, opt_params: Dict[str, Any], flops_p
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--model-path', type=str, required=True)
+    parser.add_argument('--model-paths', type=str, nargs='+')
     parser.add_argument('--optimizer-params', type=str, nargs='+')
     parser.add_argument('--name', type=str, choices=['genetic', 'greedy'], required=True)
     parser.add_argument('--dataset-folder', type=str)
@@ -109,18 +110,22 @@ if __name__ == '__main__':
         optimizer_params = read_by_file_suffix(optimizer_params_file)
         params.append(optimizer_params)
 
-    # Retrieved saved information
-    model, dataset, test_log = get_serialized_info(args.model_path, args.dataset_folder)
+    for model_path in args.model_paths:
+        # Retrieved saved information
+        model, dataset, test_log = get_serialized_info(model_path, args.dataset_folder)
 
-    save_folder, model_path = os.path.split(args.model_path)
-    model_name = extract_model_name(model_path)
+        save_folder, file_name = os.path.split(model_path)
+        model_name = extract_model_name(file_name)
 
-    prediction_names = [get_prediction_name(i) for i in range(model.num_outputs)]
-    flops_per_level = [test_log[name][ClassificationMetric.FLOPS.name] for name in prediction_names]
+        prediction_names = [get_prediction_name(i) for i in range(model.num_outputs)]
+        flops_per_level = [test_log[name][ClassificationMetric.FLOPS.name] for name in prediction_names]
 
-    for opt_params in params:
-        test_results, optimizer = compute_thresholds(model, opt_params, flops_per_level, name=args.name)
-        identifier = optimizer.identifier
+        # Compute the thresholds for each parameters file
+        for opt_params in params:
+            test_results, optimizer = compute_thresholds(model, opt_params, flops_per_level, name=args.name)
+            budget_type, budgets = optimizer.identifier
 
-        optimized_test_log_path = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format(args.name, identifier[0], identifier[1], model_name))
-        save_by_file_suffix([test_results], optimized_test_log_path)
+            for idx in range(len(budgets)):
+                optimized_test_log_path = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format(args.name, budget_type, budgets[idx], model_name))
+                budget_results = {key: vals[idx] for key, vals in test_results.items()}
+                save_by_file_suffix([budget_results], optimized_test_log_path)
