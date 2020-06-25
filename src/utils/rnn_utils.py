@@ -21,11 +21,12 @@ WHILE_LOOP_NAME = 'while-loop'
 
 
 class AdaptiveModelType(Enum):
-    VANILLA = auto()
+    INDEPENDENT_RNN = auto()
+    INDEPENDENT_NBOW = auto()
+    INDEPENDENT_BIRNN = auto()
     SAMPLE = auto()
     CASCADE = auto()
-    LINKED = auto()
-    BOW = auto()
+    ADAPTIVE_NBOW = auto()
     BIDIR_SAMPLE = auto()
 
 

@@ -19,6 +19,7 @@ from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, DROPOU
 from utils.constants import AGGREGATE_SEED, TRANSFORM_SEED, OUTPUT_SEED, EMBEDDING_SEED, SMALL_NUMBER
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
 from utils.loss_utils import binary_classification_loss, f1_score_loss
+from utils.rnn_utils import get_backward_name
 from .base_model import Model
 
 
@@ -206,7 +207,8 @@ class StandardModel(TFModel):
                                      activation=self.hypers.model_params['rnn_activation'],
                                      num_layers=self.hypers.model_params['rnn_layers'],
                                      name=TRANSFORM_LAYER_NAME,
-                                     compression_fraction=self.hypers.model_params.get('compression_fraction'))
+                                     compression_fraction=self.hypers.model_params.get('compression_fraction'),
+                                     compression_seed=TRANSFORM_SEED)
 
                 initial_state = cell.zero_state(batch_size=tf.shape(input_sequence)[0], dtype=tf.float32)
 
@@ -229,36 +231,96 @@ class StandardModel(TFModel):
                 # [B, D]
                 aggregated = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
         elif self.model_type == StandardModelType.BIRNN:
-            fw_cell = tf_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
-                                  num_units=self.hypers.model_params['state_size'],
-                                  activation=self.hypers.model_params['rnn_activation'],
-                                  layers=self.hypers.model_params['rnn_layers'],
-                                  name_prefix=f'{0}-fw'.format(TRANSFORM_LAYER_NAME))
 
-            bw_cell = tf_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
-                                  num_units=self.hypers.model_params['state_size'],
-                                  activation=self.hypers.model_params['rnn_activation'],
-                                  layers=self.hypers.model_params['rnn_layers'],
-                                  name_prefix=f'{0}-bw'.format(TRANSFORM_LAYER_NAME))
-
+            compression_fraction = self.hypers.model_params.get('compression_fraction')
             batch_size = tf.shape(input_sequence)[0]
-            fw_initial_state = fw_cell.zero_state(batch_size=batch_size, dtype=tf.float32)
-            bw_initial_state = bw_cell.zero_state(batch_size=batch_size, dtype=tf.float32)
 
-            transformed, state = tf.nn.bidirectional_dynamic_rnn(cell_fw=fw_cell,
-                                                                 cell_bw=bw_cell,
-                                                                 inputs=input_sequence,
-                                                                 initial_state_fw=fw_initial_state,
-                                                                 initial_state_bw=bw_initial_state,
-                                                                 dtype=tf.float32,
-                                                                 scope=BIRNN_NAME)
-            # Concatenate forward and backward states / outputs
-            transformed = tf.concat(transformed, axis=-1)
+            if compression_fraction is None:
+                fw_cell = tf_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
+                                      num_units=self.hypers.model_params['state_size'],
+                                      activation=self.hypers.model_params['rnn_activation'],
+                                      layers=self.hypers.model_params['rnn_layers'],
+                                      name_prefix=f'{0}-fw'.format(TRANSFORM_LAYER_NAME))
 
-            fw_state, bw_state = state
-            final_state_fw = get_rnn_state(fw_state)
-            final_state_bw = get_rnn_state(bw_state)
-            final_state = tf.concat([final_state_fw, final_state_bw], axis=-1)
+                bw_cell = tf_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
+                                      num_units=self.hypers.model_params['state_size'],
+                                      activation=self.hypers.model_params['rnn_activation'],
+                                      layers=self.hypers.model_params['rnn_layers'],
+                                      name_prefix=f'{0}-bw'.format(TRANSFORM_LAYER_NAME))
+
+                fw_initial_state = fw_cell.zero_state(batch_size=batch_size, dtype=tf.float32)
+                bw_initial_state = bw_cell.zero_state(batch_size=batch_size, dtype=tf.float32)
+
+                transformed, state = tf.nn.bidirectional_dynamic_rnn(cell_fw=fw_cell,
+                                                                     cell_bw=bw_cell,
+                                                                     inputs=input_sequence,
+                                                                     initial_state_fw=fw_initial_state,
+                                                                     initial_state_bw=bw_initial_state,
+                                                                     dtype=tf.float32,
+                                                                     scope=BIRNN_NAME)
+                # Concatenate forward and backward states / outputs
+                transformed = tf.concat(transformed, axis=-1)
+
+                fw_state, bw_state = state
+                final_state_fw = get_rnn_state(fw_state)
+                final_state_bw = get_rnn_state(bw_state)
+                final_state = tf.concat([final_state_fw, final_state_bw], axis=-1)
+            else:
+                # Make the RNN cells
+                fw_cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
+                                        input_units=self.hypers.model_params['state_size'],
+                                        output_units=self.hypers.model_params['state_size'],
+                                        activation=self.hypers.model_params['rnn_activation'],
+                                        num_layers=self.hypers.model_params['rnn_layers'],
+                                        name=TRANSFORM_LAYER_NAME,
+                                        compression_fraction=compression_fraction,
+                                        compression_seed=TRANSFORM_SEED)
+
+                bw_cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
+                                        input_units=self.hypers.model_params['state_size'],
+                                        output_units=self.hypers.model_params['state_size'],
+                                        activation=self.hypers.model_params['rnn_activation'],
+                                        num_layers=self.hypers.model_params['rnn_layers'],
+                                        name=get_backward_name(TRANSFORM_LAYER_NAME),
+                                        compression_fraction=compression_fraction,
+                                        compression_seed=get_backward_name(TRANSFORM_SEED))
+
+                # Create the initial states
+                fw_initial_state = fw_cell.zero_state(batch_size=batch_size, dtype=tf.float32)
+                bw_initial_state = bw_cell.zero_state(batch_size=batch_size, dtype=tf.float32)
+
+                # Run RNN in both directions
+                fw_output = dynamic_rnn(cell=fw_cell,
+                                        inputs=input_sequence,
+                                        previous_states=None,
+                                        initial_state=fw_initial_state,
+                                        name=RNN_NAME,
+                                        compression_fraction=compression_fraction)
+                bw_output = dynamic_rnn(cell=bw_cell,
+                                        inputs=input_sequence,
+                                        previous_states=None,
+                                        initial_state=fw_initial_state,
+                                        name=get_backward_name(RNN_NAME),
+                                        compression_fraction=compression_fraction,
+                                        should_reverse=True)
+
+                # Get the final states from each direction
+                last_index = tf.shape(input_sequence)[1] - 1
+                fw_final_state = fw_output.states.read(index=last_index)  # [L, B, D] where L is the number of RNN cell layers
+                fw_final_state = tf.concat(tf.unstack(fw_final_state, axis=0), axis=-1)  # [B, D * L]
+
+                bw_final_state = bw_output.states.read(index=last_index)  # [L, B, D] where L is the number of RNN cell layers
+                bw_final_state = tf.concat(tf.unstack(bw_final_state, axis=0), axis=-1)  # [B, D * L]
+
+                final_state = tf.concat([fw_final_state, bw_final_state], axis=-1)  # [B, 2 * D * L]
+
+                # Get the outputs from each direction
+                fw_outputs = fw_output.outputs.stack()  # [T, B, D]
+                bw_outputs = bw_output.outputs.stack()  # [T, B, D]
+                transformed = tf.concat([fw_outputs, bw_outputs], axis=-1)  # [T, B, 2 * D]
+                transformed = tf.transpose(transformed, perm=[1, 0, 2])  # [B, T, 2 * D]
+
+                print(final_state)
 
             aggregated = pool_rnn_outputs(transformed, final_state, pool_mode=self.hypers.model_params['pool_mode'], name=AGGREGATION_LAYER_NAME)
         else:

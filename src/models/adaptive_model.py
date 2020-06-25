@@ -15,7 +15,7 @@ from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs, expand_to_matrix
 from utils.misc import sample_sequence_batch, batch_sample_noise
 from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, OUTPUT, INPUTS, LOSS, OUTPUT_SEED, OPTIMIZER_OP
-from utils.constants import NODE_REGEX_FORMAT, DROPOUT_KEEP_RATE, MODEL, SCHEDULED_MODEL, NUM_CLASSES
+from utils.constants import NODE_REGEX_FORMAT, DROPOUT_KEEP_RATE, MODEL, SCHEDULED_MODEL, NUM_CLASSES, TRANSFORM_SEED
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE, EMBEDDING_SEED, AGGREGATE_SEED
 from utils.loss_utils import f1_score_loss, binary_classification_loss
 from utils.rnn_utils import *
@@ -32,6 +32,9 @@ class AdaptiveModel(TFModel):
         self.model_type = AdaptiveModelType[model_type]
 
         self.name = model_type
+
+        self._has_shared_weights = any(val for key, val in self.hypers.model_params.items() if key.startswith('share') and key.endswith('weights'))
+        self._is_independent = self.model_type in (AdaptiveModelType.INDEPENDENT_RNN, AdaptiveModelType.INDEPENDENT_BIRNN, AdaptiveModelType.INDEPENDENT_NBOW)
 
     @property
     def sample_frac(self) -> float:
@@ -72,13 +75,13 @@ class AdaptiveModel(TFModel):
 
     @property
     def loss_op_names(self) -> List[str]:
-        if self.model_type == AdaptiveModelType.VANILLA and not self.hypers.model_params['share_cell_weights']:
+        if self._is_independent and not self._has_shared_weights:
             return [get_loss_name(i) for i in range(self.num_outputs)]
         return [LOSS]
 
     @property
     def optimizer_op_names(self) -> List[str]:
-        if self.model_type == AdaptiveModelType.VANILLA and not self.hypers.model_params['share_cell_weights']:
+        if self._is_independent and not self._has_shared_weights:
             return ['{0}_{1}'.format(OPTIMIZER_OP, i) for i in range(self.num_outputs)]
         return [OPTIMIZER_OP]
 
@@ -127,12 +130,12 @@ class AdaptiveModel(TFModel):
         for i in range(num_sequences):
             input_ph = self.placeholders[get_input_name(i)]
 
-            if self.model_type == AdaptiveModelType.VANILLA:
+            if self._is_independent:  # Independent RNN, BIRNN or NBOW
                 seq_indexes.extend(range(i, seq_length, num_sequences))
                 seq_indexes = list(sorted(seq_indexes))
                 sample_tensor = input_batch[:, seq_indexes]
                 feed_dict[input_ph] = sample_tensor
-            elif self.model_type in (AdaptiveModelType.SAMPLE, AdaptiveModelType.BIDIR_SAMPLE, AdaptiveModelType.LINKED, AdaptiveModelType.BOW):
+            elif self.model_type in (AdaptiveModelType.SAMPLE, AdaptiveModelType.BIDIR_SAMPLE, AdaptiveModelType.ADAPTIVE_NBOW):
                 seq_indexes = list(range(i, seq_length, num_sequences))
                 sample_tensor = input_batch[:, seq_indexes]
                 feed_dict[input_ph] = sample_tensor
@@ -170,7 +173,7 @@ class AdaptiveModel(TFModel):
                                                                 dtype=tf.float32,
                                                                 name=get_input_name(i))
 
-            if self.model_type == AdaptiveModelType.VANILLA:
+            if self._is_independent:
                 samples_per_seq += self.samples_per_seq
 
         if not is_frozen:
@@ -193,7 +196,7 @@ class AdaptiveModel(TFModel):
         """
         Computes the total floating point operations for the given prediction level
         """
-        if self.model_type == AdaptiveModelType.BOW:
+        if self.model_type in (AdaptiveModelType.ADAPTIVE_NBOW, AdaptiveModelType.INDEPENDENT_NBOW):
             return self.compute_bow_flops(level)
         return self.compute_rnn_flops(level)
 
@@ -227,7 +230,7 @@ class AdaptiveModel(TFModel):
                 else:
                     output_regex = '.*{0}.*_{1}.*'.format(output_name, level)
             else:
-                output_regex = NODE_REGEX_FORMAT.format(ouput_name)
+                output_regex = NODE_REGEX_FORMAT.format(output_name)
 
             agg_ops_regex = '.*{0}-{1}.*'.format(aggregation_name, level)
 
@@ -275,7 +278,7 @@ class AdaptiveModel(TFModel):
                                 .order_by('flops').build()
             flops = tf.profiler.profile(self.sess.graph, options=rnn_options)
 
-            flops_factor = level + 1 if self.model_type == AdaptiveModelType.VANILLA else 1
+            flops_factor = level + 1 if self.model_type in (AdaptiveModelType.INDEPENDENT_RNN, AdaptiveModelType.INDEPENDENT_BIRNN) else 1
             total_flops += flops.total_float_ops * flops_factor * self.samples_per_seq
 
             # Compute FLOPS for the output layer
@@ -424,7 +427,7 @@ class AdaptiveModel(TFModel):
 
     def make_model(self, is_train: bool):
         with tf.variable_scope(MODEL, reuse=tf.AUTO_REUSE):
-            if self.model_type == AdaptiveModelType.BOW:
+            if self.model_type in (AdaptiveModelType.ADAPTIVE_NBOW, AdaptiveModelType.INDEPENDENT_NBOW):
                 self._make_bow_model(is_train)
             else:
                 self._make_rnn_model(is_train)
@@ -576,7 +579,8 @@ class AdaptiveModel(TFModel):
                                  activation=self.hypers.model_params['rnn_activation'],
                                  num_layers=self.hypers.model_params['rnn_layers'],
                                  name=cell_name,
-                                 compression_fraction=self.hypers.model_params.get('compression_fraction'))
+                                 compression_fraction=self.hypers.model_params.get('compression_fraction'),
+                                 compression_seed=TRANSFORM_SEED)
 
             inputs = input_sequence
             initial_state = cell.zero_state(batch_size=tf.shape(inputs)[0], dtype=tf.float32)
@@ -590,8 +594,6 @@ class AdaptiveModel(TFModel):
             prev_states = None
             if self.model_type in (AdaptiveModelType.SAMPLE, AdaptiveModelType.BIDIR_SAMPLE) and i > 0:
                 prev_states = states_list[i-1]
-
-                self._ops['prev_states_{0}'.format(i)] = prev_states.stack()
 
             # Run RNN and collect outputs
             rnn_out = dynamic_rnn(cell=cell,
@@ -617,10 +619,9 @@ class AdaptiveModel(TFModel):
 
             # [B, D]
             rnn_output = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
-            rnn_output = tf.nn.dropout(rnn_output, keep_prob=self._placeholders[DROPOUT_KEEP_RATE])
 
             # If the model is bidirectional, then we also run the backward direction
-            if self.model_type == AdaptiveModelType.BIDIR_SAMPLE:
+            if self.model_type in (AdaptiveModelType.BIDIR_SAMPLE, AdaptiveModelType.INDEPENDENT_BIRNN):
 
                 # Create the Bakcward RNN Cell
                 bw_cell_name = get_backward_name(cell_name)
@@ -630,15 +631,16 @@ class AdaptiveModel(TFModel):
                                         activation=self.hypers.model_params['rnn_activation'],
                                         num_layers=self.hypers.model_params['rnn_layers'],
                                         name=bw_cell_name,
-                                        compression_fraction=self.hypers.model_params.get('compression_fraction'))
+                                        compression_fraction=self.hypers.model_params.get('compression_fraction'),
+                                        compression_seed=get_backward_name(TRANSFORM_SEED))
 
                 # Set previous states
                 bw_prev_states = None
-                if i > 0:
+                if i > 0 and self.model_type == AdaptiveModelType.BIDIR_SAMPLE:
                     bw_prev_states = bw_states_list[i-1]
-                    self._ops['bw_prev_states_{0}'.format(i)] = bw_prev_states.stack()
 
                 # Run RNN and collect outputs
+                initial_state = cell.zero_state(batch_size=tf.shape(inputs)[0], dtype=tf.float32)
                 bw_rnn_name = get_backward_name(rnn_level_name)
                 bw_rnn_out = dynamic_rnn(cell=bw_cell,
                                          inputs=inputs,
@@ -664,10 +666,12 @@ class AdaptiveModel(TFModel):
 
                 # [B, D]
                 bw_rnn_output = pool_rnn_outputs(bw_rnn_outputs, bw_final_state, pool_mode=self.hypers.model_params['pool_mode'])
-                bw_rnn_output = tf.nn.dropout(bw_rnn_output, keep_prob=self._placeholders[DROPOUT_KEEP_RATE])
 
                 # Combine the forward and backward states
                 rnn_output = tf.concat([rnn_output, bw_rnn_output], axis=-1)  # [B, 2 * D]
+
+            # Apply dropout to the pooled RNN state
+            rnn_output = tf.nn.dropout(rnn_output, keep_prob=self._placeholders[DROPOUT_KEEP_RATE])
 
             # [B, K]
             output_size = num_output_features if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[NUM_CLASSES]

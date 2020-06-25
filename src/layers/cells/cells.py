@@ -13,7 +13,8 @@ def make_rnn_cell(cell_type: str,
                   name: str,
                   num_layers: Optional[int] = None,
                   use_skip_connections: bool = False,
-                  compression_fraction: Optional[float] = None):
+                  compression_fraction: Optional[float] = None,
+                  compression_seed: Optional[float] = None):
     if num_layers is None:
         return make_single_rnn_cell(cell_type=cell_type,
                                     input_units=input_units,
@@ -21,7 +22,8 @@ def make_rnn_cell(cell_type: str,
                                     activation=activation,
                                     name=name,
                                     use_skip_connections=use_skip_connections,
-                                    compression_fraction=compression_fraction)
+                                    compression_fraction=compression_fraction,
+                                    compression_seed=compression_seed)
 
     return MultiRNNCell(num_layers=num_layers,
                         input_units=input_units,
@@ -30,7 +32,8 @@ def make_rnn_cell(cell_type: str,
                         cell_type=cell_type,
                         name=name,
                         use_skip_connections=use_skip_connections,
-                        compression_fraction=compression_fraction)
+                        compression_fraction=compression_fraction,
+                        compression_seed=compression_seed)
 
 
 def make_single_rnn_cell(cell_type: str,
@@ -40,6 +43,7 @@ def make_single_rnn_cell(cell_type: str,
                          name: str,
                          use_skip_connections: bool = False,
                          compression_fraction: Optional[float] = None,
+                         compression_seed: Optional[str] = None,
                          layer: int = 0):
     cell_type = cell_type.lower()
 
@@ -50,7 +54,8 @@ def make_single_rnn_cell(cell_type: str,
                    name=name,
                    layer=layer,
                    use_skip_connections=use_skip_connections,
-                   compression_fraction=compression_fraction)
+                   compression_fraction=compression_fraction,
+                   compression_seed=compression_seed)
     elif cell_type == 'vanilla':
         return VanillaCell(input_units=input_units,
                            output_units=output_units,
@@ -58,7 +63,8 @@ def make_single_rnn_cell(cell_type: str,
                            name=name,
                            layer=layer,
                            use_skip_connections=use_skip_connections,
-                           compression_fraction=compression_fraction)
+                           compression_fraction=compression_fraction,
+                           compression_seed=compression_seed)
     elif cell_type == 'lstm':
         return LSTM(input_units=input_units,
                     output_units=output_units,
@@ -66,7 +72,8 @@ def make_single_rnn_cell(cell_type: str,
                     name=name,
                     layer=layer,
                     use_skip_connections=use_skip_connections,
-                    compression_fraction=compression_fraction)
+                    compression_fraction=compression_fraction,
+                    compression_seed=compression_seed)
     else:
         raise ValueError(f'Unknown cell name {0}!'.format(cell_type))
 
@@ -81,7 +88,8 @@ class RNNCell:
                  layer: int,
                  use_skip_connections: bool,
                  state_size: Optional[int] = None,
-                 compression_fraction: Optional[float] = None):
+                 compression_fraction: Optional[float] = None,
+                 compression_seed: Optional[str] = None):
         """
         Initializes the RNN Cell
 
@@ -94,6 +102,7 @@ class RNNCell:
             use_skip_connections: Whether to allow skip connections through this cell
             state_size: Size of the state. Defaults to output_units
             compression_fraction: Optional compression fraction
+            compression_seed: Optional compression seed
         """
         self.input_units = input_units
         self.output_units = output_units
@@ -104,6 +113,7 @@ class RNNCell:
         self.name = name
         self.compression_fraction = compression_fraction
         self.layer = layer
+        self.compression_seed = compression_seed
 
         self.init_weights()
 
@@ -151,9 +161,10 @@ class MultiRNNCell(RNNCell):
                  cell_type: str,
                  use_skip_connections: bool = False,
                  state_size: Optional[int] = None,
-                 compression_fraction: Optional[float] = None):
+                 compression_fraction: Optional[float] = None,
+                 compression_seed: Optional[str] = None):
         assert num_layers >= 1, 'Must provide at least one layer'
-        super().__init__(input_units, output_units, activation, name, 0, use_skip_connections, state_size, compression_fraction)
+        super().__init__(input_units, output_units, activation, name, 0, use_skip_connections, state_size, compression_fraction, compression_seed)
         self.num_layers = num_layers
 
         self.cells: List[RNNCell] = []
@@ -165,7 +176,8 @@ class MultiRNNCell(RNNCell):
                                         name=f'{name}-cell-{i}',
                                         layer=i,
                                         use_skip_connections=use_skip_connections,
-                                        compression_fraction=compression_fraction)
+                                        compression_fraction=compression_fraction,
+                                        compression_seed=compression_seed)
             self.cells.append(cell)
 
     @property
@@ -269,14 +281,14 @@ class GRU(RNNCell):
                                        activation=None,
                                        name='{0}-W-update'.format(self.name),
                                        compression_fraction=self.compression_fraction,
-                                       compression_seed='{0}W{1}{2}'.format(TRANSFORM_SEED, UPDATE_SEED, self.layer))
+                                       compression_seed='{0}W{1}{2}'.format(self.compression_seed, UPDATE_SEED, self.layer))
         update_input_vector, _ = dense(inputs=inputs,
                                        units=self.output_units,
                                        use_bias=False,
                                        activation=None,
                                        name='{0}-U-update'.format(self.name),
                                        compression_fraction=self.compression_fraction,
-                                       compression_seed='{0}U{1}{2}'.format(TRANSFORM_SEED, UPDATE_SEED, self.layer))
+                                       compression_seed='{0}U{1}{2}'.format(self.compression_seed, UPDATE_SEED, self.layer))
         update_gate = tf.math.sigmoid(update_state_vector + update_input_vector + self.b_update)
 
         reset_state_vector, _ = dense(inputs=state,
@@ -285,14 +297,14 @@ class GRU(RNNCell):
                                       activation=None,
                                       name='{0}-W-reset'.format(self.name),
                                       compression_fraction=self.compression_fraction,
-                                      compression_seed='{0}W{1}{2}'.format(TRANSFORM_SEED, RESET_SEED, self.layer))
+                                      compression_seed='{0}W{1}{2}'.format(self.compression_seed, RESET_SEED, self.layer))
         reset_input_vector, _ = dense(inputs=inputs,
                                       units=self.output_units,
                                       use_bias=False,
                                       activation=None,
                                       name='{0}-U-reset'.format(self.name),
                                       compression_fraction=self.compression_fraction,
-                                      compression_seed='{0}U{1}{2}'.format(TRANSFORM_SEED, RESET_SEED, self.layer))
+                                      compression_seed='{0}U{1}{2}'.format(self.compression_seed, RESET_SEED, self.layer))
         reset_gate = tf.math.sigmoid(reset_state_vector + reset_input_vector + self.b_reset)
 
         # Create the candidate state
@@ -302,14 +314,14 @@ class GRU(RNNCell):
                                    activation=None,
                                    name='{0}-W'.format(self.name),
                                    compression_fraction=self.compression_fraction,
-                                   compression_seed='{0}W{1}{2}'.format(TRANSFORM_SEED, CANDIDATE_SEED, self.layer))
+                                   compression_seed='{0}W{1}{2}'.format(self.compression_seed, CANDIDATE_SEED, self.layer))
         candidate_input, _ = dense(inputs=inputs,
                                    units=self.output_units,
                                    use_bias=False,
                                    activation=None,
                                    name='{0}-U'.format(self.name),
                                    compression_fraction=self.compression_fraction,
-                                   compression_seed='{0}U{1}{2}'.format(TRANSFORM_SEED, CANDIDATE_SEED, self.layer))
+                                   compression_seed='{0}U{1}{2}'.format(self.compression_seed, CANDIDATE_SEED, self.layer))
 
         candidate_state = self.activation(candidate_reset + candidate_input + self.b)
 
@@ -322,42 +334,61 @@ class GRU(RNNCell):
 class VanillaCell(RNNCell):
 
     def init_weights(self):
-        self.W = tf.get_variable(name=f'{self.name}-W',
+        weight_shape = [self.state_size, self.output_units] if self.compression_fraction is None else [int(self.compression_fraction * self.state_size * self.output_units)]
+
+        self.W = tf.get_variable(name=f'{self.name}-W-kernel',
                                  initializer=self.initializer,
-                                 shape=[self.state_size, self.output_units],
+                                 shape=weight_shape,
                                  trainable=True)
-        self.U = tf.get_variable(name=f'{self.name}-U',
+        self.U = tf.get_variable(name=f'{self.name}-U-kernel',
                                  initializer=self.initializer,
-                                 shape=[self.input_units, self.output_units],
+                                 shape=weight_shape,
                                  trainable=True)
         self.b = tf.get_variable(name=f'{self.name}-b',
                                  initializer=self.initializer,
                                  shape=[1, self.output_units],
                                  trainable=True)
 
-        if self.use_skip_connections:
-            self.R = tf.get_variable(name=f'{self.name}-R',
-                                     initializer=self.initializer,
-                                     shape=[2 * self.state_size, self.state_size],
-                                     trainable=True)
-            self.b_skip = tf.get_variable(name=f'{self.name}-b-skip',
-                                          initializer=self.initializer,
-                                          shape=[1, self.state_size],
-                                          trainable=True)
+        #if self.use_skip_connections:
+        #    self.R = tf.get_variable(name=f'{self.name}-R',
+        #                             initializer=self.initializer,
+        #                             shape=[2 * self.state_size, self.state_size],
+        #                             trainable=True)
+        #    self.b_skip = tf.get_variable(name=f'{self.name}-b-skip',
+        #                                  initializer=self.initializer,
+        #                                  shape=[1, self.state_size],
+        #                                  trainable=True)
 
     def __call__(self, inputs: tf.Tensor,
                  state: tf.Tensor,
                  skip_input: Optional[tf.Tensor] = None) -> Tuple[tf.Tensor, tf.Tensor, List[tf.Tensor]]:
         assert not self.use_skip_connections or skip_input is None, 'Must provide a skip input when using skip connections'
 
-        if self.use_skip_connections:
-            concat_state = tf.concat([state, skip_input], axis=-1)
-            skip_gate = tf.math.sigmoid(tf.matmul(concat_state, self.R) + self.b_skip)
-            state = skip_gate * state + (1.0 - skip_gate) * skip_input
+        #if self.use_skip_connections:
+        #    concat_state = tf.concat([state, skip_input], axis=-1)
+        #    skip_gate = tf.math.sigmoid(tf.matmul(concat_state, self.R) + self.b_skip)
+        #    state = skip_gate * state + (1.0 - skip_gate) * skip_input
 
-        candidate_vector = tf.matmul(state, self.W) + tf.matmul(inputs, self.U) + self.b
-
+        transformed_state, _ = dense(inputs=state,
+                                     units=self.output_units,
+                                     use_bias=False,
+                                     activation=None,
+                                     name='{0}-W'.format(self.name),
+                                     compression_fraction=self.compression_fraction,
+                                     compression_seed='{0}W{1}'.format(self.compression_seed, self.layer))
+        transformed_input, _ = dense(inputs=inputs,
+                                     units=self.output_units,
+                                     use_bias=False,
+                                     activation=None,
+                                     name='{0}-U'.format(self.name),
+                                     compression_fraction=self.compression_fraction,
+                                     compression_seed='{0}U{1}'.format(self.compression_seed, self.layer))
+        
+        candidate_vector = transformed_state + transformed_input + self.b
         next_state = self.activation(candidate_vector)
+        # candidate_vector = tf.matmul(state, self.W) + tf.matmul(inputs, self.U) + self.b
+
+        # next_state = self.activation(candidate_vector)
         return next_state, next_state, [candidate_vector]
 
 
