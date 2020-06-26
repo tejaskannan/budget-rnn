@@ -442,6 +442,7 @@ class AdaptiveModel(TFModel):
         outputs: List[tf.Tensor] = []
         prev_attn_weights: List[tf.Tensor] = []  # List of [B, T, 1] tensors
         prev_samples: List[tf.Tensor] = []  # List of [B, T, D] tensors
+        compression_fraction = self.hypers.model_params.get('compression_fraction')
 
         for i in range(self.num_sequences):
             # Get relevant variable names
@@ -465,7 +466,7 @@ class AdaptiveModel(TFModel):
                                       use_bias=True,
                                       name=embedding_name,
                                       compression_seed=EMBEDDING_SEED,
-                                      compression_fraction=self.hypers.model_params.get('compression_fraction'))
+                                      compression_fraction=compression_fraction)
 
             # Transform the input sequence, [B, T, D]
             transformed_sequence, _ = mlp(inputs=input_sequence,
@@ -476,7 +477,9 @@ class AdaptiveModel(TFModel):
                                           should_activate_final=True,
                                           should_bias_final=True,
                                           should_dropout_final=True,
-                                          name=transform_name)
+                                          name=transform_name,
+                                          compression_seed=TRANSFORM_SEED,
+                                          compression_fraction=compression_fraction)
 
             # Compute attention weights for aggregation. We only compute the
             # weights for this sequence to avoid redundant computation.
@@ -486,7 +489,7 @@ class AdaptiveModel(TFModel):
                                     use_bias=True,
                                     name=aggregation_name,
                                     compression_seed=AGGREGATE_SEED,
-                                    compression_fraction=self.hypers.model_params.get('compression_fraction'))
+                                    compression_fraction=compression_fraction)
 
             # For the first sequence, we have no already-processed samples to integrate. As a note, we would generally normalize the attention
             # weights via a softmax layer. With fixed point operations, softmax is unstable. We thus avoid the requirement of a softmax
@@ -518,7 +521,9 @@ class AdaptiveModel(TFModel):
                             hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
                             activations=self.hypers.model_params['output_hidden_activation'],
                             dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                            name=output_layer_name)
+                            name=output_layer_name,
+                            compression_seed=OUTPUT_SEED,
+                            compression_fraction=compression_fraction)
 
             if self.output_type == OutputType.BINARY_CLASSIFICATION:
                 classification_output = compute_binary_classification_output(model_output=output,
