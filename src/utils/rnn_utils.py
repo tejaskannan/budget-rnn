@@ -4,6 +4,7 @@ from typing import Optional
 from utils.constants import LOGITS, ACCURACY, PREDICTION, F1_SCORE , LOSS
 
 
+BACKWARDS_NAME = 'backward'
 RNN_CELL_NAME = 'rnn-cell'
 RNN_LEVEL_NAME = 'rnn-level'
 INPUT_NAME = 'input'
@@ -20,11 +21,13 @@ WHILE_LOOP_NAME = 'while-loop'
 
 
 class AdaptiveModelType(Enum):
-    VANILLA = auto()
+    INDEPENDENT_RNN = auto()
+    INDEPENDENT_NBOW = auto()
+    INDEPENDENT_BIRNN = auto()
     SAMPLE = auto()
     CASCADE = auto()
-    LINKED = auto()
-    BOW = auto()
+    ADAPTIVE_NBOW = auto()
+    BIDIR_SAMPLE = auto()
 
 
 def get_cell_level_name(level_index: int, should_share_weights: bool) -> str:
@@ -35,6 +38,10 @@ def get_cell_level_name(level_index: int, should_share_weights: bool) -> str:
 
 def get_rnn_level_name(level_index: int) -> str:
     return f'{RNN_LEVEL_NAME}-{level_index}'
+
+
+def get_backward_name(name: str) -> str:
+    return '{0}-{1}'.format(name, BACKWARDS_NAME)
 
 
 def get_input_name(level_index: int) -> str:

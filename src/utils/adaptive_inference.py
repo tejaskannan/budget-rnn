@@ -42,27 +42,37 @@ def threshold_predictions(predictions: np.ndarray, thresholds: np.ndarray) -> Tu
 
     Args:
         predictions: [B, L, C] array of normalized log probabilities for each sample, level, and class
-        thresholds: [L] array of thresholds for each level
+        thresholds: [L] or [S, L] array of thresholds for each level
     Returns:
-        A tuple of (1) A [B] array with the predictions per sample and (2) A [B] array with the number of computed levels.
+        A tuple of (1) A [S, B] array with the predictions per sample and (2) A [S, B] array with the number of computed levels.
+        If S = 1, then we squeeze the arrays for convenience and return [B] arrays.
     """
-    # Reshape thresholds to a [1, L] array
-    expanded_thresholds = np.expand_dims(thresholds, axis=0)
+    # Reshape thresholds to a [1, L] array if needed. We refer to the first dimension as (S)
+    if len(thresholds.shape) == 1:
+        thresholds = np.expand_dims(thresholds, axis=0)
+
+    # [S, 1, L]
+    expanded_thresholds = np.expand_dims(thresholds, axis=1)
 
     # Create mask using the maximum probability
-    max_prob = np.max(predictions, axis=-1)  # [B, L]
-    diff_mask = (max_prob < expanded_thresholds).astype(np.float32) * BIG_NUMBER  # [B, L]
+    max_prob = np.expand_dims(np.max(predictions, axis=-1), axis=0)  # [1, B, L]
+    diff_mask = (max_prob < expanded_thresholds).astype(np.float32) * BIG_NUMBER  # [S, B, L]
 
-    indices = np.expand_dims(np.arange(start=0, stop=len(thresholds)), axis=0)  # [1, L]
+    indices = np.arange(start=0, stop=thresholds.shape[-1]).reshape((1, 1, -1))  # [1, 1, L]
 
     # Apply mask to compute the number of computed levels
-    masked_indices = indices + diff_mask  # [B, L]
-    levels = np.clip(np.min(masked_indices, axis=-1).astype(int), a_min=0, a_max=predictions.shape[1] - 1)  # [B]
+    masked_indices = indices + diff_mask  # [S, B, L]
+    levels = np.clip(np.min(masked_indices, axis=-1).astype(int), a_min=0, a_max=predictions.shape[1] - 1)  # [S, B]
 
     # Use number of levels to get the classification
     predicted_class_per_level = np.argmax(predictions, axis=-1)  # [B, L]
     batch_indices = np.arange(start=0, stop=predictions.shape[0])  # [B]
-    predicted_classes = predicted_class_per_level[batch_indices, levels]  # [B]
+
+    if levels.shape[0] == 1:
+        levels = np.squeeze(levels, axis=0)
+        predicted_classes = predicted_class_per_level[batch_indices, levels]  # [B]
+    else:
+        predicted_classes = np.vstack([predicted_class_per_level[batch_indices, levels[i, :]] for i in range(levels.shape[0])])  # [S, B]
 
     return predicted_classes, levels
 

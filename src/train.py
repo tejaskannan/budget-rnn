@@ -4,11 +4,11 @@ from datetime import datetime
 
 from utils.hyperparameters import HyperParameters
 from utils.constants import TRAIN, VALID, TEST
-from utils.file_utils import read_by_file_suffix, make_dir
+from utils.file_utils import read_by_file_suffix, make_dir, iterate_files
 from models.model_factory import get_model
 from dataset.dataset_factory import get_dataset
 from dataset.rnn_sample_dataset import RNNSampleDataset
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from test import test
 
 
@@ -56,13 +56,18 @@ if __name__ == '__main__':
         test_folder = os.path.join(data_folder, TEST)
         assert os.path.exists(test_folder), f'The folder {test_folder} does not exist!'
 
-    # Validate params files (to fail fast)
+    # Unpack and Validate params files (to fail fast)
+    params_files: List[str] = []
     for params_file in args.params_files:
+        if os.path.isdir(params_file):
+            params_files.extend(iterate_files(params_file, pattern=r'.*json'))
+
+    for params_file in params_files:
         assert os.path.exists(params_file), f'The file {params_file} does not exist!'
         assert params_file.endswith('.json'), f'The params file must be a JSON.'
 
     trials = max(args.trials, 1)
-    num_models = trials * len(args.params_files)
+    num_models = trials * len(params_files)
 
     # Create save folder (if necessary)
     base_save_folder = args.save_folder
@@ -83,9 +88,11 @@ if __name__ == '__main__':
         for trial in range(trials):
             print(f'Starting trial {trial+1}/{trials}')
 
-            for i, params_file in enumerate(args.params_files):
+            for i, params_file in enumerate(params_files):
                 print(f'Started training model {i+1}/{num_models}')
                 hypers = HyperParameters.create_from_file(params_file)
+
+                print(params_file)
 
                 name = train(data_folder=data_folder,
                              save_folder=save_folder,

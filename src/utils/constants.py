@@ -50,6 +50,7 @@ UPDATE_SEED = 'up'
 RESET_SEED = 'rs'
 CANDIDATE_SEED = 'cd'
 FUSION_SEED = 'fs'
+BACKWARD_SEED = 'bw'
 
 # Data folder names
 TRAIN = 'train'
