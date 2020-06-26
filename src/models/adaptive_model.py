@@ -14,7 +14,7 @@ from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import pool_rnn_outputs, expand_to_matrix
 from utils.misc import sample_sequence_batch, batch_sample_noise
-from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, OUTPUT, INPUTS, LOSS, OUTPUT_SEED, OPTIMIZER_OP
+from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, OUTPUT, INPUTS, LOSS, OUTPUT_SEED, OPTIMIZER_OP, GLOBAL_STEP
 from utils.constants import NODE_REGEX_FORMAT, DROPOUT_KEEP_RATE, MODEL, SCHEDULED_MODEL, NUM_CLASSES, TRANSFORM_SEED
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE, EMBEDDING_SEED, AGGREGATE_SEED
 from utils.loss_utils import f1_score_loss, binary_classification_loss
@@ -84,6 +84,12 @@ class AdaptiveModel(TFModel):
         if self._is_independent and not self._has_shared_weights:
             return ['{0}_{1}'.format(OPTIMIZER_OP, i) for i in range(self.num_outputs)]
         return [OPTIMIZER_OP]
+
+    @property
+    def global_step_op_names(self) -> List[str]:
+        if self._is_independent and not self._has_shared_weights:
+            return ['{0}_{1}'.format(GLOBAL_STEP, i) for i in range(self.num_outputs)]
+        return [GLOBAL_STEP]
 
     def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
         dropout = self.hypers.dropout_keep_rate if is_train else 1.0
@@ -209,7 +215,7 @@ class AdaptiveModel(TFModel):
         with self.sess.graph.as_default():
             transform_name = get_transform_name(level, self.hypers.model_params['share_transform_weights'])
             aggregation_name = get_aggregation_name(level, self.hypers.model_params['share_transform_weights'])
-            embedding_name = get_embedding_name(level, self.hypers.model_params.get('share_embedding_weights', True))
+            embedding_name = get_embedding_name(level, self.hypers.model_params['share_embedding_weights'])
             output_name = get_output_layer_name(level, self.hypers.model_params['share_output_weights'])
 
             # Compute FLOPS for the transformation layer and aggregation dense layer
@@ -264,7 +270,7 @@ class AdaptiveModel(TFModel):
             cell = get_cell_level_name(level, self.hypers.model_params['share_cell_weights'])
             output = get_output_layer_name(level, self.hypers.model_params['share_output_weights'])
             rnn = get_rnn_level_name(level)
-            embedding_name = get_embedding_name(level, self.hypers.model_params.get('share_embedding_weights', True))
+            embedding_name = get_embedding_name(level, self.hypers.model_params['share_embedding_weights'])
             combine_states = get_combine_states_name(rnn, self.hypers.model_params['share_rnn_weights'])
 
             # Compute FLOPS from RNN operations
@@ -450,7 +456,7 @@ class AdaptiveModel(TFModel):
             state_name = get_states_name(i)
             accuracy_name = get_accuracy_name(i)
             f1_score_name = get_f1_score_name(i)
-            embedding_name = get_embedding_name(i, self.hypers.model_params.get('share_embedding_weights', True))
+            embedding_name = get_embedding_name(i, self.hypers.model_params['share_embedding_weights'])
 
             # Create the embedding layer. Output is a [B, T, D] tensor where T is the seq length of this level.
             input_sequence, _ = dense(inputs=self._placeholders[input_name],
@@ -485,7 +491,7 @@ class AdaptiveModel(TFModel):
             # For the first sequence, we have no already-processed samples to integrate. As a note, we would generally normalize the attention
             # weights via a softmax layer. With fixed point operations, softmax is unstable. We thus avoid the requirement of a softmax
             # operation at inference time.
-            if i == 0:
+            if i == 0 or self.model_type == AdaptiveModelType.INDEPENDENT_NBOW:
                 weighted_sequence = tf.math.multiply(transformed_sequence, attn_weights, name='{0}-{1}-multiply'.format(aggregation_name, i))  # [B, T, D]
                 aggregated_sequence = tf.reduce_sum(weighted_sequence, axis=1, name='{0}-{1}-aggregate'.format(aggregation_name, i))  # [B, D]
             else:
@@ -499,7 +505,7 @@ class AdaptiveModel(TFModel):
                 aggregated_sequence = tf.reduce_sum(weighted_sequence, axis=1, name='{0}-{1}-aggregate'.format(aggregation_name, i))  # [B, D]
 
             # Apply dropout to the aggregated sequences
-            aggregated_sequences = tf.nn.dropout(aggregated_sequence, keep_prob=self._placeholders[DROPOUT_KEEP_RATE])
+            aggregated_sequence = tf.nn.dropout(aggregated_sequence, keep_prob=self._placeholders[DROPOUT_KEEP_RATE])
 
             # Save results of this level to avoid redundant computation
             prev_attn_weights.append(attn_weights)

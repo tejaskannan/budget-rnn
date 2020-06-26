@@ -29,10 +29,10 @@ class TFModel(Model):
 
         self._sess = tf.Session(graph=tf.Graph())
 
-        self._optimizer = None
+        self._optimizers: Dict[str, tf.train.Optimizer] = dict()  # Map from optimizer op name to optimizer instance
         self._ops: Dict[str, tf.Tensor] = dict()
         self._placeholders: Dict[str, tf.Tensor] = dict()
-        self._global_step = None
+        self._global_steps: Dict[str, tf.Variable] = dict()  # Map from op name to counter for weight decay
         self._is_made = False
 
         # Get the model output type
@@ -70,8 +70,8 @@ class TFModel(Model):
         raise NotImplementedError()
 
     @property
-    def global_step_op_name(self) -> str:
-        return GLOBAL_STEP
+    def global_step_op_names(self) -> List[str]:
+        return [GLOBAL_STEP]
 
     @property
     def sess(self) -> tf.Session:
@@ -258,16 +258,23 @@ class TFModel(Model):
         if self.is_made:
             return  # Prevent building twice
 
+        n_global_steps, n_optimizer_ops = len(self.global_step_op_names), len(self.optimizer_op_names)
+        assert n_global_steps == n_optimizer_ops, 'Must have the same number of optimizer ops ({0}) as global step ops ({1}).'.format(n_optimizer_ops, n_global_steps)
+
         with self.sess.graph.as_default():
             self.make_placeholders(is_frozen=is_frozen)
             self.make_model(is_train=is_train)
 
-            self._global_step = tf.Variable(0, trainable=False)
-            self._optimizer = get_optimizer(name=self.hypers.optimizer,
-                                            learning_rate=self.hypers.learning_rate,
-                                            learning_rate_decay=self.hypers.learning_rate_decay,
-                                            global_step=self._global_step,
-                                            decay_steps=self.hypers.decay_steps)
+            # self._global_step = tf.Variable(0, trainable=False)
+
+            for global_step_name, optimizer_op_name in zip(self.global_step_op_names, self.optimizer_op_names):
+                self._global_steps[global_step_name] = tf.Variable(0, trainable=False)
+
+                self._optimizers[optimizer_op_name] = get_optimizer(name=self.hypers.optimizer,
+                                                                    learning_rate=self.hypers.learning_rate,
+                                                                    learning_rate_decay=self.hypers.learning_rate_decay,
+                                                                    global_step=self._global_steps[global_step_name],
+                                                                    decay_steps=self.hypers.decay_steps)
 
             # The loss and optimization criteria are only
             # guaranteed to be defined when the model is built for training
@@ -291,7 +298,7 @@ class TFModel(Model):
         trainable_vars = self.trainable_vars
 
         # Compute gradients for each loss operation
-        for loss_op, optimizer_op_name in zip(self.loss_op_names, self.optimizer_op_names):
+        for loss_op, optimizer_op_name, global_step_name in zip(self.loss_op_names, self.optimizer_op_names, self.global_step_op_names):
             gradients = tf.gradients(self._ops[loss_op], trainable_vars)
 
             # Clip Gradients
@@ -301,16 +308,20 @@ class TFModel(Model):
             pruned_gradients = [(grad, var) for grad, var in zip(clipped_gradients, trainable_vars) if grad is not None]
 
             # Apply clipped gradients
-            optimizer_op = self._optimizer.apply_gradients(pruned_gradients)
+            optimizer_op = self._optimizers[optimizer_op_name].apply_gradients(pruned_gradients)
 
-            self._ops[optimizer_op_name] = optimizer_op
-            # optimizer_ops.append(optimizer_op)
+            # Increment global step counter
+            global_step_op = tf.assign_add(self._global_steps[global_step_name], 1)
 
-        # Group all optimizer operations. TODO: Allow filtering of optimizer operations
-        # self._ops[self.optimizer_op_name] = tf.group(optimizer_ops)
+            # Add operations. By coupling the optimizer and the global step ops, we don't need
+            # to worry about applying these operations separately.
+            self._ops[optimizer_op_name] = tf.group(optimizer_op, global_step_op)
+
+            # Increment the global step counter for this optimizer
+            # self._ops[global_step] = tf.assign_add(self._global_steps[global_step], 1)
 
         # Include the global step operation
-        self._ops[self.global_step_op_name] = tf.assign_add(self._global_step, 1)
+        # self._ops[self.global_step_op_name] = tf.assign_add(self._global_step, 1)
 
     def execute(self, feed_dict: Dict[tf.Tensor, List[Any]], ops: Optional[List[str]] = None) -> Dict[str, Any]:
         """
@@ -415,8 +426,7 @@ class TFModel(Model):
             epoch_train_acc: DefaultDict[str, float] = defaultdict(float)
 
             # Collect the training operations
-            train_ops_to_run = [self.global_step_op_name]
-            train_ops_to_run += list(optimizer_op for optimizer_op, loss_op in zip(self.optimizer_op_names, self.loss_op_names) if not has_stopped[loss_op])
+            train_ops_to_run = list(optimizer_op for optimizer_op, loss_op in zip(self.optimizer_op_names, self.loss_op_names) if not has_stopped[loss_op])
             train_ops_to_run += list(loss_op for loss_op, stopped_status in has_stopped.items() if not stopped_status)
 
             if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
