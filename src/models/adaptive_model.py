@@ -482,7 +482,7 @@ class AdaptiveModel(TFModel):
                                           compression_fraction=compression_fraction)
 
             # Compute attention weights for aggregation. We only compute the
-            # weights for this sequence to avoid redundant computation.
+            # weights for this sequence to avoid redundant computation. [B, T, 1] tensor.
             attn_weights, _ = dense(inputs=transformed_sequence,
                                     units=1,
                                     activation=self.hypers.model_params['attn_activation'],
@@ -495,15 +495,28 @@ class AdaptiveModel(TFModel):
             # weights via a softmax layer. With fixed point operations, softmax is unstable. We thus avoid the requirement of a softmax
             # operation at inference time.
             if i == 0 or self.model_type == AdaptiveModelType.INDEPENDENT_NBOW:
-                weighted_sequence = tf.math.multiply(transformed_sequence, attn_weights, name='{0}-{1}-multiply'.format(aggregation_name, i))  # [B, T, D]
+                # Normalize the attention weights. [B, T, 1]
+                normalize_factor = tf.maximum(tf.reduce_sum(attn_weights, axis=-2, keepdims=True), 1e-3)
+                normalized_attn_weights = attn_weights / normalize_factor
+
+                self._ops['attention_weights_{0}'.format(i)] = normalized_attn_weights
+
+                # Apply attention weights
+                weighted_sequence = tf.math.multiply(transformed_sequence, normalized_attn_weights, name='{0}-{1}-multiply'.format(aggregation_name, i))  # [B, T, D]
                 aggregated_sequence = tf.reduce_sum(weighted_sequence, axis=1, name='{0}-{1}-aggregate'.format(aggregation_name, i))  # [B, D]
             else:
                 # [B, L * T, 1] where L is the current level number (starting at 1)
                 attn_weights_concat = tf.concat(prev_attn_weights + [attn_weights], axis=1)
 
+                # Normalize the attention weights. [B, L  * T, 1]
+                normalize_factor = tf.maximum(tf.reduce_sum(attn_weights_concat, axis=-2, keepdims=True), 1e-3)
+                normalized_attn_weights = attn_weights_concat / normalize_factor
+
+                self._ops['attention_weights_{0}'.format(i)] = normalized_attn_weights
+
                 # [B, L * T, D] tensor of previous transformed inputs
                 seq_concat = tf.concat(prev_samples + [transformed_sequence], axis=1)
-                weighted_sequence = tf.math.multiply(seq_concat, attn_weights_concat, name='{0}-{1}-multiply'.format(aggregation_name, i))
+                weighted_sequence = tf.math.multiply(seq_concat, normalized_attn_weights, name='{0}-{1}-multiply'.format(aggregation_name, i))
 
                 aggregated_sequence = tf.reduce_sum(weighted_sequence, axis=1, name='{0}-{1}-aggregate'.format(aggregation_name, i))  # [B, D]
 

@@ -49,7 +49,7 @@ def fuse_states(curr_state: tf.Tensor,
 
         # [B, 1]
         update_weight, _ = dense(inputs=concat_states,
-                                 units=1,
+                                 units=state_size,
                                  name=name,
                                  activation='sigmoid',
                                  use_bias=True,
@@ -108,17 +108,18 @@ def dynamic_rnn(inputs: tf.Tensor,
         for i in range(rnn_layers):
             if compression_fraction is None or compression_fraction >= 1:
                 state_transform = tf.get_variable(name='{0}-{1}-kernel'.format(combine_layer_name, i),
-                                                  shape=(state_size * 2, 1),
+                                                  shape=(state_size * 2, state_size),
                                                   initializer=tf.initializers.glorot_uniform(),
                                                   trainable=True)
             else:
                 state_transform = tf.get_variable(name='{0}-{1}-kernel'.format(combine_layer_name, i),
-                                                  shape=int(compression_fraction * (state_size * 2)),
+                                                  shape=int(compression_fraction * (state_size * state_size * 2)),
                                                   initializer=tf.initializers.glorot_uniform(),
                                                   trainable=True)
 
+            # We don't compress biases, so the bias variable remains the same
             state_transform_bias = tf.get_variable(name='{0}-{1}-bias'.format(combine_layer_name, i),
-                                                   shape=(1, 1),
+                                                   shape=(1, state_size),
                                                    initializer=tf.initializers.random_uniform(minval=-0.7, maxval=0.7),
                                                    trainable=True)
 

@@ -61,6 +61,8 @@ if __name__ == '__main__':
     for params_file in args.params_files:
         if os.path.isdir(params_file):
             params_files.extend(iterate_files(params_file, pattern=r'.*json'))
+        else:
+            params_files.append(params_file)
 
     for params_file in params_files:
         assert os.path.exists(params_file), f'The file {params_file} does not exist!'
