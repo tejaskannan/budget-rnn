@@ -5,8 +5,7 @@ from typing import Union, Dict, Any, DefaultDict, List, Generator, Iterable
 from collections import defaultdict
 from more_itertools import ichunked
 
-# from utils.npz_data_manager import NpzDataManager
-from utils.constants import SAMPLE_ID, DATA_FIELDS
+from utils.constants import SAMPLE_ID, DATA_FIELDS, OUTPUT
 from .data_manager import get_data_manager
 
 
@@ -68,7 +67,8 @@ class Dataset:
                                   batch_size: int,
                                   metadata: Dict[str, Any],
                                   should_shuffle: bool,
-                                  drop_incomplete_batches: bool = False) -> Generator[DefaultDict[str, List[Any]], None, None]:
+                                  drop_incomplete_batches: bool = False,
+                                  order_by_output: bool = False) -> Generator[DefaultDict[str, List[Any]], None, None]:
         """
         Generates minibatches for the given dataset. Each minibatch is expressed as a feed dict with string keys. These keys
         must be translated to placeholder tensors before passing the dictionary as an input to Tensorflow.
@@ -90,7 +90,10 @@ class Dataset:
             data_series.load()
 
         # Create iterator over the data
-        data_iterator = data_series.iterate(should_shuffle=should_shuffle, batch_size=batch_size)
+        if order_by_output:
+            data_iterator = data_series.order_by_field(field=OUTPUT, min_length=5, max_length=15)
+        else:
+            data_iterator = data_series.iterate(should_shuffle=should_shuffle, batch_size=batch_size)
 
         # Set training flag
         is_train = series == DataSeries.TRAIN
