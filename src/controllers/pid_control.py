@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import math
 import os.path
 from argparse import ArgumentParser
+from collections import defaultdict
 from sklearn.metrics import f1_score, precision_score, recall_score
 from typing import Tuple, List, Union, Optional
 
@@ -15,7 +16,6 @@ from utils.constants import OUTPUT, SMALL_NUMBER, INPUTS, OPTIMIZED_TEST_LOG_PAT
 from utils.adaptive_inference import normalize_logits, threshold_predictions
 from utils.testing_utils import ClassificationMetric
 from threshold_optimization.optimize_thresholds import get_serialized_info
-from level_bandit import LinearUCB
 from logistic_regression_controller import Controller, CONTROLLER_PATH
 
 
@@ -49,6 +49,12 @@ class PIController:
     def plant_function(self, y_pred: Union[float, int], proportional_error: float, integral_error: float) -> Union[float, int]:
         raise NotImplementedError()
 
+    def update(self, **kwargs):
+        """
+        A general update function to update any controller-specific parameters
+        """
+        pass
+
     def step(self, y_true: Union[float, int], y_pred: Union[float, int], time: float) -> Union[float, int]:
         """
         Updates the controller and outputs the next control signal.
@@ -66,7 +72,7 @@ class PIController:
         self._errors.append(error)
         self._times.append(time)
 
-        return self.plant_function(y_pred, proportional_error, integral_error)
+        return self.plant_function(y_true, y_pred, proportional_error, integral_error)
 
     def reset(self):
         """
@@ -103,21 +109,25 @@ class BudgetController(PIController):
         self._margin = margin
         self._power_factor = power_factor
 
-        self._upper_limit = budget * (1 + margin)
-        self._lower_limit = budget * (1 - margin)
+    def update(self, **kwargs):
+        anneal_rate = kwargs['anneal_rate']
+        self._margin = self._margin * anneal_rate
 
-    def plant_function(self, y_pred: Union[float, int], proportional_error: float, integral_error: float) -> Union[float, int]:
+    def plant_function(self, y_true: Union[float, int], y_pred: Union[float, int], proportional_error: float, integral_error: float) -> Union[float, int]:
         # Error in power budget. For now, we only care about the upper bound budget
         control_signal = proportional_error + integral_error
 
         power = y_pred
         step = abs(control_signal) * self._power_factor
 
-        if power >= self._lower_limit and power <= self._upper_limit:
+        lower_limit = y_true * (1.0 - self._margin)
+        upper_limit = y_true * (1.0 + self._margin)
+
+        if power >= lower_limit and power <= upper_limit:
             return 0  # By returning the highest # of levels, we allow the model controller to control
         
         sign = 1
-        if power > self._upper_limit:
+        if power > upper_limit:
             sign = -1
 
         step = int(math.floor(sign * step))
@@ -134,7 +144,7 @@ def get_model_results(model: AdaptiveModel, dataset: Dataset, shuffle: bool):
 
     logit_ops = [get_logits_name(i) for i in range(model.num_outputs)]
     state_ops = [get_states_name(i) for i in range(model.num_outputs)]
-    data_generator = dataset.minibatch_generator(series=DataSeries.TEST,
+    data_generator = dataset.minibatch_generator(series=DataSeries.VALID,
                                                  batch_size=model.hypers.batch_size,
                                                  metadata=model.metadata,
                                                  should_shuffle=shuffle)
@@ -153,7 +163,7 @@ def get_model_results(model: AdaptiveModel, dataset: Dataset, shuffle: bool):
         # Compute the predictions for each level
         level_pred = np.argmax(logits_concat, axis=-1)  # [B, L]
         level_predictions.append(level_pred)
-        
+
         # Normalize logits and round to fixed point representation
         true_values = np.squeeze(batch[OUTPUT])
         labels.append(true_values)
@@ -162,7 +172,50 @@ def get_model_results(model: AdaptiveModel, dataset: Dataset, shuffle: bool):
     level_predictions = np.concatenate(level_predictions, axis=0)
     states = np.concatenate(states, axis=0)
 
-    return labels, level_predictions, states
+    level_acc = np.equal(level_predictions, np.expand_dims(labels, axis=-1)).astype(float)
+    level_acc = np.average(level_acc, axis=0)
+
+    return labels, level_predictions, states, level_acc
+
+
+def get_budget_index(budget: int, num_levels: int) -> int:
+    fixed_index = 0
+    while fixed_index < num_levels and POWER[fixed_index] < budget:
+        fixed_index += 1
+
+    return fixed_index - 1
+
+
+def get_accuracy_index(system_acc: float, level_accuracy: np.ndarray) -> int:
+    num_levels = len(level_accuracy)
+
+    policy_idx = 0
+    while policy_idx < num_levels and level_accuracy[policy_idx] < system_acc:
+        policy_idx += 1
+
+    return min(policy_idx, num_levels - 1)
+
+
+def run_fixed_policy(labels: np.ndarray,
+                     level_predictions: int,
+                     policy_index: int,
+                     noise: float) -> Tuple[List[float], List[float]]:
+    rand = np.random.RandomState(seed=42)
+
+    correct: List[float] = []
+    power: List[float] = []
+
+    max_time = labels.shape[0]
+    for t in range(max_time):
+        label = int(labels[t])
+        pred = int(level_predictions[t, policy_index])
+        correct.append(float(label == pred))
+
+        p = POWER[policy_index] + rand.uniform(low=-noise, high=noise)
+        power.append(p)
+
+    return correct, power
+
 
 def run_simulation(labels: np.ndarray,
                    level_predictions: np.ndarray,
@@ -172,13 +225,6 @@ def run_simulation(labels: np.ndarray,
                    num_levels: int,
                    noise: float,
                    model_path: str):
-    # Using the budget, find the index of the best 'fixed' policy
-    fixed_index = 0
-    while fixed_index < num_levels and POWER[fixed_index] < budget:
-        fixed_index += 1
-
-    fixed_index = fixed_index - 1
-
     # Create the model controller
     if controller_type == 'random':
         controller = RandomController(budget=budget)
@@ -188,10 +234,6 @@ def run_simulation(labels: np.ndarray,
         controller = Controller.load(os.path.join(save_folder, CONTROLLER_PATH.format(model_name)))
     else:
         raise ValueError('Unknown controller name: {0}'.format(controller_type))
-
-    # Create the budget controller
-    output_range = (0, num_levels - 1)
-    budget_controller = BudgetController(kp=1.0, ki=0.0625, output_range=output_range, budget=budget, margin=margin, power_factor=1.0)
 
     # Execute model on the validation set and collect levels
     level_accuracy = np.average((level_predictions == np.expand_dims(labels, axis=1)).astype(float), axis=0)
@@ -205,19 +247,35 @@ def run_simulation(labels: np.ndarray,
     errors: List[float] = []
     num_correct: List[float] = []
     predictions: List[float] = []
-    fixed_correct: List[float] = []
     desired_levels: List[int] = []
 
+    levels_per_label: DefaultDict[int, List[int]] = defaultdict(list)
+
     rand = np.random.RandomState(seed=42)
+
+    # Parameters for model schedule
+    start_margin = 0.5
+    end_margin = margin
+    anneal_rate = np.exp((1.0 / max_time) * np.log(end_margin / start_margin))
+
+    # Create the budget controller
+    output_range = (0, num_levels - 1)
+    budget_controller = BudgetController(kp=1.0, ki=0.0625, output_range=output_range, budget=budget, margin=start_margin, power_factor=1.0)
+
+   # init_margin = 0.5
+   # panic_time = 0.9 * max_time
+   # current_budget = budget * (1 + init_margin)
+   # anneal_rate = np.exp((1.0 / panic_time) * np.log(budget / current_budget))
 
     for t in range(max_time):
         y_pred_model = controller.predict_sample(states=states[t], budget=budget)
 
         # Make adjustments based on observed power
-        avg_power = budget
-        if len(power) > 0:
-            avg_power = np.clip(np.average(power), a_min=budget, a_max=None)
+        avg_power = np.average(power) if len(power) > 0 else 0
+        #if len(power) > 0:
+        #    avg_power = np.clip(np.average(power), a_min=current_budget, a_max=None)
         budget_step = budget_controller.step(y_true=budget, y_pred=avg_power, time=t)
+        budget_controller.update(anneal_rate=anneal_rate)
 
         # Form predicted levels using both controllers
         y_pred = clip(y_pred_model + budget_step, bounds=output_range)
@@ -233,11 +291,18 @@ def run_simulation(labels: np.ndarray,
         predictions.append(float(model_prediction))
         num_correct.append(float(model_prediction == labels[t]))
 
-        # Record the prediction of the fixed policy
-        fixed_prediction = level_predictions[t, fixed_index]
-        fixed_correct.append(float(fixed_prediction == labels[t]))
+        levels_per_label[model_prediction].append(y_pred)
 
-    return power, errors, num_correct, fixed_correct, predictions, desired_levels
+        # Anneal the budget according to the schedule
+        #current_budget = current_budget * anneal_rate
+        #if budget >= current_budget:
+        #    current_budget = budget
+
+    # Print out the label distributions
+    for label, label_levels in sorted(levels_per_label.items()):
+        print('Label {0}: Avg Levels -> {1:.5f}, Std Levels -> {2:.5f}'.format(label, np.average(label_levels), np.std(label_levels)))
+
+    return power, errors, num_correct, predictions, desired_levels
 
 def plot_and_save(power: List[float],
                   errors: List[float],
@@ -248,12 +313,14 @@ def plot_and_save(power: List[float],
                   model_path: str,
                   output_folder: Optional[str],
                   controller_type: str,
-                  budget: int):
-    
+                  budget: int,
+                  num_levels: int,
+                  level_accuracy: np.ndarray,
+                  level_predictions: np.ndarray,
+                  noise: float):
     times = np.arange(start=0, stop=len(power), dtype=float)
     avg_power = np.cumsum(power) / (times + 1)
     cumulative_accuracy = np.cumsum(num_correct) / (times + 1)
-    cumulative_fixed_accuracy = np.cumsum(fixed_correct) / (times + 1)
 
     # Create optimize test log path
     save_folder, model_file_name = os.path.split(model_path)
@@ -278,6 +345,28 @@ def plot_and_save(power: List[float],
     }
     save_by_file_suffix([opt_test_log], opt_log_file)
 
+    # Get the index of the best 'fixed' policy
+    budget_index = get_budget_index(budget, num_levels)
+    acc_index = get_accuracy_index(accuracy, level_accuracy)
+
+    budget_policy_acc, budget_policy_power = run_fixed_policy(labels=labels,
+                                                              level_predictions=level_predictions,
+                                                              policy_index=budget_index,
+                                                              noise=noise)
+
+    accuracy_policy_acc, accuracy_policy_power = run_fixed_policy(labels=labels,
+                                                                  level_predictions=level_predictions,
+                                                                  policy_index=acc_index,
+                                                                  noise=noise)
+
+    cumulative_budget_policy_acc = np.cumsum(budget_policy_acc) / (times + 1)
+    cumulative_accuracy_policy_acc = np.cumsum(accuracy_policy_acc) / (times + 1)
+    # budget_avg_power = np.cumsum(budget_policy_power) / (times + 1)
+    # accuracy_avg_power = np.cumsum(accuracy_policy_power) / (times + 1)
+    budget_policy_energy = np.cumsum(budget_policy_power)
+    accuracy_policy_energy = np.cumsum(accuracy_policy_power)
+    adaptive_energy = np.cumsum(power)
+
     # Plot the results
     with plt.style.context('ggplot'):
         fig, (ax1, ax2, ax3, ax4, ax5) = plt.subplots(figsize=(16, 12), nrows=5, ncols=1, sharex=True)
@@ -290,21 +379,26 @@ def plot_and_save(power: List[float],
         ax2.legend()
         ax2.set_title('Model Controller Error')
 
-        ax3.plot(times, cumulative_accuracy, label='Adaptive')
-        ax3.plot(times, cumulative_fixed_accuracy, label='Fixed')
+        ax3.plot(times, labels, label='true labels')
         ax3.legend()
-        ax3.set_title('Model Accuracy over Time')
+        ax3.set_title('True Labels over Time')
+        ax3.set_ylabel('Label Number')
 
-        ax4.plot(times, labels, label='true labels')
+        ax4.plot(times, cumulative_accuracy, label='Adaptive')
+        ax4.plot(times, cumulative_budget_policy_acc, label='Budget Policy')
+        ax4.plot(times, cumulative_accuracy_policy_acc, label='Accuracy Policy')
         ax4.legend()
-        ax4.set_title('True Labels over Time')
-        ax4.set_ylabel('Label Number')
+        ax4.set_title('Model Accuracy over Time')
 
-        power_budget = [budget for _ in times]
-        ax5.plot(times, avg_power, label='Avg Power')
-        ax5.plot(times, power_budget, label='Budget')
+        # Plot the energy
+        energy_budget = [budget * len(times) for _ in times]
+        ax5.plot(times, adaptive_energy, label='Adaptive')
+        ax5.plot(times, budget_policy_energy, label='Budget Policy')
+        ax5.plot(times, accuracy_policy_energy, label='Accuracy Policy')
+        ax5.plot(times, energy_budget, label='Budget')
         ax5.legend()
-        ax5.set_title('Cumulative Average Power')
+        ax5.set_title('Cumulative Energy')
+        ax5.set_ylabel('Energy (mJ)')
         ax5.set_xlabel('Time')
 
         plt.tight_layout()
@@ -342,18 +436,18 @@ if __name__ == '__main__':
     output_range = (0, model.num_outputs - 1)
 
     # Get results from the model
-    labels, level_predictions, states = get_model_results(model=model, dataset=dataset, shuffle=args.shuffle)
+    labels, level_predictions, states, level_accuracy = get_model_results(model=model, dataset=dataset, shuffle=args.shuffle)
 
     # Run the simulation for each budget
     for budget in budgets:
-        power, errors, num_correct, fixed_correct, predictions, desired_levels = run_simulation(labels=labels,
-                                                                                                level_predictions=level_predictions,
-                                                                                                states=states,
-                                                                                                budget=budget,
-                                                                                                controller_type=args.controller,
-                                                                                                num_levels=model.num_outputs,
-                                                                                                noise=args.noise,
-                                                                                                model_path=args.model_path)
+        power, errors, num_correct, predictions, desired_levels = run_simulation(labels=labels,
+                                                                                 level_predictions=level_predictions,
+                                                                                 states=states,
+                                                                                 budget=budget,
+                                                                                 controller_type=args.controller,
+                                                                                 num_levels=model.num_outputs,
+                                                                                 noise=args.noise,
+                                                                                 model_path=args.model_path)
         # Plot and save the results
         plot_and_save(power=power,
                       errors=errors,
@@ -364,4 +458,8 @@ if __name__ == '__main__':
                       model_path=args.model_path,
                       output_folder=args.output_folder,
                       budget=budget,
-                      controller_type=args.controller)
+                      controller_type=args.controller,
+                      num_levels=model.num_outputs,
+                      level_accuracy=level_accuracy,
+                      level_predictions=level_predictions,
+                      noise=args.noise)
