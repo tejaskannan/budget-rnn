@@ -144,7 +144,7 @@ def get_model_results(model: AdaptiveModel, dataset: Dataset, shuffle: bool):
 
     logit_ops = [get_logits_name(i) for i in range(model.num_outputs)]
     state_ops = [get_states_name(i) for i in range(model.num_outputs)]
-    data_generator = dataset.minibatch_generator(series=DataSeries.VALID,
+    data_generator = dataset.minibatch_generator(series=DataSeries.TEST,
                                                  batch_size=model.hypers.batch_size,
                                                  metadata=model.metadata,
                                                  should_shuffle=shuffle)
@@ -224,6 +224,7 @@ def run_simulation(labels: np.ndarray,
                    controller_type: str,
                    num_levels: int,
                    noise: float,
+                   precision: int,
                    model_path: str):
     # Create the model controller
     if controller_type == 'random':
@@ -254,7 +255,7 @@ def run_simulation(labels: np.ndarray,
     rand = np.random.RandomState(seed=42)
 
     # Parameters for model schedule
-    start_margin = 0.5
+    start_margin = 5.0
     end_margin = margin
     anneal_rate = np.exp((1.0 / max_time) * np.log(end_margin / start_margin))
 
@@ -262,18 +263,34 @@ def run_simulation(labels: np.ndarray,
     output_range = (0, num_levels - 1)
     budget_controller = BudgetController(kp=1.0, ki=0.0625, output_range=output_range, budget=budget, margin=start_margin, power_factor=1.0)
 
+    window_size = 10
+    distribution_margin = 1.0
+    end_distribution_margin = 1e-3
+    # distribution_anneal_rate = np.exp((1.0 / max_time) * np.log(end_distribution_margin / distribution_margin))
+    distribution_anneal_rate = 1.0
+    thresholds = np.copy(controller.get_thresholds(budget=budget))
+    target_distribution = controller.get_avg_level_counts(budget=budget)
+
+    print('Target Distribution: {0}'.format(target_distribution))
+
    # init_margin = 0.5
    # panic_time = 0.9 * max_time
    # current_budget = budget * (1 + init_margin)
    # anneal_rate = np.exp((1.0 / panic_time) * np.log(budget / current_budget))
 
+    level_counts = np.zeros(shape=thresholds.shape)
+    fp_one = 1 << precision
+    power_noise = rand.uniform(low=-noise, high=noise, size=(max_time, ))
+    level_idx = np.arange(num_levels)
+
     for t in range(max_time):
-        y_pred_model = controller.predict_sample(states=states[t], budget=budget)
+        # Use the control model to determine the number of states to collect
+        y_pred_model = controller.predict_sample(states=states[t], budget=budget, thresholds=thresholds)
 
         # Make adjustments based on observed power
         avg_power = np.average(power) if len(power) > 0 else 0
-        #if len(power) > 0:
-        #    avg_power = np.clip(np.average(power), a_min=current_budget, a_max=None)
+        avg_power = np.clip(avg_power, a_min=budget, a_max=None)
+        
         budget_step = budget_controller.step(y_true=budget, y_pred=avg_power, time=t)
         budget_controller.update(anneal_rate=anneal_rate)
 
@@ -281,7 +298,7 @@ def run_simulation(labels: np.ndarray,
         y_pred = clip(y_pred_model + budget_step, bounds=output_range)
 
         # Compute the (noisy) power consumption for using this number of levels
-        p = POWER[y_pred] + rand.uniform(low=-noise, high=noise)
+        p = POWER[y_pred] + power_noise[t]
 
         power.append(p)
         errors.append(y_pred_model - y_pred)
@@ -292,11 +309,35 @@ def run_simulation(labels: np.ndarray,
         num_correct.append(float(model_prediction == labels[t]))
 
         levels_per_label[model_prediction].append(y_pred)
+        level_counts[y_pred_model] += 1
 
-        # Anneal the budget according to the schedule
-        #current_budget = current_budget * anneal_rate
-        #if budget >= current_budget:
-        #    current_budget = budget
+        # Adjust the thresholds
+        #empirical_level_distribution = level_counts / (t + 1)
+
+        #adjustments = np.zeros_like(thresholds)
+        #for level in range(num_levels - 1):
+        #    # Positive if we have too many, negative if we have too few
+        #    level_diff = empirical_level_distribution[level] - target_distribution[level]
+        #    proportional_error = int(fp_one * level_diff) / fp_one
+
+        #    # This level has too few samples. We decrease its threshold
+        #    # and increase the thresholds of all previous levels.
+        #    if level_diff < -distribution_margin:
+        #        if level > 0:
+        #            adjustments[level-1] += (1.0 / fp_one)
+        #        adjustments[level] += proportional_error
+        #    elif level_diff > distribution_margin:
+        #        if level > 0:
+        #            adjustments[level-1] -= 1.0 / fp_one
+        #        adjustments[level] += proportional_error
+
+        #distribution_margin = distribution_margin * distribution_anneal_rate
+        #thresholds = np.clip(thresholds + adjustments, a_min=0, a_max=1)
+
+    print('Final Distribution: {0}'.format(level_counts / max_time))
+    print('Starting Thresholds: {0}'.format(controller.get_thresholds(budget=budget)))
+    print('Ending Thresholds: {0}'.format(thresholds))
+    print('Accuracy: {0}'.format(np.average(num_correct)))
 
     # Print out the label distributions
     for label, label_levels in sorted(levels_per_label.items()):
@@ -361,8 +402,11 @@ def plot_and_save(power: List[float],
 
     cumulative_budget_policy_acc = np.cumsum(budget_policy_acc) / (times + 1)
     cumulative_accuracy_policy_acc = np.cumsum(accuracy_policy_acc) / (times + 1)
-    # budget_avg_power = np.cumsum(budget_policy_power) / (times + 1)
-    # accuracy_avg_power = np.cumsum(accuracy_policy_power) / (times + 1)
+    budget_avg_power = np.cumsum(budget_policy_power) / (times + 1)
+    accuracy_avg_power = np.cumsum(accuracy_policy_power) / (times + 1)
+    
+    adaptive_power = np.cumsum(power) / (times + 1)
+    
     budget_policy_energy = np.cumsum(budget_policy_power)
     accuracy_policy_energy = np.cumsum(accuracy_policy_power)
     adaptive_energy = np.cumsum(power)
@@ -391,14 +435,14 @@ def plot_and_save(power: List[float],
         ax4.set_title('Model Accuracy over Time')
 
         # Plot the energy
-        energy_budget = [budget * len(times) for _ in times]
-        ax5.plot(times, adaptive_energy, label='Adaptive')
-        ax5.plot(times, budget_policy_energy, label='Budget Policy')
-        ax5.plot(times, accuracy_policy_energy, label='Accuracy Policy')
-        ax5.plot(times, energy_budget, label='Budget')
+        power_budget = [budget for _ in times]
+        ax5.plot(times, adaptive_power, label='Adaptive')
+        ax5.plot(times, budget_avg_power, label='Budget Policy')
+        ax5.plot(times, accuracy_avg_power, label='Accuracy Policy')
+        ax5.plot(times, power_budget, label='Budget')
         ax5.legend()
-        ax5.set_title('Cumulative Energy')
-        ax5.set_ylabel('Energy (mJ)')
+        ax5.set_title('Cumulative Average Power')
+        ax5.set_ylabel('Power (mW)')
         ax5.set_xlabel('Time')
 
         plt.tight_layout()
@@ -447,6 +491,7 @@ if __name__ == '__main__':
                                                                                  controller_type=args.controller,
                                                                                  num_levels=model.num_outputs,
                                                                                  noise=args.noise,
+                                                                                 precision=args.precision,
                                                                                  model_path=args.model_path)
         # Plot and save the results
         plot_and_save(power=power,
