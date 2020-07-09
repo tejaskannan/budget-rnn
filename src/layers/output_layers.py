@@ -52,12 +52,12 @@ def compute_multi_classification_output(model_output: tf.Tensor, labels: tf.Tens
     Uses the model output to compute the multi-class classification output for a given task.
 
     Args:
-        model_output: A [B, K] tensor containing the logits for each batch sample (B) and output class (K)
-        labels: A [B, 1] int tensor with the expected labels.
+        model_output: A [B, K] or [B, T, K] tensor containing the logits for each batch sample (B) and output class (K)
+        labels: A [B, 1] or [B, T, 1] int tensor with the expected labels.
     """
-    logits = model_output  # [B, K]
-    predicted_probs = tf.nn.softmax(logits, axis=-1)  # [B, K]
-    predictions = tf.math.argmax(predicted_probs, axis=-1, output_type=labels.dtype)  # [B]
+    logits = model_output  # [B, K] / [B, T, K]
+    predicted_probs = tf.nn.softmax(logits, axis=-1)  # [B, K]  / [B, T, K]
+    predictions = tf.math.argmax(predicted_probs, axis=-1, output_type=labels.dtype)  # [B] / [B, T]
 
     # Compute the batch-wise accuracy
     correct = tf.cast(tf.equal(predictions, tf.squeeze(labels, axis=-1)), dtype=tf.float32)

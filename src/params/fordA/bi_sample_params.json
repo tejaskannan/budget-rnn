@@ -5,13 +5,13 @@
     "learning_rate_decay": 0.999,
 	"gradient_clip": 1,
 	"epochs": 250,
-	"patience": 15,
+	"patience": 20,
     "model": "adaptive",
     "dataset_type": "standard",
     "input_noise": 0.001,
     "seq_length": 20,
 	"model_params": {
-		"state_size": 20,
+		"state_size": 16,
 		"sample_frac": 0.1,
 		"rnn_cell_type": "gru",
 		"rnn_activation": "tanh",
@@ -21,15 +21,17 @@
         "output_type": "multi_classification",
         "embedding_activation": "leaky_relu",
 		"pool_mode": "final_state",
-		"model_type": "sample",
+		"model_type": "bidir_sample",
 		"share_cell_weights": true,
         "share_output_weights": true,
         "share_rnn_weights": true,
         "share_embedding_weights": true,
 		"loss_weights": true,
         "loss_mode": "cross-entropy",
-        "enforce_level_penalty": false,
         "fusion_mode": "gate",
-        "normalize_inputs": true
+        "enforce_level_penalty": false,
+        "normalize_inputs": true,
+        "use_stop_layer": true,
+        "stop_loss_weight": 0.1
 	}
 }

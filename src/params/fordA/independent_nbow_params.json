@@ -4,7 +4,7 @@
 	"learning_rate": 0.0001,
 	"gradient_clip": 1,
 	"epochs": 250,
-	"patience": 15,
+	"patience": 20,
     "model": "adaptive",
     "dataset_type": "standard",
     "input_noise": 0.001,
@@ -19,13 +19,14 @@
         "embedding_activation": "leaky_relu",
         "attn_activation": "sigmoid",
         "output_type": "multi_classification",
-		"model_type": "adaptive_nbow",
-		"share_transform_weights": true,
-        "share_output_weights": true,
-        "share_embedding_weights": true,
-		"loss_weights": true,
+		"model_type": "independent_nbow",
+		"share_transform_weights": false,
+        "share_output_weights": false,
+        "share_embedding_weights": false,
         "enforce_level_penalty": false,
+		"loss_weights": false,
         "loss_mode": "cross-entropy",
-        "normalize_inputs": true
+        "normalize_inputs": true,
+        "compression_fraction": 0.2
 	}
 }

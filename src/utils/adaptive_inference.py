@@ -2,7 +2,30 @@ import numpy as np
 from typing import Tuple
 
 from utils.np_utils import min_max_normalize, round_to_precision
-from utils.constants import BIG_NUMBER
+from utils.constants import BIG_NUMBER, SMALL_NUMBER
+
+
+def level_entropy(labels: np.ndarray, levels: np.ndarray, num_classes: int, num_levels: int) -> np.ndarray:
+    """
+    Args:
+        labels: A [B, 1] array of labels
+        levels: A [S, B] array of computed levels
+        num_classes: The number of classes (C)
+    Returns:
+        A [S] array containing the entropy scores.
+    """
+    entropy = np.zeros(shape=(levels.shape[0], ))
+    for class_idx in range(num_classes):
+        label_mask = np.squeeze((labels == class_idx).astype(float))  # [B]
+        label_fraction = np.average(label_mask)
+
+        for i in range(levels.shape[0]):
+            level_counts = np.bincount(levels[i, :], weights=label_mask, minlength=num_levels)  # [B]
+            level_distribution = level_counts / (np.sum(level_counts) + SMALL_NUMBER)
+
+            entropy[i] += label_fraction * np.sum(-1 * level_distribution * np.log(level_distribution + SMALL_NUMBER))
+
+    return entropy
 
 
 def tanh_approx(x: np.ndarray) -> np.ndarray:

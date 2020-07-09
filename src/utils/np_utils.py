@@ -5,6 +5,18 @@ from collections import namedtuple
 from utils.constants import SMALL_NUMBER, BIG_NUMBER
 
 
+def index_of(arr: np.ndarray, value: Union[int, float]) -> int:
+    assert len(arr.shape) == 1, 'Array must be 1 dimensional'
+
+    idx = -1
+    for i in range(len(arr)):
+        if abs(arr[i] - value) < SMALL_NUMBER:
+            idx = i
+            break
+
+    return idx
+
+
 def pad_array(arr: np.array, new_size: int, value: Any, axis: int) -> np.array:
     pad_width = new_size - arr.shape[axis]
     if pad_width <= 0:

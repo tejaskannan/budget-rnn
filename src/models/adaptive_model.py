@@ -480,6 +480,8 @@ class AdaptiveModel(TFModel):
                                           name=transform_name,
                                           compression_seed=TRANSFORM_SEED,
                                           compression_fraction=compression_fraction)
+            # Save the states
+            self._ops[state_name] = tf.transpose(transformed_sequence, perm=[1, 0, 2])  # [T, B, D]
 
             # Compute attention weights for aggregation. We only compute the
             # weights for this sequence to avoid redundant computation. [B, T, 1] tensor.
