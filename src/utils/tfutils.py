@@ -42,7 +42,7 @@ def get_activation(fn_name: Optional[str]) -> Optional[Callable[[tf.Tensor], tf.
     elif fn_name == 'sigmoid':
         return tf.math.sigmoid
     elif fn_name == 'leaky_relu':
-        return tf.nn.leaky_relu
+        return partial(tf.nn.leaky_relu, alpha=0.25)
     elif fn_name == 'elu':
         return tf.nn.elu
     elif fn_name == 'crelu':
@@ -115,6 +115,54 @@ def pool_rnn_outputs(outputs: tf.Tensor, final_state: tf.Tensor, pool_mode: str,
         return tf.reduce_sum(scaled_outputs, axis=-2, name='{0}-aggregate'.format(name))  # [B, D]
     else:
         raise ValueError(f'Unknown pool mode {pool_mode}.')
+
+
+def successive_pooling(inputs: tf.Tensor, aggregation_weights: tf.Tensor, seq_length: int, name: str) -> tf.Tensor:
+    """
+    Successively pools the input tensor over the time dimension.
+
+    Args:
+        inputs: A [B, T, D] tensor of input vectors of dimension (D) for each time step (T) and batch sample (B)
+        aggregation_weights: A [B, T, 1] tensor of aggregation weights. These should be un-normalized.
+        seq_length: A integer containing the sequence length (T)
+        name: Name of this layer
+    Returns:
+        A [B, T, D] tensor containing the successively-pooled outputs.
+    """
+    # Create results array
+    results = tf.TensorArray(size=seq_length, dtype=tf.float32, clear_after_read=True, name='{0}-results'.format(name))
+
+    # Loop body function
+    def body(index: tf.Tensor, inputs: tf.Tensor, aggregation_weights: tf.Tensor, results_array: tf.TensorArray):
+        index_mask = tf.cast(tf.less_equal(tf.range(start=0, limit=seq_length), index), tf.float32)  # [T]
+        index_mask = tf.reshape(index_mask, (1, -1, 1))  # [1, T, 1]
+
+        masked_weights = aggregation_weights * index_mask  # [B, T, 1]
+        normalizing_factor = tf.reduce_sum(masked_weights, axis=1, keepdims=True)  # [B, 1, 1]
+        normalized_weights = masked_weights / (tf.maximum(normalizing_factor, SMALL_NUMBER))  # [B, T, 1]
+
+        weighted_inputs = inputs * normalized_weights  # [B, T, D]
+        pooled_inputs = tf.reduce_sum(weighted_inputs, axis=1)  # [B, D]
+
+        # Write the pooled result to the array
+        results_array = results_array.write(value=pooled_inputs, index=index)
+
+        return [index + 1, inputs, aggregation_weights, results_array]
+
+    # Stop Condition Function
+    def stop_condition(index, _1, _2, _3):
+        return index < seq_length
+
+    # Execute the while loop
+    index = tf.constant(0, dtype=tf.int32)
+    _, _, _, pooled_results = tf.while_loop(cond=stop_condition,
+                                            body=body,
+                                            loop_vars=[index, inputs, aggregation_weights, results],
+                                            maximum_iterations=seq_length,
+                                            name=name)
+
+    results = pooled_results.stack()  # [T, B, D]
+    return tf.transpose(results, perm=[1, 0, 2])  # [B, T, D]
 
 
 def majority_vote(logits: tf.Tensor) -> tf.Tensor:
