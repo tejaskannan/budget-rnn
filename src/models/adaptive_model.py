@@ -270,7 +270,7 @@ class AdaptiveModel(TFModel):
             cell = get_cell_level_name(level, self.hypers.model_params['share_cell_weights'])
             output = get_output_layer_name(level, self.hypers.model_params['share_output_weights'])
             rnn = get_rnn_level_name(level)
-            embedding_name = get_embedding_name(level, self.hypers.model_params['share_embedding_weights'])
+            embedding_name = get_embedding_name(level, self.hypers.model_params.get('share_embedding_weights', True))
             combine_states = get_combine_states_name(rnn, self.hypers.model_params['share_rnn_weights'])
 
             # Compute FLOPS from RNN operations
@@ -568,6 +568,7 @@ class AdaptiveModel(TFModel):
         Builds an Adaptive RNN model.
         """
         outputs: List[tf.Tensor] = []
+        stop_outputs: List[tf.Tensor] = []
         states_list: List[tf.TensorArray] = []
         bw_states_list: List[tf.TensorArray] = []
         prev_state: Optional[tf.Tensor] = None
@@ -711,6 +712,19 @@ class AdaptiveModel(TFModel):
                             compression_fraction=self.hypers.model_params.get('compression_fraction'),
                             compression_seed=OUTPUT_SEED)
 
+            # Get the first state
+            first_state = rnn_states.read(index=0)
+            first_state = tf.concat(tf.unstack(first_state, axis=0), axis=-1)  # [B, D * L]
+
+            # Compute the stop output using a single dense layer. This is a [B, 1] array.
+            stop_output, _ = dense(inputs=first_state,
+                                   units=1,
+                                   activation='sigmoid',
+                                   use_bias=True,
+                                   name='stop-prediction')
+            stop_output = tf.squeeze(stop_output, axis=-1)  # [B]
+            self._ops['stop_output_{0}'.format(i)] = stop_output  # [B]
+
             if self.output_type == OutputType.BINARY_CLASSIFICATION:
                 classification_output = compute_binary_classification_output(model_output=output,
                                                                              labels=self._placeholders[OUTPUT])
@@ -736,9 +750,14 @@ class AdaptiveModel(TFModel):
             prev_state = rnn_states.read(index=last_index)
 
             outputs.append(output)
+            stop_outputs.append(stop_output)
 
         combined_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), outputs), axis=1)
         self._ops[ALL_PREDICTIONS_NAME] = combined_outputs
+
+        combined_stop_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), stop_outputs), axis=1)
+        self._ops['stop_outputs'] = combined_stop_outputs
+
 
     def make_loss(self):
         losses: List[tf.Tensor] = []
@@ -782,12 +801,24 @@ class AdaptiveModel(TFModel):
         if self.hypers.model_params.get('enforce_level_penalty', True):
             rolled_losses = tf.roll(losses, shift=1, axis=0)  # [N]
             mask = tf.cast(tf.range(start=0, limit=tf.shape(losses)[0]) > 0, dtype=tf.float32)  # [N]
-            # penalty = tf.reduce_sum(tf.nn.relu(mask * (losses - rolled_losses)))
             penalty = tf.reduce_sum(tf.nn.leaky_relu(mask * (losses - rolled_losses), alpha=0.01))
 
             self._ops[LOSS] = weighted_losses + penalty
         else:
             self._ops[LOSS] = weighted_losses
+
+        if self.hypers.model_params.get('use_stop_layer', False):
+            stop_outputs = self._ops['stop_outputs']  # [B, L]
+
+            # [B, L]
+            all_predictions = tf.cast(tf.argmax(self._ops[ALL_PREDICTIONS_NAME], axis=-1), dtype=tf.int32)  # [B, L]
+            stop_labels = tf.cast(tf.equal(all_predictions, self._placeholders[OUTPUT]), dtype=tf.float32)
+
+            # Compute binary cross entropy loss and sum over levels, average over batch
+            stop_element_loss = -stop_labels * tf.log(stop_outputs) - (1 - stop_labels) * tf.log(1 - stop_outputs)
+
+            stop_loss = self.hypers.model_params['stop_loss_weight'] * tf.reduce_mean(tf.reduce_sum(stop_element_loss, axis=-1))
+            self._ops[LOSS] += stop_loss
 
         # Add any regularization to the loss function
         reg_loss = self.regularize_weights(name=self.hypers.model_params.get('regularization_name'),
