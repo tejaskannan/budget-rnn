@@ -284,6 +284,7 @@ def get_model_results(model: AdaptiveModel, dataset: Dataset, shuffle: bool, ser
     labels: List[np.ndarray] = []
     level_predictions: List[np.ndarray] = []
     states: List[np.ndarray] = []
+    dataset_inputs: List[np.ndarray] = []
 
     seq_length = model.metadata[SEQ_LENGTH]
     num_sequences = model.num_sequences
@@ -316,6 +317,8 @@ def get_model_results(model: AdaptiveModel, dataset: Dataset, shuffle: bool, ser
         state_features = np.concatenate([first_states, first_inputs], axis=-1)  # [B, D + K]
         states.append(state_features)
 
+        dataset_inputs.append(np.squeeze(inputs, axis=1))
+
         # Concatenate logits into a [B, L, C] array (logit_ops is already ordered by level).
         # For reference, L is the number of levels and C is the number of classes
         logits_concat = np.concatenate([np.expand_dims(model_results[op], axis=1) for op in logit_ops], axis=1)
@@ -331,11 +334,12 @@ def get_model_results(model: AdaptiveModel, dataset: Dataset, shuffle: bool, ser
     labels = np.concatenate(labels, axis=0)
     level_predictions = np.concatenate(level_predictions, axis=0)
     states = np.concatenate(states, axis=0)
+    dataset_inputs = np.concatenate(dataset_inputs, axis=0)
 
     level_acc = np.equal(level_predictions, np.expand_dims(labels, axis=-1)).astype(float)
     level_acc = np.average(level_acc, axis=0)
 
-    return labels, level_predictions, states, level_acc
+    return labels, level_predictions, states, level_acc, dataset_inputs
 
 
 def interpolate_power(num_levels: int) -> List[float]:
@@ -345,12 +349,19 @@ def interpolate_power(num_levels: int) -> List[float]:
 
     stride = int(num_levels / num_readings)
     power_readings: List[float] = []
-    for i in range(len(POWER)):
-        start = POWER[i-1] if i > 0 else (POWER[0] * 0.9)
-        end = POWER[i]
 
-        extrapolation = np.linspace(start=start, stop=end, endpoint=False, num=stride)
-        power_readings.extend(extrapolation)
+    # For levels below the stride, we interpolate up to the first reading
+    start = POWER[0] * 0.9
+    end = POWER[0]
+    interpolated_power = np.linspace(start=start, stop=end, endpoint=True, num=stride)
+    power_readings.extend(interpolated_power[:-1])
+
+    for i in range(1, len(POWER)):
+        interpolated_power = np.linspace(start=POWER[i-1], stop=POWER[i], endpoint=False, num=stride)
+        power_readings.extend(interpolated_power)
+
+    # Add in the final reading
+    power_readings.append(POWER[-1])
 
     return power_readings
 
@@ -494,7 +505,7 @@ def run_simulation(labels: np.ndarray,
         current_budget = budget_distribution.get_budget(t+1)
 
         # Use the control model to determine the number of states to collect
-        y_pred_model = controller.predict_sample(states=states[t], budget=budget)
+        y_pred_model = controller.predict_sample(inputs=states[t], budget=budget)
 
         # Make adjustments based on observed power
         avg_power = np.average(power) if len(power) > 0 else 0
@@ -672,7 +683,7 @@ if __name__ == '__main__':
     output_range = (0, adaptive_model.num_outputs - 1)
 
     # Get results from the adaptive model
-    labels, level_predictions, states, level_accuracy = get_model_results(model=adaptive_model, dataset=dataset, shuffle=args.shuffle, series=DataSeries.TEST)
+    labels, level_predictions, states, level_accuracy, dataset_inputs = get_model_results(model=adaptive_model, dataset=dataset, shuffle=args.shuffle, series=DataSeries.TEST)
 
     # Create baseline model and get results
     baseline_model, _ = get_serialized_info(args.baseline_model_path, dataset_folder=args.dataset_folder)
@@ -684,7 +695,7 @@ if __name__ == '__main__':
     for budget in budgets:
         power, errors, num_correct, predictions, desired_levels = run_simulation(labels=labels,
                                                                                  level_predictions=level_predictions,
-                                                                                 states=states,
+                                                                                 states=dataset_inputs,
                                                                                  budget=budget,
                                                                                  controller_type=args.controller,
                                                                                  num_levels=adaptive_model.num_outputs,
