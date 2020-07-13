@@ -440,6 +440,7 @@ class AdaptiveModel(TFModel):
 
     def _make_bow_model(self, is_train: bool):
         outputs: List[tf.Tensor] = []
+        stop_outputs: List[tf.Tensor]= []
         prev_attn_weights: List[tf.Tensor] = []  # List of [B, T, 1] tensors
         prev_samples: List[tf.Tensor] = []  # List of [B, T, D] tensors
         compression_fraction = self.hypers.model_params.get('compression_fraction')
@@ -540,6 +541,18 @@ class AdaptiveModel(TFModel):
                             compression_seed=OUTPUT_SEED,
                             compression_fraction=compression_fraction)
 
+
+            # Compute the stop output using a single dense layer. This results in a [B, 1] array.
+            state = transformed_sequence[:, 0, :]  # [B, D]
+            stop_output, _ = dense(inputs=state,
+                                   units=1,
+                                   activation='sigmoid',
+                                   use_bias=True,
+                                   name='stop-prediction')
+            stop_output = tf.squeeze(stop_output, axis=-1)  # [B]
+            self._ops['stop_output_{0}'.format(i)] = stop_output  # [B]
+            stop_outputs.append(stop_output)
+
             if self.output_type == OutputType.BINARY_CLASSIFICATION:
                 classification_output = compute_binary_classification_output(model_output=output,
                                                                              labels=self._placeholders[OUTPUT])
@@ -562,6 +575,9 @@ class AdaptiveModel(TFModel):
 
         combined_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), outputs), axis=1)
         self._ops[ALL_PREDICTIONS_NAME] = combined_outputs
+
+        combined_stop_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), stop_outputs), axis=1)
+        self._ops['stop_outputs'] = combined_stop_outputs
 
     def _make_rnn_model(self, is_train: bool):
         """
@@ -713,7 +729,8 @@ class AdaptiveModel(TFModel):
                             compression_seed=OUTPUT_SEED)
 
             # Get the first state
-            first_state = rnn_states.read(index=0)
+            state_index = 0 if self.model_type != AdaptiveModelType.CASCADE else tf.shape(inputs)[1] - 1
+            first_state = rnn_states.read(index=state_index)
             first_state = tf.concat(tf.unstack(first_state, axis=0), axis=-1)  # [B, D * L]
 
             # Compute the stop output using a single dense layer. This is a [B, 1] array.
