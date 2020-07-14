@@ -323,25 +323,37 @@ class StandardModel(TFModel):
     def make_loss(self):
         # Tile the output along all sequence elements. This is necessary for the sparse softmax
         # cross entropy function.
+        seq_length = self.metadata[SEQ_LENGTH]
         expected_output = tf.expand_dims(self._placeholders[OUTPUT], axis=-1)  # [B, 1, 1]
-        expected_output = tf.tile(expected_output, multiples=(1, self.metadata[SEQ_LENGTH], 1))  # [B, T, 1]
+        expected_output = tf.tile(expected_output, multiples=(1, seq_length, 1))  # [B, T, 1]
         
         predictions = self._ops[PREDICTION]  # [B, T, C]
+       
+        # Create the loss weights
+        if self.hypers.model_params.get('use_loss_weights', False):
+            loss_weights = np.linspace(start=(1.0 / seq_length), stop=1.0, endpoint=True, num=seq_length)
+        else:
+            loss_weights = np.ones(shape=num_outputs) / num_outputs
+
+        # Expand for later broadcasting
+        loss_weights = np.expand_dims(loss_weights, axis=0)  # [1, T]
 
         if self.output_type == OutputType.BINARY_CLASSIFICATION:
             logits = self._ops[LOGITS]
             sample_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=expected_output,
                                                                   logits=logits)
-            self._ops[LOSS] = tf.reduce_mean(sample_loss)
         elif self.output_type == OutputType.MULTI_CLASSIFICATION:
             logits = self._ops[LOGITS]
             labels = tf.squeeze(expected_output, axis=-1)  # [B, T]
 
             sample_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=labels)
-
-            self._ops[LOSS] = tf.reduce_mean(sample_loss)
         else:
-            self._ops[LOSS] = tf.reduce_mean(tf.square(predictions - expected_output))
+            sample_loss = tf.square(predictions - expected_output)
+
+        # Compute weighted average over samples and unweighted average over batch
+        print(loss_weights)
+        print(loss_weights.shape)
+        self._ops[LOSS] = tf.reduce_mean(tf.reduce_sum(sample_loss * loss_weights, axis=-1))
 
         # Add any regularization to the loss function
         reg_loss = self.regularize_weights(name=self.hypers.model_params.get('regularization_name'),
