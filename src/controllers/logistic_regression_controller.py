@@ -9,9 +9,9 @@ from typing import List, Optional, Tuple
 from dataset.dataset import Dataset, DataSeries
 from models.adaptive_model import AdaptiveModel
 from threshold_optimization.optimize_thresholds import get_serialized_info
-from utils.rnn_utils import get_logits_name, get_states_name, AdaptiveModelType
+from utils.rnn_utils import get_logits_name, get_states_name, AdaptiveModelType, get_input_name
 from utils.np_utils import index_of, round_to_precision
-from utils.constants import OUTPUT, BIG_NUMBER, SMALL_NUMBER, INPUTS, SEQ_LENGTH
+from utils.constants import OUTPUT, BIG_NUMBER, SMALL_NUMBER, INPUTS, SEQ_LENGTH, DROPOUT_KEEP_RATE
 from utils.file_utils import save_pickle_gz, read_pickle_gz, extract_model_name
 from controllers.distribution_prior import DistributionPrior
 
@@ -31,6 +31,7 @@ NOISE = 0.01
 def fetch_model_states(model: AdaptiveModel, dataset: Dataset, series: DataSeries):
     logit_ops = [get_logits_name(i) for i in range(model.num_outputs)]
     state_ops = [get_states_name(i) for i in range(model.num_outputs)]
+    stop_output_ops = ['stop_output_{0}'.format(i) for i in range(model.num_outputs)]
 
     data_generator = dataset.minibatch_generator(series=series,
                                                  batch_size=model.hypers.batch_size,
@@ -39,6 +40,7 @@ def fetch_model_states(model: AdaptiveModel, dataset: Dataset, series: DataSerie
     # Lists to keep track of model results
     labels: List[np.ndarray] = []
     states: List[np.ndarray] = []
+    stop_outputs: List[np.ndarray] = []
     level_predictions: List[np.ndarray] = []
     level_logits: List[np.ndarray] = []
 
@@ -53,7 +55,7 @@ def fetch_model_states(model: AdaptiveModel, dataset: Dataset, series: DataSerie
     for batch_num, batch in enumerate(data_generator):
         # Compute the predicted log probabilities
         feed_dict = model.batch_to_feed_dict(batch, is_train=False)
-        model_results = model.execute(feed_dict, logit_ops + state_ops)
+        model_results = model.execute(feed_dict, logit_ops + state_ops + stop_output_ops)
 
         first_states = np.concatenate([np.expand_dims(np.squeeze(model_results[op][states_index]), axis=1) for op in state_ops], axis=1)  # [B, D]
 
@@ -79,15 +81,19 @@ def fetch_model_states(model: AdaptiveModel, dataset: Dataset, series: DataSerie
         true_values = np.squeeze(batch[OUTPUT])
         labels.append(true_values)
 
+        batch_stop_outputs = np.concatenate([np.expand_dims(model_results[op], axis=1) for op in stop_output_ops], axis=1)  # [B, T]
+        stop_outputs.append(batch_stop_outputs)
+
     states = np.concatenate(states, axis=0)
     level_predictions = np.concatenate(level_predictions, axis=0)
     labels = np.concatenate(labels, axis=0).reshape(-1, 1)
     level_logits = np.concatenate(level_logits, axis=0)
+    stop_outputs = np.concatenate(stop_outputs, axis=0)
 
     y = (level_predictions == labels).astype(float)
     print('Level Accuracy: {0}'.format(np.average(y, axis=0)))
 
-    return states, y, level_logits, labels
+    return states, y, level_logits, labels, stop_outputs
 
 
 def levels_to_execute(logistic_probs: np.ndarray, thresholds: np.ndarray) -> np.ndarray:
@@ -648,38 +654,38 @@ class Controller:
             raise ValueError('Unknown budget optimizer: {0}'.format(budget_optimizer_type))
 
     def fit(self, series: DataSeries):
-        X_train, y_train, train_logits, train_labels = fetch_model_states(self._model, self._dataset, series=series)
-        X_test, y_test, test_logits, test_labels = fetch_model_states(self._model, self._dataset, series=DataSeries.TEST)
+        X_train, y_train, train_logits, train_labels, clf_predictions = fetch_model_states(self._model, self._dataset, series=series)
+        X_test, y_test, test_logits, test_labels, test_clf_predictions = fetch_model_states(self._model, self._dataset, series=DataSeries.TEST)
 
         # Fit the logistic regression model
-        if self._share_model:
-            X_train_input = X_train.reshape(-1, X_train.shape[-1])
+        #if self._share_model:
+        #    X_train_input = X_train.reshape(-1, X_train.shape[-1])
 
-            self._clf.fit(X_train_input, y_train.reshape(-1))
-            clf_predictions = self._clf.predict_proba(X_train_input)[:, 1]
+        #    self._clf.fit(X_train_input, y_train.reshape(-1))
+        #    clf_predictions = self._clf.predict_proba(X_train_input)[:, 1]
 
-            clf_predictions = clf_predictions.reshape(-1, self._num_levels)
+        #    clf_predictions = clf_predictions.reshape(-1, self._num_levels)
 
-            test_reshaped = X_test.reshape(-1, X_test.shape[-1])
-            test_clf_predictions = self._clf.predict_proba(test_reshaped)[:, 1]
-            test_clf_predictions = test_clf_predictions.reshape(-1, self._num_levels)
-        else:
-            clf_predictions: List[np.ndarray] = []
-            test_clf_predictions: List[np.ndarray] = []
-            for level in range(self._num_levels):
-                X_input = X_train[:, level, :]
+        #    test_reshaped = X_test.reshape(-1, X_test.shape[-1])
+        #    test_clf_predictions = self._clf.predict_proba(test_reshaped)[:, 1]
+        #    test_clf_predictions = test_clf_predictions.reshape(-1, self._num_levels)
+        #else:
+        #    clf_predictions: List[np.ndarray] = []
+        #    test_clf_predictions: List[np.ndarray] = []
+        #    for level in range(self._num_levels):
+        #        X_input = X_train[:, level, :]
 
-                self._clf[level].fit(X_input, y_train[:, level])
-                clf_predictions.append(self._clf[level].predict_proba(X_input)[:, 1])
+        #        self._clf[level].fit(X_input, y_train[:, level])
+        #        clf_predictions.append(self._clf[level].predict_proba(X_input)[:, 1])
 
-                X_test_input = X_test[:, level, :]
-                test_clf_predictions.append(self._clf[level].predict_proba(X_test_input)[:, 1])
+        #        X_test_input = X_test[:, level, :]
+        #        test_clf_predictions.append(self._clf[level].predict_proba(X_test_input)[:, 1])
 
-            clf_predictions = np.transpose(np.array(clf_predictions))  # [B, L]
-            test_clf_predictions = np.transpose(np.array(test_clf_predictions))
+        #    clf_predictions = np.transpose(np.array(clf_predictions))  # [B, L]
+        #    test_clf_predictions = np.transpose(np.array(test_clf_predictions))
 
-        clf_predictions = round_to_precision(clf_predictions, precision=self._precision)
-        test_clf_predictions = round_to_precision(test_clf_predictions, precision=self._precision)
+        #clf_predictions = round_to_precision(clf_predictions, precision=self._precision)
+        #test_clf_predictions = round_to_precision(test_clf_predictions, precision=self._precision)
 
         # Calculate the expected distributions for each budget
         distributions: List[np.ndarray] = []
@@ -721,7 +727,7 @@ class Controller:
 
     def score(self, series: DataSeries) -> np.ndarray:
         assert self._is_fitted, 'Model is not fitted'
-        X, y, _, _ = fetch_model_states(self._model, self._dataset, series=series)
+        X, y, _, _, clf_predictions = fetch_model_states(self._model, self._dataset, series=series)
 
         if self._share_model:
             X = X.reshape(-1, X.shape[-1])
@@ -749,12 +755,12 @@ class Controller:
 
         return self._avg_level_counts[budget_idx]
 
-    def predict_sample(self, states: List[np.ndarray], budget: int, thresholds: Optional[np.ndarray] = None) -> int:
+    def predict_sample(self, inputs: np.ndarray, budget: int, thresholds: Optional[np.ndarray] = None) -> int:
         """
         Predicts the number of levels given the list of hidden states. The states are assumed to be in order.
 
         Args:
-            states: A list of length num_levels containing the first hidden state from each model level.
+            inputs: An array of inputs for this sequence
             budget: The budget to perform inference under. This controls the employed thresholds.
             thresholds: Optional set of thresholds to use. This argument overrides the inferred thresholds.
         Returns:
@@ -767,17 +773,44 @@ class Controller:
             # Infer the thresholds for this budget
             thresholds = self.get_thresholds(budget)
 
-        for level, state in enumerate(states):
-            # Compute the logistic model predictions. Choice of classifier depends on the model sharing choice.
-            state = state.reshape(1, -1)
-            if self._share_model:
-                logistic_prob = self._clf.predict_proba(state)[0, 1]
-            else:
-                logistic_prob = self._clf[level].predict_proba(state)[0, 1]
+        stop_output_ops = ['stop_output_{0}'.format(i) for i in range(self._model.num_outputs)]
+      
+        # Create the input feed dict
+        seq_length = self._model.metadata[SEQ_LENGTH]
+        num_sequences = self._model.num_sequences
+        samples_per_seq = int(seq_length / num_sequences)
+        feed_dict = dict()
+        for i in range(self._model.num_outputs):
+            input_ph = self._model.placeholders[get_input_name(i)]
+            if self._model.model_type in (AdaptiveModelType.SAMPLE, AdaptiveModelType.BIDIR_SAMPLE, AdaptiveModelType.ADAPTIVE_NBOW):
+                seq_indexes = list(range(i, seq_length, num_sequences))
+                sample_tensor = inputs[seq_indexes]
+                feed_dict[input_ph] = np.expand_dims(sample_tensor, axis=0)  # Make batch size 1
+            else:  # Cascade
+                start, end = i * samples_per_seq, (i+1) * samples_per_seq
+                sample_tensor = inputs[start:end]
+                feed_dict[input_ph] = np.expand_dims(sample_tensor, axis=0)  # Make batch size 1
 
-            # Return early if we find a probability larger than the corresponding threshold.
-            if thresholds[level] < logistic_prob:
+        # Supply dropout (needed for Adaptive NBOW)
+        feed_dict[self._model.placeholders[DROPOUT_KEEP_RATE]] = 1.0
+
+        model_result = self._model.execute(ops=stop_output_ops, feed_dict=feed_dict)
+        for level, op_name in enumerate(stop_output_ops):
+            stop_prob = model_result[op_name]
+
+            if thresholds[level] < stop_prob:
                 return level
+
+            # Compute the logistic model predictions. Choice of classifier depends on the model sharing choice.
+            #state = state.reshape(1, -1)
+            #if self._share_model:
+            #    logistic_prob = self._clf.predict_proba(state)[0, 1]
+            #else:
+            #    logistic_prob = self._clf[level].predict_proba(state)[0, 1]
+
+            ## Return early if we find a probability larger than the corresponding threshold.
+            #if thresholds[level] < logistic_prob:
+            #    return level
 
         # By default, we return the top level
         return self._num_levels - 1
@@ -788,22 +821,22 @@ class Controller:
         budget_idx = index_of(self._budgets, value=budget)
         assert budget_idx >= 0, 'Could not find values for budget {0}'.format(budget)
 
-        X, ypred, logits, _ = fetch_model_states(self._model, self._dataset, series=series)
+        X, ypred, logits, _, clf_predictions = fetch_model_states(self._model, self._dataset, series=series)
         level_predictions = np.argmax(logits, axis=-1)  # [B, L]
 
-        if self._share_model:
-            X = X.reshape(-1, X.shape[-1])
-            clf_predictions = self._clf.predict_proba(X)[:, 1]
-            clf_predictions = clf_predictions.reshape(-1, self._model.num_outputs)  # [B, L]
-        else:
-            clf_predictions: List[np.ndarray] = []
-            for level in range(self._model.num_outputs):
-                X_input = X[:, level, :]
-                clf_predictions.append(self._clf[level].predict_proba(X_input)[:, 1])
+       # if self._share_model:
+       #     X = X.reshape(-1, X.shape[-1])
+       #     clf_predictions = self._clf.predict_proba(X)[:, 1]
+       #     clf_predictions = clf_predictions.reshape(-1, self._model.num_outputs)  # [B, L]
+       # else:
+       #     clf_predictions: List[np.ndarray] = []
+       #     for level in range(self._model.num_outputs):
+       #         X_input = X[:, level, :]
+       #         clf_predictions.append(self._clf[level].predict_proba(X_input)[:, 1])
 
-            clf_predictions = np.transpose(np.array(clf_predictions))  # [B, L]
+       #     clf_predictions = np.transpose(np.array(clf_predictions))  # [B, L]
 
-        clf_predictions = np.expand_dims(clf_predictions, axis=0)  # [1, B, L]
+       # clf_predictions = np.expand_dims(clf_predictions, axis=0)  # [1, B, L]
 
         levels = levels_to_execute(logistic_probs=clf_predictions, thresholds=self._thresholds)
 
@@ -906,5 +939,5 @@ if __name__ == '__main__':
         controller.fit(series=DataSeries.VALID)
         controller.save()
 
-        print('Validation Accuracy: {0:.5f}'.format(controller.score(series=DataSeries.VALID)))
-        print('Test Accuracy: {0:.5f}'.format(controller.score(series=DataSeries.TEST)))
+        # print('Validation Accuracy: {0:.5f}'.format(controller.score(series=DataSeries.VALID))) 
+        # print('Test Accuracy: {0:.5f}'.format(controller.score(series=DataSeries.TEST)))
