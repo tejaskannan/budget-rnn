@@ -544,13 +544,22 @@ class AdaptiveModel(TFModel):
 
             # Compute the stop output using a single dense layer. This results in a [B, 1] array.
             state = transformed_sequence[:, 0, :]  # [B, D]
-            stop_output, _ = dense(inputs=state,
-                                   units=1,
-                                   activation='sigmoid',
-                                   use_bias=True,
-                                   name='stop-prediction')
+            #stop_output, _ = dense(inputs=state,
+            #                       units=1,
+            #                       activation='sigmoid',
+            #                       use_bias=True,
+            #                       name='stop-prediction')
+            stop_output, _ = mlp(inputs=state,
+                                 output_size=1,
+                                 hidden_sizes=self.hypers.model_params['stop_output_hidden_units'],
+                                 activations=self.hypers.model_params['stop_output_activation'],
+                                 should_bias_final=True,
+                                 should_activate_final=False,
+                                 dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                                 name='stop-prediction',
+                                 compression_fraction=None)
             stop_output = tf.squeeze(stop_output, axis=-1)  # [B]
-            self._ops['stop_output_{0}'.format(i)] = stop_output  # [B]
+            self._ops['stop_output_{0}'.format(i)] = tf.math.sigmoid(stop_output)  # [B]
             stop_outputs.append(stop_output)
 
             if self.output_type == OutputType.BINARY_CLASSIFICATION:
@@ -734,13 +743,22 @@ class AdaptiveModel(TFModel):
             first_state = tf.concat(tf.unstack(first_state, axis=0), axis=-1)  # [B, D * L]
 
             # Compute the stop output using a single dense layer. This is a [B, 1] array.
-            stop_output, _ = dense(inputs=first_state,
-                                   units=1,
-                                   activation='sigmoid',
-                                   use_bias=True,
-                                   name='stop-prediction')
+            #stop_output, _ = dense(inputs=first_state,
+            #                       units=1,
+            #                       activation='sigmoid',
+            #                       use_bias=True,
+            #                       name='stop-prediction')
+            stop_output, _ = mlp(inputs=first_state,
+                                 output_size=1,
+                                 hidden_sizes=self.hypers.model_params['stop_output_hidden_units'],
+                                 activations=self.hypers.model_params['stop_output_activation'],
+                                 should_bias_final=True,
+                                 should_activate_final=False,
+                                 dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                                 name='stop-prediction',
+                                 compression_fraction=None)
             stop_output = tf.squeeze(stop_output, axis=-1)  # [B]
-            self._ops['stop_output_{0}'.format(i)] = stop_output  # [B]
+            self._ops['stop_output_{0}'.format(i)] = tf.math.sigmoid(stop_output)  # [B]
 
             if self.output_type == OutputType.BINARY_CLASSIFICATION:
                 classification_output = compute_binary_classification_output(model_output=output,
@@ -829,11 +847,12 @@ class AdaptiveModel(TFModel):
 
             # [B, L]
             all_predictions = tf.cast(tf.argmax(self._ops[ALL_PREDICTIONS_NAME], axis=-1), dtype=tf.int32)  # [B, L]
-            stop_labels = tf.cast(tf.equal(all_predictions, self._placeholders[OUTPUT]), dtype=tf.float32)
+            stop_labels = tf.cast(tf.equal(all_predictions, self._placeholders[OUTPUT]), dtype=tf.float32)  # [B, L]
 
             # Compute binary cross entropy loss and sum over levels, average over batch
-            stop_element_loss = -stop_labels * tf.log(tf.math.maximum(stop_outputs, SMALL_NUMBER)) - \
-                                (1 - stop_labels) * tf.log(tf.math.maximum(1 - stop_outputs, SMALL_NUMBER))
+           # stop_element_loss = -stop_labels * tf.log(tf.math.maximum(stop_outputs, SMALL_NUMBER)) - \
+           #                     (1 - stop_labels) * tf.log(tf.math.maximum(1 - stop_outputs, SMALL_NUMBER))
+            stop_element_loss = tf.nn.sigmoid_cross_entropy_with_logits(logits=stop_outputs, labels=stop_labels)
 
             stop_loss = self.hypers.model_params['stop_loss_weight'] * tf.reduce_mean(tf.reduce_sum(stop_element_loss, axis=-1))
             self._ops[LOSS] += stop_loss
