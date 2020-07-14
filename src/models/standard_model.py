@@ -333,7 +333,7 @@ class StandardModel(TFModel):
         if self.hypers.model_params.get('use_loss_weights', False):
             loss_weights = np.linspace(start=(1.0 / seq_length), stop=1.0, endpoint=True, num=seq_length)
         else:
-            loss_weights = np.ones(shape=num_outputs) / num_outputs
+            loss_weights = np.ones(shape=seq_length) / seq_length
 
         # Expand for later broadcasting
         loss_weights = np.expand_dims(loss_weights, axis=0)  # [1, T]
