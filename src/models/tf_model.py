@@ -317,12 +317,6 @@ class TFModel(Model):
             # to worry about applying these operations separately.
             self._ops[optimizer_op_name] = tf.group(optimizer_op, global_step_op)
 
-            # Increment the global step counter for this optimizer
-            # self._ops[global_step] = tf.assign_add(self._global_steps[global_step], 1)
-
-        # Include the global step operation
-        # self._ops[self.global_step_op_name] = tf.assign_add(self._global_step, 1)
-
     def execute(self, feed_dict: Dict[tf.Tensor, List[Any]], ops: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Executes the model using the given feed dictionary. An optional set of operation names

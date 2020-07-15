@@ -850,8 +850,6 @@ class AdaptiveModel(TFModel):
             stop_labels = tf.cast(tf.equal(all_predictions, self._placeholders[OUTPUT]), dtype=tf.float32)  # [B, L]
 
             # Compute binary cross entropy loss and sum over levels, average over batch
-           # stop_element_loss = -stop_labels * tf.log(tf.math.maximum(stop_outputs, SMALL_NUMBER)) - \
-           #                     (1 - stop_labels) * tf.log(tf.math.maximum(1 - stop_outputs, SMALL_NUMBER))
             stop_element_loss = tf.nn.sigmoid_cross_entropy_with_logits(logits=stop_outputs, labels=stop_labels)
 
             stop_loss = self.hypers.model_params['stop_loss_weight'] * tf.reduce_mean(tf.reduce_sum(stop_element_loss, axis=-1))
