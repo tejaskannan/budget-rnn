@@ -544,11 +544,6 @@ class AdaptiveModel(TFModel):
 
             # Compute the stop output using a single dense layer. This results in a [B, 1] array.
             state = transformed_sequence[:, 0, :]  # [B, D]
-            #stop_output, _ = dense(inputs=state,
-            #                       units=1,
-            #                       activation='sigmoid',
-            #                       use_bias=True,
-            #                       name='stop-prediction')
             stop_output, _ = mlp(inputs=state,
                                  output_size=1,
                                  hidden_sizes=self.hypers.model_params['stop_output_hidden_units'],
@@ -593,6 +588,8 @@ class AdaptiveModel(TFModel):
         Builds an Adaptive RNN model.
         """
         outputs: List[tf.Tensor] = []
+        logits: List[tf.Tensor] = []
+        attn_weights: List[tf.Tensor] = []
         stop_outputs: List[tf.Tensor] = []
         states_list: List[tf.TensorArray] = []
         bw_states_list: List[tf.TensorArray] = []
@@ -727,15 +724,43 @@ class AdaptiveModel(TFModel):
 
             # [B, K]
             output_size = num_output_features if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[NUM_CLASSES]
-            output, _ = mlp(inputs=rnn_output,
-                            output_size=output_size,
-                            hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
-                            activations=self.hypers.model_params['output_hidden_activation'],
-                            should_bias_final=True,
-                            dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                            name=output_layer_name,
-                            compression_fraction=self.hypers.model_params.get('compression_fraction'),
-                            compression_seed=OUTPUT_SEED)
+            level_output, _ = mlp(inputs=rnn_output,
+                                  output_size=output_size,
+                                  hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
+                                  activations=self.hypers.model_params['output_hidden_activation'],
+                                  should_bias_final=True,
+                                  dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                                  name=output_layer_name,
+                                  compression_fraction=self.hypers.model_params.get('compression_fraction'),
+                                  compression_seed=OUTPUT_SEED)
+
+            # Compute self-attention pooling weight, [B, 1]
+            output_attn_weight, _ = mlp(inputs=rnn_output,
+                                        output_size=1,
+                                        hidden_sizes=[],
+                                        activations='sigmoid',
+                                        dropout_keep_rate=1.0,
+                                        should_bias_final=True,
+                                        should_activate_final=True,
+                                        name='output-attention')
+            attn_weights.append(output_attn_weight)  # List of [B, 1] tensors
+            logits.append(level_output)  # List of [B, K] tensors
+
+            # [B, L, 1]
+            attn_weight_concat = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), attn_weights), axis=1)
+            normalized_attn_weights = attn_weight_concat / tf.maximum(tf.reduce_sum(attn_weight_concat, axis=1, keepdims=True), SMALL_NUMBER)
+
+            # [B, L, K]
+            logits_concat = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), logits), axis=1)
+
+            # [B, K]
+            pooled_logits = tf.reduce_sum(logits_concat * normalized_attn_weights, axis=1)
+            outputs.append(pooled_logits)
+
+            self._ops['logits_concat_{0}'.format(i)] = logits_concat
+            self._ops['pooled_logits_{0}'.format(i)] = pooled_logits
+            self._ops['attn_weights_concat_{0}'.format(i)] = attn_weight_concat
+            self._ops['normalized_attn_weights_{0}'.format(i)] = normalized_attn_weights
 
             # Get the first state
             state_index = 0 if self.model_type != AdaptiveModelType.CASCADE else tf.shape(inputs)[1] - 1
@@ -743,11 +768,6 @@ class AdaptiveModel(TFModel):
             first_state = tf.concat(tf.unstack(first_state, axis=0), axis=-1)  # [B, D * L]
 
             # Compute the stop output using a single dense layer. This is a [B, 1] array.
-            #stop_output, _ = dense(inputs=first_state,
-            #                       units=1,
-            #                       activation='sigmoid',
-            #                       use_bias=True,
-            #                       name='stop-prediction')
             stop_output, _ = mlp(inputs=first_state,
                                  output_size=1,
                                  hidden_sizes=self.hypers.model_params['stop_output_hidden_units'],
@@ -759,9 +779,10 @@ class AdaptiveModel(TFModel):
                                  compression_fraction=None)
             stop_output = tf.squeeze(stop_output, axis=-1)  # [B]
             self._ops['stop_output_{0}'.format(i)] = tf.math.sigmoid(stop_output)  # [B]
+            stop_outputs.append(stop_output)
 
             if self.output_type == OutputType.BINARY_CLASSIFICATION:
-                classification_output = compute_binary_classification_output(model_output=output,
+                classification_output = compute_binary_classification_output(model_output=pooled_logits,
                                                                              labels=self._placeholders[OUTPUT])
 
                 self._ops[logits_name] = classification_output.logits
@@ -769,7 +790,7 @@ class AdaptiveModel(TFModel):
                 self._ops[accuracy_name] = classification_output.accuracy
                 self._ops[f1_score_name] = classification_output.f1_score
             elif self.output_type == OutputType.MULTI_CLASSIFICATION:
-                classification_output = compute_multi_classification_output(model_output=output,
+                classification_output = compute_multi_classification_output(model_output=pooled_logits,
                                                                             labels=self._placeholders[OUTPUT])
                 self._ops[logits_name] = classification_output.logits
                 self._ops[prediction_name] = classification_output.predictions
@@ -783,9 +804,6 @@ class AdaptiveModel(TFModel):
 
             # Save previous state for possible reuse at the next level
             prev_state = rnn_states.read(index=last_index)
-
-            outputs.append(output)
-            stop_outputs.append(stop_output)
 
         combined_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), outputs), axis=1)
         self._ops[ALL_PREDICTIONS_NAME] = combined_outputs

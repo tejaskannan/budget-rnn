@@ -198,7 +198,7 @@ def predictions_for_levels(model_predictions: np.ndarray, levels: np.ndarray, ba
 
 
 def fit_anneal_rate(start_value: float, end_value: float, steps: int):
-    return np.exp((1.0 / steps) * np.log(np.max(end_value, SMALL_NUMBER) / np.max(start_value, SMALL_NUMBER)))
+    return np.exp((1.0 / steps) * np.log(max(end_value, SMALL_NUMBER) / max(start_value, SMALL_NUMBER)))
 
 
 ### Budget optimizer classes ###

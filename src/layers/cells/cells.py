@@ -56,6 +56,15 @@ def make_single_rnn_cell(cell_type: str,
                    use_skip_connections=use_skip_connections,
                    compression_fraction=compression_fraction,
                    compression_seed=compression_seed)
+    elif cell_type == 'ugrnn':
+        return UGRNN(input_units=input_units,
+                     output_units=output_units,
+                     activation=activation,
+                     name=name,
+                     layer=layer,
+                     use_skip_connections=False,
+                     compression_fraction=compression_fraction,
+                     compression_seed=compression_seed)
     elif cell_type == 'vanilla':
         return VanillaCell(input_units=input_units,
                            output_units=output_units,
@@ -208,6 +217,81 @@ class MultiRNNCell(RNNCell):
 
         final_output = cell_outputs[-1]
         return final_output, cell_states, cell_gates
+
+
+class UGRNN(RNNCell):
+
+    def init_weights(self):
+        weight_shape = [self.state_size, self.output_units] if self.compression_fraction is None else [int(self.compression_fraction * self.state_size * self.output_units)]
+
+        self.W_update = tf.get_variable(name=f'{self.name}-W-update-kernel',
+                                        initializer=self.initializer,
+                                        shape=weight_shape,
+                                        trainable=True)
+        self.U_update = tf.get_variable(name=f'{self.name}-U-update-kernel',
+                                        initializer=self.initializer,
+                                        shape=weight_shape,
+                                        trainable=True)
+        self.b_update = tf.get_variable(name=f'{self.name}-b-update-bias',
+                                        initializer=self.initializer,
+                                        shape=[1, self.output_units],
+                                        trainable=True)
+
+        self.W = tf.get_variable(name=f'{self.name}-W-kernel',
+                                 initializer=self.initializer,
+                                 shape=weight_shape,
+                                 trainable=True)
+        self.U = tf.get_variable(name=f'{self.name}-U-kernel',
+                                 initializer=self.initializer,
+                                 shape=weight_shape,
+                                 trainable=True)
+        self.b = tf.get_variable(name=f'{self.name}-b-bias',
+                                 initializer=self.initializer,
+                                 shape=[1, self.output_units],
+                                 trainable=True)
+
+    def __call__(self, inputs: tf.Tensor,
+                 state: tf.Tensor,
+                 skip_input: Optional[tf.Tensor] = None) -> Tuple[tf.Tensor, tf.Tensor, List[tf.Tensor]]:
+        # Create the update and reset vectors
+        update_state_vector, _ = dense(inputs=state,
+                                       units=self.output_units,
+                                       use_bias=False,
+                                       activation=None,
+                                       name='{0}-W-update'.format(self.name),
+                                       compression_fraction=self.compression_fraction,
+                                       compression_seed='{0}W{1}{2}'.format(self.compression_seed, UPDATE_SEED, self.layer))
+        update_input_vector, _ = dense(inputs=inputs,
+                                       units=self.output_units,
+                                       use_bias=False,
+                                       activation=None,
+                                       name='{0}-U-update'.format(self.name),
+                                       compression_fraction=self.compression_fraction,
+                                       compression_seed='{0}U{1}{2}'.format(self.compression_seed, UPDATE_SEED, self.layer))
+        update_gate = tf.math.sigmoid(update_state_vector + update_input_vector + self.b_update)
+
+        # Create the candidate state
+        candidate_reset, _ = dense(inputs=state,
+                                   units=self.output_units,
+                                   use_bias=False,
+                                   activation=None,
+                                   name='{0}-W'.format(self.name),
+                                   compression_fraction=self.compression_fraction,
+                                   compression_seed='{0}W{1}{2}'.format(self.compression_seed, CANDIDATE_SEED, self.layer))
+        candidate_input, _ = dense(inputs=inputs,
+                                   units=self.output_units,
+                                   use_bias=False,
+                                   activation=None,
+                                   name='{0}-U'.format(self.name),
+                                   compression_fraction=self.compression_fraction,
+                                   compression_seed='{0}U{1}{2}'.format(self.compression_seed, CANDIDATE_SEED, self.layer))
+
+        candidate_state = self.activation(candidate_reset + candidate_input + self.b)
+
+        # Form the next state using the update gate
+        next_state = update_gate * state + (1.0 - update_gate) * candidate_state
+
+        return next_state, next_state, [update_gate]
 
 
 class GRU(RNNCell):
