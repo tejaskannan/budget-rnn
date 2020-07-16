@@ -69,7 +69,7 @@ class StandardModel(TFModel):
     def output_ops(self) -> List[str]:
         return self.prediction_ops
 
-    def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
+    def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool, epoch_num: int) -> Dict[tf.Tensor, np.ndarray]:
         dropout = self.hypers.dropout_keep_rate if is_train else 1.0
         input_batch = np.array(batch[INPUTS])
         output_batch = np.array(batch[OUTPUT])

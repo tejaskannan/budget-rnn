@@ -14,16 +14,15 @@ from models.standard_model import StandardModel
 from dataset.dataset import DataSeries, Dataset
 from dataset.dataset_factory import get_dataset
 from utils.hyperparameters import HyperParameters
-from utils.rnn_utils import get_logits_name, get_states_name, AdaptiveModelType
+from utils.rnn_utils import get_logits_name, get_states_name, AdaptiveModelType, is_cascade
 from utils.file_utils import extract_model_name, read_by_file_suffix, save_by_file_suffix, make_dir
 from utils.np_utils import min_max_normalize, round_to_precision
 from utils.constants import OUTPUT, SMALL_NUMBER, INPUTS, OPTIMIZED_TEST_LOG_PATH, METADATA_PATH, HYPERS_PATH, PREDICTION, SEQ_LENGTH
 from utils.adaptive_inference import normalize_logits, threshold_predictions
 from utils.testing_utils import ClassificationMetric
-from controllers.logistic_regression_controller import Controller, CONTROLLER_PATH, get_power_for_levels, POWER
+from controllers.logistic_regression_controller import Controller, CONTROLLER_PATH, get_power_for_levels, POWER, RandomController
 
 
-# POWER = np.array([24.085, 32.776, 37.897, 43.952, 48.833, 50.489, 54.710, 57.692, 59.212, 59.251])
 PowerEstimate = namedtuple('PowerEstimate', ['avg_power', 'fraction'])
 SMOOTHING_FACTOR = 100
 
@@ -73,7 +72,7 @@ def get_baseline_model_results(model: Model, dataset: Dataset, series: DataSerie
                                                  batch_size=model.hypers.batch_size,
                                                  should_shuffle=shuffle)
     for batch in data_generator:
-        feed_dict = model.batch_to_feed_dict(batch, is_train=False)
+        feed_dict = model.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
 
         batch_predictions = model.execute(ops=[PREDICTION], feed_dict=feed_dict)
 
@@ -145,23 +144,6 @@ class PIController:
         self._errors = []
         self._times = []
         self._integral = 0.0
-
-
-class RandomController(PIController):
-    
-    def __init__(self, budget: float):
-        super().__init__(0.0, 0.0)
-        self._budget = budget
-
-        power_array = np.array(POWER)
-        weights = np.linalg.lstsq(power_array.reshape(1, -1), np.array([self._budget]))[0]
-
-        self._weights = weights / np.sum(weights)
-        self._indices = np.arange(start=0, stop=len(POWER))
-        self._rand = np.random.RandomState(seed=42)
-    
-    def step(self, y_true: Union[float, int], y_pred: Union[float, int], time: float) -> Union[float, int]:
-        return int(self._rand.choice(self._indices, size=1, p=self._weights))
 
 
 class BudgetController(PIController):
@@ -302,18 +284,18 @@ def get_model_results(model: AdaptiveModel, dataset: Dataset, shuffle: bool, ser
                                                  should_shuffle=shuffle)
 
     states_idx = 0
-    if model.model_type == AdaptiveModelType.CASCADE:
+    if is_cascade(model.model_type):
         states_idx = -1
 
     for batch_num, batch in enumerate(data_generator):
         # Compute the predicted log probabilities
-        feed_dict = model.batch_to_feed_dict(batch, is_train=False)
+        feed_dict = model.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
         model_results = model.execute(feed_dict, logit_ops + state_ops)
 
         first_states = np.concatenate([np.expand_dims(np.squeeze(model_results[op][states_idx]), axis=1) for op in state_ops], axis=1)
 
         inputs = np.array(batch[INPUTS])
-        if model.model_type == AdaptiveModelType.CASCADE:
+        if is_cascade(model.model_type):
             stride = int(seq_length / num_sequences)
             first_inputs = np.concatenate([inputs[:, :, i, :] for i in range(0, seq_length, stride)], axis=1)
         else:
@@ -394,10 +376,6 @@ def get_accuracy_index(system_acc: float, level_accuracy: np.ndarray) -> int:
     diff = np.abs(system_acc - level_accuracy)
     nearest_level = np.argmin(diff)
 
-    #mask = (np.arange(level_accuracy.shape[0]) < nearest_level).astype(float)
-    # mask = (level_accuracy >= system_acc - SMALL_NUMBER).astype(float)
-    # masked_accuracy = level_accuracy * mask
-    # best_level_below = np.argmax(masked_accuracy)
     best_level_above = level_accuracy.shape[0] - 1
     for idx, acc in enumerate(level_accuracy):
         if acc >= system_acc:
@@ -405,10 +383,6 @@ def get_accuracy_index(system_acc: float, level_accuracy: np.ndarray) -> int:
             break
 
     return min(nearest_level, best_level_above)
-
-   # if level_accuracy[nearest_level] > level_accuracy[best_level_below]:
-   #     return nearest_level
-   # return best_level_below
 
 
 def run_fixed_policy(labels: np.ndarray,
@@ -461,10 +435,12 @@ def run_simulation(labels: np.ndarray,
                    num_classes: int,
                    noise: float,
                    precision: int,
-                   model_path: str):
+                   model_path: str,
+                   dataset_folder: str):
     # Create the model controller
     if controller_type == 'random':
-        controller = RandomController(budget=budget)
+        controller = RandomController(model_path=model_path, dataset_folder=dataset_folder, budgets=[budget], power=power_estimates)
+        controller.fit(series=DataSeries.VALID)
     elif controller_type == 'logistic':
         save_folder, model_file_name = os.path.split(model_path)
         model_name = extract_model_name(model_file_name)
@@ -725,7 +701,8 @@ if __name__ == '__main__':
                                                                                  power_estimates=power_estimates,
                                                                                  noise=args.noise,
                                                                                  precision=args.precision,
-                                                                                 model_path=args.adaptive_model_path)
+                                                                                 model_path=args.adaptive_model_path,
+                                                                                 dataset_folder=args.dataset_folder)
         
         # Plot and save the results
         plot_and_save(power=power,

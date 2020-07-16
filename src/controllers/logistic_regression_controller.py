@@ -9,7 +9,7 @@ from typing import List, Optional, Tuple
 from dataset.dataset import Dataset, DataSeries
 from models.adaptive_model import AdaptiveModel
 from threshold_optimization.optimize_thresholds import get_serialized_info
-from utils.rnn_utils import get_logits_name, get_states_name, AdaptiveModelType, get_input_name
+from utils.rnn_utils import get_logits_name, get_states_name, AdaptiveModelType, get_input_name, is_cascade, is_sample
 from utils.np_utils import index_of, round_to_precision
 from utils.constants import OUTPUT, BIG_NUMBER, SMALL_NUMBER, INPUTS, SEQ_LENGTH, DROPOUT_KEEP_RATE
 from utils.file_utils import save_pickle_gz, read_pickle_gz, extract_model_name
@@ -57,7 +57,7 @@ def fetch_model_states(model: AdaptiveModel, dataset: Dataset, series: DataSerie
 
     # Index of state to use for stop/start prediction
     states_index = 0
-    if model.model_type == AdaptiveModelType.CASCADE:
+    if is_cascade(model.model_type):
         states_index = -1
 
     seq_length = model.metadata[SEQ_LENGTH]
@@ -65,7 +65,7 @@ def fetch_model_states(model: AdaptiveModel, dataset: Dataset, series: DataSerie
 
     for batch_num, batch in enumerate(data_generator):
         # Compute the predicted log probabilities
-        feed_dict = model.batch_to_feed_dict(batch, is_train=False)
+        feed_dict = model.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
         model_results = model.execute(feed_dict, logit_ops + state_ops + stop_output_ops)
 
         first_states = np.concatenate([np.expand_dims(np.squeeze(model_results[op][states_index]), axis=1) for op in state_ops], axis=1)  # [B, D]
@@ -621,37 +621,13 @@ class Controller:
 
         print('Train Accuracy: {0}'.format(train_acc))
         self._budget_optimizer.print_accuracy_for_levels(network_results=y_train, clf_predictions=clf_predictions, thresholds=self._thresholds)
-        # level_errors(clf_predictions, self._thresholds, y_train)
 
         print('Test Accuracy: {0}'.format(test_acc))
         self._budget_optimizer.print_accuracy_for_levels(network_results=y_test, clf_predictions=test_clf_predictions, thresholds=self._thresholds)
-        # level_errors(test_clf_predictions, self._thresholds, y_test)
 
         print('=====')
 
-        # adjusted_thresholds = adjust_thresholds(test_clf_predictions, thresholds=self._thresholds, precision=self._precision, target_distribution=self._avg_level_counts)
-        # print('Adjusted Test Accuracy:')
-        # self._budget_optimizer.print_accuracy_for_levels(network_results=y_test, clf_predictions=test_clf_predictions, thresholds=adjusted_thresholds)
-
         self._is_fitted = True
-
-    def score(self, series: DataSeries) -> np.ndarray:
-        assert self._is_fitted, 'Model is not fitted'
-        X, y, _, _, clf_predictions = fetch_model_states(self._model, self._dataset, series=series)
-
-        if self._share_model:
-            X = X.reshape(-1, X.shape[-1])
-            y = y.reshape(-1)
-
-            accuracy = self._clf.score(X, y)
-        else:
-            total_accuracy = 0.0
-            for level in range(self._model.num_outputs):
-                total_accuracy += self._clf[level].score(X[:, level, :], y[:, level])
-
-            accuracy = total_accuracy / self._model.num_outputs
-
-        return accuracy
 
     def get_thresholds(self, budget: int) -> np.ndarray:
         budget_idx = index_of(self._budgets, value=budget)
@@ -692,7 +668,7 @@ class Controller:
         feed_dict = dict()
         for i in range(self._model.num_outputs):
             input_ph = self._model.placeholders[get_input_name(i)]
-            if self._model.model_type in (AdaptiveModelType.SAMPLE, AdaptiveModelType.BIDIR_SAMPLE, AdaptiveModelType.ADAPTIVE_NBOW):
+            if is_sample(self._model.model_type):
                 seq_indexes = list(range(i, seq_length, num_sequences))
                 sample_tensor = inputs[seq_indexes]
                 feed_dict[input_ph] = np.expand_dims(sample_tensor, axis=0)  # Make batch size 1
@@ -791,6 +767,83 @@ class Controller:
         return controller
 
 
+class RandomController(Controller):
+
+    def __init__(self, model_path: str, dataset_folder: str, budgets: List[float], power: np.ndarray):
+        self._model_path = model_path
+        self._dataset_folder = dataset_folder
+
+        # Load the model and dataset
+        self._model, self._dataset, _ = get_serialized_info(model_path, dataset_folder=dataset_folder)
+
+        self._share_model = False
+        self._precision = 0
+        self._budgets = np.array(budgets)
+        self._trials = 0
+        self._power = power
+        self._budget_optimizer_type = 'random'
+        self._patience = 0
+        self._max_iter = 0
+        self._min_iter = 0
+
+        # Create random state for reproducible results
+        self._rand = np.random.RandomState(seed=62)
+
+    def fit(self, series: DataSeries):
+        # Fit a weighted average for each budget
+        thresholds: List[np.ndarray] = []
+        for budget in self._budgets:
+            distribution = DistributionPrior(self._power, target=budget)
+            distribution.make()
+            distribution.init()
+            
+            thresholds.append(distribution.fit())
+
+        self._thresholds = np.vstack(thresholds)
+
+        self._is_fitted = True
+
+    def predict_sample(self, inputs: np.ndarray, budget: int, thresholds: Optional[np.ndarray] = None) -> int:
+        """
+        Predicts the number of levels given the list of hidden states. The states are assumed to be in order.
+
+        Args:
+            inputs: An array of inputs for this sequence
+            budget: The budget to perform inference under. This controls the employed thresholds.
+            thresholds: Optional set of thresholds to use. This argument overrides the inferred thresholds.
+        Returns:
+            The number of levels to execute.
+        """
+        assert self._is_fitted, 'Model is not fitted'
+
+        # Get thresholds for this budget if needed to infer
+        if thresholds is None:
+            thresholds = self.get_thresholds(budget)
+
+        levels = np.arange(thresholds.shape[0])  # [L]
+        return self._rand.choice(levels, p=thresholds)
+
+    def predict_levels(self, series: DataSeries, budget: float) -> Tuple[np.ndarray, np.ndarray]:
+        assert self._is_fitted, 'Model is not fitted'
+
+        budget_idx = index_of(self._budgets, value=budget)
+        assert budget_idx >= 0, 'Could not find values for budget {0}'.format(budget)
+
+        _, _, logits, _, _ = fetch_model_states(self._model, self._dataset, series=series)
+        level_predictions = np.argmax(logits, axis=-1)  # [B, L]
+
+        budget_distribution = self._thresholds[budget_idx]
+        levels_idx = np.arange(budget_distribution.shape[0])  # [L]
+        levels = self._rand.choice(levels_idx, p=budget_distribution, size=level_predictions.shape[0])  # [B]
+
+        batch_idx = np.arange(level_predictions.shape[0])
+        predictions = predictions_for_levels(model_predictions=level_predictions,
+                                             levels=np.expand_dims(levels, axis=0),
+                                             batch_idx=batch_idx)
+
+        return levels.astype(int), predictions[budget_idx].astype(int)
+
+
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--model-paths', type=str, nargs='+')
@@ -801,7 +854,7 @@ if __name__ == '__main__':
     parser.add_argument('--patience', type=int, default=15)
     parser.add_argument('--max-iter', type=int, default=100)
     parser.add_argument('--min-iter', type=int, default=20)
-    parser.add_argument('--budget-optimizer', type=str, choices=['coordinate', 'sim-anneal'])
+    parser.add_argument('--budget-optimizer', type=str, choices=['coordinate', 'sim-anneal'], required=True)
     args = parser.parse_args()
 
     for model_path in args.model_paths:

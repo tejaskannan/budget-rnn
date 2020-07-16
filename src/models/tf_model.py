@@ -218,13 +218,14 @@ class TFModel(Model):
                            flops_dict: Optional[Dict[str, int]]) -> DefaultDict[str, Dict[str, float]]:
         raise NotImplementedError()
 
-    def batch_to_feed_dict(self, batch: Dict[str, np.ndarray], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
+    def batch_to_feed_dict(self, batch: Dict[str, np.ndarray], is_train: bool, epoch_num: int) -> Dict[tf.Tensor, np.ndarray]:
         """
         Converts the batch value dictionary into a tensorflow feed dictionary.
 
         Args:
             batch: Batch dictionary as produced by a dataset batch generator.
             is_train: Whether the model is created during training.
+            epoch_num: The epoch number.
         Returns:
             A feed dictionary to provide to Tensorflow.
         """
@@ -426,12 +427,28 @@ class TFModel(Model):
             if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
                 train_ops_to_run += self.accuracy_op_names
 
+            # train_ops_to_run.extend(['first_states_0', 'first_states_1', 'first_attn_weights_0', 'first_attn_weights_1', 'normalized_attn_weights_0', 'normalized_attn_weights_1', 'stop_output_state_0', 'stop_output_state_1', 'transformed_0', 'transformed_1'])
+
             train_batch_counter = 1
             for batch in train_generator:
-                feed_dict = self.batch_to_feed_dict(batch, is_train=True)
+                feed_dict = self.batch_to_feed_dict(batch, is_train=True, epoch_num=epoch)
 
                 # Run the training operations
                 train_results = self.execute(feed_dict, train_ops_to_run)
+
+                #print('States 0: {0}'.format(train_results['first_states_0']))
+                #print('Attn Weights 0: {0}'.format(train_results['first_attn_weights_0']))
+                #print('Normalized Attn Weights 0: {0}'.format(train_results['normalized_attn_weights_0']))
+                #print('Stop Output 0: {0}'.format(train_results['stop_output_state_0']))
+                #print('Transformed 0: {0}'.format(train_results['transformed_0']))
+                #print('States 1: {0}'.format(train_results['first_states_1']))
+                #print('Attn Weights 1: {0}'.format(train_results['first_attn_weights_1']))
+                #print('Normalized Attn Weights 1: {0}'.format(train_results['normalized_attn_weights_1']))
+                #print('Stop Output 1: {0}'.format(train_results['stop_output_state_1']))
+                #print('Transformed 1: {0}'.format(train_results['transformed_1']))
+
+
+                #assert False, 'Stop here'
 
                 batch_loss = 0.0
                 for loss_op_name in self.loss_op_names:
@@ -478,7 +495,7 @@ class TFModel(Model):
 
             valid_batch_counter = 1
             for batch in valid_generator:
-                feed_dict = self.batch_to_feed_dict(batch, is_train=False)
+                feed_dict = self.batch_to_feed_dict(batch, is_train=False, epoch_num=epoch)
 
                 # Run the validation operations
                 valid_results = self.execute(feed_dict, valid_ops_to_run)
