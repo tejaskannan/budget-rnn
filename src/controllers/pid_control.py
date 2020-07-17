@@ -148,16 +148,11 @@ class PIController:
 
 class BudgetController(PIController):
 
-    def __init__(self, kp: float, ki: float, output_range: Tuple[int, int], budget: float, margin: float, power_factor: float):
+    def __init__(self, kp: float, ki: float, output_range: Tuple[int, int], budget: float, power_factor: float):
         super().__init__(kp, ki)
         self._output_range = output_range
         self._budget = budget
-        self._margin = margin
         self._power_factor = power_factor
-
-    def update(self, **kwargs):
-        anneal_rate = kwargs['anneal_rate']
-        self._margin = self._margin * anneal_rate
 
     def plant_function(self, y_true: Union[float, int], y_pred: Union[float, int], proportional_error: float, integral_error: float) -> Union[float, int]:
         # Error in power budget. For now, we only care about the upper bound budget
@@ -165,22 +160,14 @@ class BudgetController(PIController):
 
         power = y_pred
         step = abs(control_signal) * self._power_factor
+        limit = y_true
 
-        lower_limit = y_true * (1.0 - self._margin)
-        upper_limit = y_true * (1.0 + self._margin)
-
-        if power <= upper_limit:
+        if power <= limit:
             return 0  # By returning the highest # of levels, we allow the model controller to control
-        
-        sign = 1
-        if power > upper_limit:
-            sign = -1
 
-        step = int(math.floor(sign * step))
-
-        if step == 0:
-            return sign
-        return step
+        # The power is too high, so we decrease it
+        step = int(math.floor(step))
+        return -step
 
 
 class BudgetDistribution:
@@ -191,20 +178,14 @@ class BudgetDistribution:
                  max_time: int,
                  num_levels: int,
                  num_classes: int,
-                 warmup_frac: float,
                  panic_frac: float,
-                 margin: float,
-                 anneal_rate: float,
                  power: np.ndarray):
         self._prior_counts = prior_counts  # key: class index, value: array [L] counts for each level
         self._max_time = max_time
         self._budget = budget
         self._num_levels = num_levels
         self._num_classes = num_classes
-        self._warmup_time = int(warmup_frac * max_time)
         self._panic_time = int(panic_frac * max_time)
-        self._margin = margin
-        self._anneal_rate = anneal_rate
         self._power = power
 
         # Estimated count of each label over the time window
@@ -217,9 +198,8 @@ class BudgetDistribution:
         self._observed_label_counts = np.zeros_like(self._estimated_label_counts)
 
     def get_budget(self, time: int) -> float:
-        if time < self._warmup_time:
-            return budget * (1 + self._margin)
-        elif time > self._panic_time:
+        # Force the budget after the panic time is reached
+        if time > self._panic_time:
             return budget
 
         expected_rest = 0
@@ -261,9 +241,6 @@ class BudgetDistribution:
     def update(self, label: int, levels: int, time: int):
         self._observed_label_counts[label] += 1
         self._prior_counts[label][levels] += 1
-
-        if time > self._warmup_time:
-            self._margin = self._margin * self._anneal_rate
 
 
 # Function to get model results
@@ -466,14 +443,9 @@ def run_simulation(labels: np.ndarray,
 
     rand = np.random.RandomState(seed=42)
 
-    # Parameters for model schedule
-    start_margin = 5.0
-    end_margin = margin
-    anneal_rate = np.exp((1.0 / max_time) * np.log((end_margin + SMALL_NUMBER) / start_margin))
-
     # Create the budget controller
     output_range = (0, num_levels - 1)
-    budget_controller = BudgetController(kp=1.0, ki=0.0625, output_range=output_range, budget=budget, margin=margin, power_factor=1.0)
+    budget_controller = BudgetController(kp=1.0, ki=0.0625, output_range=output_range, budget=budget, power_factor=1.0)
     current_budget = budget
 
     level_counts = np.zeros(shape=(num_levels, ))
@@ -487,10 +459,7 @@ def run_simulation(labels: np.ndarray,
                                              max_time=max_time,
                                              num_levels=num_levels,
                                              num_classes=num_classes,
-                                             warmup_frac=0.0,
                                              panic_frac=0.95,
-                                             margin=0.2,
-                                             anneal_rate=0.9,
                                              power=power_estimates)
 
     for t in range(max_time):
@@ -521,8 +490,6 @@ def run_simulation(labels: np.ndarray,
 
         levels_per_label[model_prediction].append(y_pred)
         level_counts[y_pred_model] += 1
-
-        budget_distribution.update(label=model_prediction, levels=y_pred, time=t+1)
 
     print('Level Distribution: {0}'.format(level_counts / max_time))
     print('Accuracy: {0}'.format(np.average(num_correct)))
@@ -661,17 +628,13 @@ if __name__ == '__main__':
     parser.add_argument('--budgets', type=float, nargs='+')
     parser.add_argument('--output-folder', type=str)
     parser.add_argument('--noise', type=float, default=1.0)
-    parser.add_argument('--margin', type=float, default=0.001)
     parser.add_argument('--shuffle', action='store_true')
     parser.add_argument('--controller', type=str, choices=['random', 'logistic'], default='logistic')
     args = parser.parse_args()
 
-    # Validate the budget and margin
+    # Validate the budget
     budgets = args.budgets
     assert all([b > 0 for b in budgets]), 'Must have a positive budgets'
-
-    margin = args.margin
-    assert margin >= 0 and margin <= 1, 'Must have a margin in the range [0, 1]'
 
     # Create the adaptive model
     adaptive_model, dataset = get_serialized_info(args.adaptive_model_path, dataset_folder=args.dataset_folder)
