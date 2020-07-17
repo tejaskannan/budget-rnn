@@ -16,7 +16,7 @@
 		"output_hidden_activation": "relu",
         "output_type": "multi_classification",
         "embedding_activation": "relu",
-	    "pool_mode": "average",
+	    "pool_mode": "attention",
         "mlp_hidden_units": [24, 24],
         "mlp_activation": "relu",
 		"model_type": "nbow",

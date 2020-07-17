@@ -9,7 +9,7 @@
     "dataset_type": "standard",
     "input_noise": 0.001,
     "batch_noise": 0.0,
-    "seq_length": 20,
+    "seq_length": 50,
 	"model_params": {
 		"state_size": 20,
 		"sample_frac": 0.1,

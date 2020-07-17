@@ -24,6 +24,7 @@
         "share_output_weights": false,
         "share_embedding_weights": false,
 		"loss_weights": false,
+	"enforce_level_penalty": false,
         "loss_mode": "cross-entropy",
         "normalize_inputs": true,
         "compression_fraction": 0.2

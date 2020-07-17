@@ -30,6 +30,10 @@
         "loss_mode": "cross-entropy",
         "enforce_level_penalty": false,
         "fusion_mode": "gate",
-        "normalize_inputs": true
+        "normalize_inputs": true,
+	"use_stop_layer": true,
+	"stop_loss_weight": 0.25,
+	"stop_output_activation": "leaky_relu",
+	"stop_output_hidden_units": [4]
 	}
 }

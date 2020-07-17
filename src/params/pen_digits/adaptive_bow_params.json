@@ -27,6 +27,9 @@
         "enforce_level_penalty": false,
         "loss_mode": "cross-entropy",
         "normalize_inputs": true,
-        "compression_fraction": 0.2
+	"use_stop_layer": true,
+	"stop_loss_weight": 0.25,
+	"stop_output_activation": "leaky_relu",
+	"stop_output_hidden_units": [4]
 	}
 }

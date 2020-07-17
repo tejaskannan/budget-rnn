@@ -31,7 +31,7 @@
         "loss_mode": "cross-entropy",
         "fusion_mode": "average",
         "combine_element_wise": true,
-        "normalize_inputs": true
+        "normalize_inputs": true,
         "compression_fraction": 0.2
 	}
 }

@@ -28,7 +28,7 @@
         "share_rnn_weights": true,
 		"loss_weights": true,
         "loss_mode": "cross-entropy",
-        "fusion_mode": "average",
+        "fusion_mode": "gate",
         "combine_element_wise": true,
         "normalize_inputs": true,
         "compression_fraction": 0.2,
