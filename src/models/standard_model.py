@@ -332,6 +332,7 @@ class StandardModel(TFModel):
         # Create the loss weights
         if self.hypers.model_params.get('use_loss_weights', False):
             loss_weights = np.linspace(start=(1.0 / seq_length), stop=1.0, endpoint=True, num=seq_length)
+            loss_weights = loss_weights / np.sum(loss_weights)  # NOrmalize the loss weights
         else:
             loss_weights = np.ones(shape=seq_length) / seq_length
 
@@ -351,8 +352,6 @@ class StandardModel(TFModel):
             sample_loss = tf.square(predictions - expected_output)
 
         # Compute weighted average over samples and unweighted average over batch
-        print(loss_weights)
-        print(loss_weights.shape)
         self._ops[LOSS] = tf.reduce_mean(tf.reduce_sum(sample_loss * loss_weights, axis=-1))
 
         # Add any regularization to the loss function

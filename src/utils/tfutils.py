@@ -319,6 +319,10 @@ def tf_rnn_cell(cell_type: str, num_units: int, activation: str, layers: int, na
                                            activation=get_activation(activation),
                                            initializer=tf.glorot_uniform_initializer(),
                                            name=name)
+        elif cell_type == 'ugrnn':
+            return tf.contrib.rnn.UGRNNCell(num_units=num_units,
+                                            initializer=tf.glorot_uniform_initializer())
+
         raise ValueError(f'Unknown cell type: {cell_type}')
 
     cell_type = cell_type.lower()

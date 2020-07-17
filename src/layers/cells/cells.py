@@ -268,7 +268,7 @@ class UGRNN(RNNCell):
                                        name='{0}-U-update'.format(self.name),
                                        compression_fraction=self.compression_fraction,
                                        compression_seed='{0}U{1}{2}'.format(self.compression_seed, UPDATE_SEED, self.layer))
-        update_gate = tf.math.sigmoid(update_state_vector + update_input_vector + self.b_update)
+        update_gate = tf.math.sigmoid(update_state_vector + update_input_vector + self.b_update + 1)
 
         # Create the candidate state
         candidate_reset, _ = dense(inputs=state,
