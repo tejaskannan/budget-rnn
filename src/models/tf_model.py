@@ -218,13 +218,14 @@ class TFModel(Model):
                            flops_dict: Optional[Dict[str, int]]) -> DefaultDict[str, Dict[str, float]]:
         raise NotImplementedError()
 
-    def batch_to_feed_dict(self, batch: Dict[str, np.ndarray], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
+    def batch_to_feed_dict(self, batch: Dict[str, np.ndarray], is_train: bool, epoch_num: int) -> Dict[tf.Tensor, np.ndarray]:
         """
         Converts the batch value dictionary into a tensorflow feed dictionary.
 
         Args:
             batch: Batch dictionary as produced by a dataset batch generator.
             is_train: Whether the model is created during training.
+            epoch_num: The epoch number.
         Returns:
             A feed dictionary to provide to Tensorflow.
         """
@@ -316,12 +317,6 @@ class TFModel(Model):
             # Add operations. By coupling the optimizer and the global step ops, we don't need
             # to worry about applying these operations separately.
             self._ops[optimizer_op_name] = tf.group(optimizer_op, global_step_op)
-
-            # Increment the global step counter for this optimizer
-            # self._ops[global_step] = tf.assign_add(self._global_steps[global_step], 1)
-
-        # Include the global step operation
-        # self._ops[self.global_step_op_name] = tf.assign_add(self._global_step, 1)
 
     def execute(self, feed_dict: Dict[tf.Tensor, List[Any]], ops: Optional[List[str]] = None) -> Dict[str, Any]:
         """
@@ -434,7 +429,7 @@ class TFModel(Model):
 
             train_batch_counter = 1
             for batch in train_generator:
-                feed_dict = self.batch_to_feed_dict(batch, is_train=True)
+                feed_dict = self.batch_to_feed_dict(batch, is_train=True, epoch_num=epoch)
 
                 # Run the training operations
                 train_results = self.execute(feed_dict, train_ops_to_run)
@@ -484,7 +479,7 @@ class TFModel(Model):
 
             valid_batch_counter = 1
             for batch in valid_generator:
-                feed_dict = self.batch_to_feed_dict(batch, is_train=False)
+                feed_dict = self.batch_to_feed_dict(batch, is_train=False, epoch_num=epoch)
 
                 # Run the validation operations
                 valid_results = self.execute(feed_dict, valid_ops_to_run)

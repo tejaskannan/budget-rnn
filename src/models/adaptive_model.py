@@ -16,7 +16,7 @@ from utils.tfutils import pool_rnn_outputs, expand_to_matrix
 from utils.misc import sample_sequence_batch, batch_sample_noise
 from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, OUTPUT, INPUTS, LOSS, OUTPUT_SEED, OPTIMIZER_OP, GLOBAL_STEP
 from utils.constants import NODE_REGEX_FORMAT, DROPOUT_KEEP_RATE, MODEL, SCHEDULED_MODEL, NUM_CLASSES, TRANSFORM_SEED
-from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE, EMBEDDING_SEED, AGGREGATE_SEED
+from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE, EMBEDDING_SEED, AGGREGATE_SEED, STOP_LOSS_WEIGHT
 from utils.loss_utils import f1_score_loss, binary_classification_loss
 from utils.rnn_utils import *
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
@@ -34,7 +34,6 @@ class AdaptiveModel(TFModel):
         self.name = model_type
 
         self._has_shared_weights = any(val for key, val in self.hypers.model_params.items() if key.startswith('share') and key.endswith('weights'))
-        self._is_independent = self.model_type in (AdaptiveModelType.INDEPENDENT_RNN, AdaptiveModelType.INDEPENDENT_BIRNN, AdaptiveModelType.INDEPENDENT_NBOW)
 
     @property
     def sample_frac(self) -> float:
@@ -75,23 +74,23 @@ class AdaptiveModel(TFModel):
 
     @property
     def loss_op_names(self) -> List[str]:
-        if self._is_independent and not self._has_shared_weights:
+        if is_independent(self.model_type) and not self._has_shared_weights:
             return [get_loss_name(i) for i in range(self.num_outputs)]
         return [LOSS]
 
     @property
     def optimizer_op_names(self) -> List[str]:
-        if self._is_independent and not self._has_shared_weights:
+        if is_independent(self.model_type) and not self._has_shared_weights:
             return ['{0}_{1}'.format(OPTIMIZER_OP, i) for i in range(self.num_outputs)]
         return [OPTIMIZER_OP]
 
     @property
     def global_step_op_names(self) -> List[str]:
-        if self._is_independent and not self._has_shared_weights:
+        if is_independent(self.model_type) and not self._has_shared_weights:
             return ['{0}_{1}'.format(GLOBAL_STEP, i) for i in range(self.num_outputs)]
         return [GLOBAL_STEP]
 
-    def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
+    def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool, epoch_num: int) -> Dict[tf.Tensor, np.ndarray]:
         dropout = self.hypers.dropout_keep_rate if is_train else 1.0
         input_batch = np.array(batch[INPUTS])
         output_batch = np.array(batch[OUTPUT])
@@ -103,9 +102,15 @@ class AdaptiveModel(TFModel):
         num_output_features = self.metadata[NUM_OUTPUT_FEATURES]
         seq_lenth = self.metadata[SEQ_LENGTH]
 
+        # Calculate the stop loss weight based on the patience, number of levels, and epoch number
+        # This weight will start at 1 / (L + Patience) and end at 1 / L after `patience` epochs.
+        # We clip the output to 1 / L as a maximum value.
+        reciprocal_stop_loss_weight = self.num_sequences + max(self.hypers.patience - epoch_num, 0)
+
         feed_dict = {
             self._placeholders[OUTPUT]: output_batch.reshape(-1, num_output_features),
-            self._placeholders[DROPOUT_KEEP_RATE]: dropout
+            self._placeholders[DROPOUT_KEEP_RATE]: dropout,
+            self._placeholders[STOP_LOSS_WEIGHT]: (1.0 / reciprocal_stop_loss_weight)
         }
 
         # Sample the batch down to the correct sequence length
@@ -136,16 +141,16 @@ class AdaptiveModel(TFModel):
         for i in range(num_sequences):
             input_ph = self.placeholders[get_input_name(i)]
 
-            if self._is_independent:  # Independent RNN, BIRNN or NBOW
+            if is_independent(self.model_type):  # Independent RNN, BIRNN or NBOW
                 seq_indexes.extend(range(i, seq_length, num_sequences))
                 seq_indexes = list(sorted(seq_indexes))
                 sample_tensor = input_batch[:, seq_indexes]
                 feed_dict[input_ph] = sample_tensor
-            elif self.model_type in (AdaptiveModelType.SAMPLE, AdaptiveModelType.BIDIR_SAMPLE, AdaptiveModelType.ADAPTIVE_NBOW):
+            elif is_sample(self.model_type):
                 seq_indexes = list(range(i, seq_length, num_sequences))
                 sample_tensor = input_batch[:, seq_indexes]
                 feed_dict[input_ph] = sample_tensor
-            else:  # Cascade
+            else:  # Cascade RNN or NBOW
                 start, end = i * samples_per_seq, (i+1) * samples_per_seq
                 sample_tensor = input_batch[:, start:end]
                 feed_dict[input_ph] = sample_tensor
@@ -179,7 +184,7 @@ class AdaptiveModel(TFModel):
                                                                 dtype=tf.float32,
                                                                 name=get_input_name(i))
 
-            if self._is_independent:
+            if is_independent(self.model_type):
                 samples_per_seq += self.samples_per_seq
 
         if not is_frozen:
@@ -193,20 +198,24 @@ class AdaptiveModel(TFModel):
             self._placeholders['loss_weights'] = tf.placeholder(shape=[self.num_outputs],
                                                                 dtype=tf.float32,
                                                                 name='loss-weights')
+            self._placeholders[STOP_LOSS_WEIGHT] = tf.placeholder(shape=[],
+                                                                  dtype=tf.float32,
+                                                                  name=STOP_LOSS_WEIGHT)
         else:
             self._placeholders[OUTPUT] = tf.ones(shape=[1, num_output_features], dtype=output_dtype, name=OUTPUT)
             self._placeholders[DROPOUT_KEEP_RATE] = tf.ones(shape=[], dtype=tf.float32, name=DROPOUT_KEEP_RATE)
+            self._placeholders[STOP_LOSS_WEIGHT] = tf.ones(shape=[], dtype=tf.float32, name=STOP_LOSS_WEIGHT)
             self._placeholders['loss_weights'] = tf.ones(shape=[self.num_outputs], dtype=tf.float32, name='loss-weights')
 
     def compute_flops(self, level: int) -> int:
         """
         Computes the total floating point operations for the given prediction level
         """
-        if self.model_type in (AdaptiveModelType.ADAPTIVE_NBOW, AdaptiveModelType.INDEPENDENT_NBOW):
-            return self.compute_bow_flops(level)
+        if is_nbow(self.model_type):
+            return self.compute_nbow_flops(level)
         return self.compute_rnn_flops(level)
 
-    def compute_bow_flops(self, level: int) -> int:
+    def compute_nbow_flops(self, level: int) -> int:
         if level < 0:
             return 0
 
@@ -284,7 +293,7 @@ class AdaptiveModel(TFModel):
                                 .order_by('flops').build()
             flops = tf.profiler.profile(self.sess.graph, options=rnn_options)
 
-            flops_factor = level + 1 if self.model_type in (AdaptiveModelType.INDEPENDENT_RNN, AdaptiveModelType.INDEPENDENT_BIRNN) else 1
+            flops_factor = level + 1 if is_independent(self.model_type) else 1
             total_flops += flops.total_float_ops * flops_factor * self.samples_per_seq
 
             # Compute FLOPS for the output layer
@@ -324,7 +333,7 @@ class AdaptiveModel(TFModel):
         outputs: List[np.ndarray] = []
 
         for batch_num, batch in enumerate(test_batch_generator):
-            feed_dict = self.batch_to_feed_dict(batch, is_train=False)
+            feed_dict = self.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
 
             # Execute predictions and time results
             latencies: List[float] = []
@@ -379,7 +388,7 @@ class AdaptiveModel(TFModel):
         labels: List[np.ndarray] = []
 
         for batch_num, batch in enumerate(test_batch_generator):
-            feed_dict = self.batch_to_feed_dict(batch, is_train=False)
+            feed_dict = self.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
 
             # Execute predictions and time results
             latencies: List[float] = []
@@ -433,17 +442,21 @@ class AdaptiveModel(TFModel):
 
     def make_model(self, is_train: bool):
         with tf.variable_scope(MODEL, reuse=tf.AUTO_REUSE):
-            if self.model_type in (AdaptiveModelType.ADAPTIVE_NBOW, AdaptiveModelType.INDEPENDENT_NBOW):
-                self._make_bow_model(is_train)
+            if is_nbow(self.model_type):
+                self._make_nbow_model(is_train)
             else:
                 self._make_rnn_model(is_train)
 
-    def _make_bow_model(self, is_train: bool):
+    def _make_nbow_model(self, is_train: bool):
         outputs: List[tf.Tensor] = []
         stop_outputs: List[tf.Tensor]= []
-        prev_attn_weights: List[tf.Tensor] = []  # List of [B, T, 1] tensors
-        prev_samples: List[tf.Tensor] = []  # List of [B, T, D] tensors
+        all_attn_weights: List[tf.Tensor] = []  # List of [B, T, 1] tensors
+        all_samples: List[tf.Tensor] = []  # List of [B, T, D] tensors
         compression_fraction = self.hypers.model_params.get('compression_fraction')
+
+        # Lists for when pool_outputs is True
+        level_outputs: List[tf.Tensor] = []
+        output_attn_weights: List[tf.Tensor] = []
 
         for i in range(self.num_sequences):
             # Get relevant variable names
@@ -451,6 +464,7 @@ class AdaptiveModel(TFModel):
             transform_name = get_transform_name(i, self.hypers.model_params['share_transform_weights'])
             aggregation_name = get_aggregation_name(i, self.hypers.model_params['share_transform_weights'])
             output_layer_name = get_output_layer_name(i, self.hypers.model_params['share_output_weights'])
+            stop_output_name = get_stop_output_name(i)
             logits_name = get_logits_name(i)
             prediction_name = get_prediction_name(i)
             loss_name = get_loss_name(i)
@@ -494,76 +508,84 @@ class AdaptiveModel(TFModel):
                                     compression_seed=AGGREGATE_SEED,
                                     compression_fraction=compression_fraction)
 
-            # For the first sequence, we have no already-processed samples to integrate. As a note, we would generally normalize the attention
-            # weights via a softmax layer. With fixed point operations, softmax is unstable. We thus avoid the requirement of a softmax
-            # operation at inference time.
-            if i == 0 or self.model_type == AdaptiveModelType.INDEPENDENT_NBOW:
-                # Normalize the attention weights. [B, T, 1]
-                normalize_factor = tf.maximum(tf.reduce_sum(attn_weights, axis=-2, keepdims=True), 1e-3)
-                normalized_attn_weights = attn_weights / normalize_factor
-
-                self._ops['attention_weights_{0}'.format(i)] = normalized_attn_weights
-
-                # Apply attention weights
-                weighted_sequence = tf.math.multiply(transformed_sequence, normalized_attn_weights, name='{0}-{1}-multiply'.format(aggregation_name, i))  # [B, T, D]
-                aggregated_sequence = tf.reduce_sum(weighted_sequence, axis=1, name='{0}-{1}-aggregate'.format(aggregation_name, i))  # [B, D]
-            else:
-                # [B, L * T, 1] where L is the current level number (starting at 1)
-                attn_weights_concat = tf.concat(prev_attn_weights + [attn_weights], axis=1)
-
-                # Normalize the attention weights. [B, L  * T, 1]
-                normalize_factor = tf.maximum(tf.reduce_sum(attn_weights_concat, axis=-2, keepdims=True), 1e-3)
-                normalized_attn_weights = attn_weights_concat / normalize_factor
-
-                self._ops['attention_weights_{0}'.format(i)] = normalized_attn_weights
-
-                # [B, L * T, D] tensor of previous transformed inputs
-                seq_concat = tf.concat(prev_samples + [transformed_sequence], axis=1)
-                weighted_sequence = tf.math.multiply(seq_concat, normalized_attn_weights, name='{0}-{1}-multiply'.format(aggregation_name, i))
-
-                aggregated_sequence = tf.reduce_sum(weighted_sequence, axis=1, name='{0}-{1}-aggregate'.format(aggregation_name, i))  # [B, D]
-
-            # Apply dropout to the aggregated sequences
-            aggregated_sequence = tf.nn.dropout(aggregated_sequence, keep_prob=self._placeholders[DROPOUT_KEEP_RATE])
-
             # Save results of this level to avoid redundant computation
-            prev_attn_weights.append(attn_weights)
-            prev_samples.append(transformed_sequence)
+            all_attn_weights.append(attn_weights)  # List of [B, T, 1] tensors
+            all_samples.append(transformed_sequence)  # List of [B, T, D] tensors
+
+            # Normalize attention weights across all sequences
+            attn_weights_concat = tf.concat(all_attn_weights, axis=1)  # [B, L * T, 1]
+            normalize_factor = tf.maximum(tf.reduce_sum(attn_weights_concat, axis=1, keepdims=True), SMALL_NUMBER)
+            normalized_attn_weights = attn_weights_concat / normalize_factor  # [B, L * T, 1] 
+
+            # Compute the weighted average
+            weighted_sequence = tf.concat(all_samples, axis=1) * normalized_attn_weights  # [B, L * T, D]
+            aggregated_sequence = tf.reduce_sum(weighted_sequence, axis=1)  # [B, L * T, D]
 
             # [B, K]
             output_size = num_output_features if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[NUM_CLASSES]
-            output, _ = mlp(inputs=aggregated_sequence,
-                            output_size=output_size,
-                            hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
-                            activations=self.hypers.model_params['output_hidden_activation'],
-                            dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                            name=output_layer_name,
-                            compression_seed=OUTPUT_SEED,
-                            compression_fraction=compression_fraction)
+            level_output, _ = mlp(inputs=aggregated_sequence,
+                                  output_size=output_size,
+                                  hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
+                                  activations=self.hypers.model_params['output_hidden_activation'],
+                                  dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                                  name=output_layer_name,
+                                  compression_seed=OUTPUT_SEED,
+                                  compression_fraction=compression_fraction)
 
+            # Pooling of output logits to directly combine outputs from each level
+            if self.hypers.model_params.get('pool_outputs', False):
+                # Compute self-attention pooling weight, [B, 1]
+                output_attn_weight, _ = mlp(inputs=aggregated_sequence,
+                                            output_size=1,
+                                            hidden_sizes=[],
+                                            activations='sigmoid',
+                                            dropout_keep_rate=1.0,
+                                            should_bias_final=True,
+                                            should_activate_final=True,
+                                            name=OUTPUT_ATTENTION)
+                output_attn_weights.append(output_attn_weight)  # List of [B, 1] tensors
+                level_outputs.append(level_output)  # List of [B, K] tensors
 
-            # Compute the stop output using a single dense layer. This results in a [B, 1] array.
-            state = transformed_sequence[:, 0, :]  # [B, D]
-            #stop_output, _ = dense(inputs=state,
-            #                       units=1,
-            #                       activation='sigmoid',
-            #                       use_bias=True,
-            #                       name='stop-prediction')
-            stop_output, _ = mlp(inputs=state,
+                # [B, L, 1]
+                attn_weight_concat = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), output_attn_weights), axis=1)
+                normalized_attn_weights = attn_weight_concat / tf.maximum(tf.reduce_sum(attn_weight_concat, axis=1, keepdims=True), SMALL_NUMBER)
+
+                # [B, L, K]
+                level_outputs_concat = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), level_outputs), axis=1)
+
+                # [B, K]
+                level_output = tf.reduce_sum(level_outputs_concat * normalized_attn_weights, axis=1)
+
+            # Compute the stop output using a dense layer. This results in a [B, 1] array.
+            # The state used to compute the stop output depends on the model type (sample or cascade)
+            if is_cascade(self.model_type):
+                # In the case of cascade models, the state is just the aggregated state
+                stop_output_state = aggregated_sequence
+            else:
+                # In the case of sample models, we use an aggregation of the first states from each computed sequence
+                first_states = tf.concat([tf.expand_dims(transformed[:, 0, :], axis=1) for transformed in all_samples], axis=1)  # [B, L, D]
+                first_attn_weights = tf.concat([tf.expand_dims(attn[:, 0, :], axis=1) for attn in all_attn_weights], axis=1)  # [B, L, 1]
+
+                # Pool the first states using a weighted average
+                normalize_factor = tf.maximum(tf.reduce_sum(first_attn_weights, axis=1, keepdims=True), SMALL_NUMBER)  # [B, 1, 1]
+                normalized_attn_weights = first_attn_weights / normalize_factor  # [B, L, 1]
+                stop_output_state = tf.reduce_sum(first_states * normalized_attn_weights, axis=1)  # [B, D]
+
+            stop_output, _ = mlp(inputs=stop_output_state,
                                  output_size=1,
                                  hidden_sizes=self.hypers.model_params['stop_output_hidden_units'],
                                  activations=self.hypers.model_params['stop_output_activation'],
                                  should_bias_final=True,
                                  should_activate_final=False,
                                  dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                                 name='stop-prediction',
+                                 name=STOP_PREDICTION,
                                  compression_fraction=None)
             stop_output = tf.squeeze(stop_output, axis=-1)  # [B]
-            self._ops['stop_output_{0}'.format(i)] = tf.math.sigmoid(stop_output)  # [B]
+            self._ops[stop_output_name] = tf.math.sigmoid(stop_output)  # [B]
             stop_outputs.append(stop_output)
 
             if self.output_type == OutputType.BINARY_CLASSIFICATION:
-                classification_output = compute_binary_classification_output(model_output=output,
+                classification_output = compute_binary_classification_output(model_output=level_output,
                                                                              labels=self._placeholders[OUTPUT])
 
                 self._ops[logits_name] = classification_output.logits
@@ -571,28 +593,30 @@ class AdaptiveModel(TFModel):
                 self._ops[accuracy_name] = classification_output.accuracy
                 self._ops[f1_score_name] = classification_output.f1_score
             elif self.output_type == OutputType.MULTI_CLASSIFICATION:
-                classification_output = compute_multi_classification_output(model_output=output,
+                classification_output = compute_multi_classification_output(model_output=level_output,
                                                                             labels=self._placeholders[OUTPUT])
                 self._ops[logits_name] = classification_output.logits
                 self._ops[prediction_name] = classification_output.predictions
                 self._ops[accuracy_name] = classification_output.accuracy
                 self._ops[f1_score_name] = classification_output.f1_score
             else:
-                self._ops[prediction_name] = output
+                self._ops[prediction_name] = level_output
 
-            outputs.append(output)
+            outputs.append(level_output)
 
         combined_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), outputs), axis=1)
         self._ops[ALL_PREDICTIONS_NAME] = combined_outputs
 
         combined_stop_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), stop_outputs), axis=1)
-        self._ops['stop_outputs'] = combined_stop_outputs
+        self._ops[STOP_OUTPUT_NAME] = combined_stop_outputs
 
     def _make_rnn_model(self, is_train: bool):
         """
         Builds an Adaptive RNN model.
         """
         outputs: List[tf.Tensor] = []
+        level_outputs: List[tf.Tensor] = []  # Only used when pool_outputs is True
+        output_attn_weights: List[tf.Tensor] = []  # Only used when pool_outputs is True
         stop_outputs: List[tf.Tensor] = []
         states_list: List[tf.TensorArray] = []
         bw_states_list: List[tf.TensorArray] = []
@@ -606,6 +630,7 @@ class AdaptiveModel(TFModel):
             cell_name = get_cell_level_name(i, self.hypers.model_params['share_cell_weights'])
             rnn_level_name = get_rnn_level_name(i)
             output_layer_name = get_output_layer_name(i, self.hypers.model_params['share_output_weights'])
+            stop_output_name = get_stop_output_name(i)
             logits_name = get_logits_name(i)
             prediction_name = get_prediction_name(i)
             loss_name = get_loss_name(i)
@@ -639,12 +664,12 @@ class AdaptiveModel(TFModel):
 
             # Set the initial state for chunked model types
             if prev_state is not None:
-                if self.model_type == AdaptiveModelType.CASCADE:
+                if is_cascade(self.model_type):
                     initial_state = prev_state
 
             # Set previous states for the Sample model type
             prev_states = None
-            if self.model_type in (AdaptiveModelType.SAMPLE, AdaptiveModelType.BIDIR_SAMPLE) and i > 0:
+            if is_sample(self.model_type) and i > 0:
                 prev_states = states_list[i-1]
 
             # Run RNN and collect outputs
@@ -673,7 +698,7 @@ class AdaptiveModel(TFModel):
             rnn_output = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
 
             # If the model is bidirectional, then we also run the backward direction
-            if self.model_type in (AdaptiveModelType.BIDIR_SAMPLE, AdaptiveModelType.INDEPENDENT_BIRNN):
+            if is_bidirectional(self.model_type):
 
                 # Create the Bakcward RNN Cell
                 bw_cell_name = get_backward_name(cell_name)
@@ -688,7 +713,7 @@ class AdaptiveModel(TFModel):
 
                 # Set previous states
                 bw_prev_states = None
-                if i > 0 and self.model_type == AdaptiveModelType.BIDIR_SAMPLE:
+                if i > 0 and not is_independent(self.model_type):
                     bw_prev_states = bw_states_list[i-1]
 
                 # Run RNN and collect outputs
@@ -727,41 +752,63 @@ class AdaptiveModel(TFModel):
 
             # [B, K]
             output_size = num_output_features if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[NUM_CLASSES]
-            output, _ = mlp(inputs=rnn_output,
-                            output_size=output_size,
-                            hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
-                            activations=self.hypers.model_params['output_hidden_activation'],
-                            should_bias_final=True,
-                            dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                            name=output_layer_name,
-                            compression_fraction=self.hypers.model_params.get('compression_fraction'),
-                            compression_seed=OUTPUT_SEED)
+            level_output, _ = mlp(inputs=rnn_output,
+                                  output_size=output_size,
+                                  hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
+                                  activations=self.hypers.model_params['output_hidden_activation'],
+                                  should_bias_final=True,
+                                  dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                                  name=output_layer_name,
+                                  compression_fraction=self.hypers.model_params.get('compression_fraction'),
+                                  compression_seed=OUTPUT_SEED)
 
-            # Get the first state
-            state_index = 0 if self.model_type != AdaptiveModelType.CASCADE else tf.shape(inputs)[1] - 1
-            first_state = rnn_states.read(index=state_index)
-            first_state = tf.concat(tf.unstack(first_state, axis=0), axis=-1)  # [B, D * L]
+            if self.hypers.model_params.get('pool_outputs', False):
+                # Compute self-attention pooling weight, [B, 1]
+                output_attn_weight, _ = mlp(inputs=rnn_output,
+                                            output_size=1,
+                                            hidden_sizes=[],
+                                            activations='sigmoid',
+                                            dropout_keep_rate=1.0,
+                                            should_bias_final=True,
+                                            should_activate_final=True,
+                                            name=OUTPUT_ATTENTION)
+                output_attn_weights.append(output_attn_weight)  # List of [B, 1] tensors
+                level_outputs.append(level_output)  # List of [B, K] tensors
+
+                # [B, L, 1]
+                attn_weight_concat = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), output_attn_weights), axis=1)
+                normalized_attn_weights = attn_weight_concat / tf.maximum(tf.reduce_sum(attn_weight_concat, axis=1, keepdims=True), SMALL_NUMBER)
+
+                # [B, L, K]
+                level_outputs_concat = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), level_outputs), axis=1)
+
+                # [B, K]
+                level_output = tf.reduce_sum(level_outputs_concat * normalized_attn_weights, axis=1)
+
+            # Append the output (pooled or not) to the list of outputs
+            outputs.append(level_output)
+
+            # Get the state for the stop output (dependent no the model type)
+            state_index = tf.shape(inputs)[1] - 1 if is_cascade(self.model_type) else 0 
+            stop_output_state = rnn_states.read(index=state_index)
+            stop_output_state = tf.concat(tf.unstack(stop_output_state, axis=0), axis=-1)  # [B, D * L]
 
             # Compute the stop output using a single dense layer. This is a [B, 1] array.
-            #stop_output, _ = dense(inputs=first_state,
-            #                       units=1,
-            #                       activation='sigmoid',
-            #                       use_bias=True,
-            #                       name='stop-prediction')
-            stop_output, _ = mlp(inputs=first_state,
+            stop_output, _ = mlp(inputs=stop_output_state,
                                  output_size=1,
                                  hidden_sizes=self.hypers.model_params['stop_output_hidden_units'],
                                  activations=self.hypers.model_params['stop_output_activation'],
                                  should_bias_final=True,
                                  should_activate_final=False,
                                  dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
-                                 name='stop-prediction',
+                                 name=STOP_PREDICTION,
                                  compression_fraction=None)
             stop_output = tf.squeeze(stop_output, axis=-1)  # [B]
-            self._ops['stop_output_{0}'.format(i)] = tf.math.sigmoid(stop_output)  # [B]
+            self._ops[stop_output_name] = tf.math.sigmoid(stop_output)  # [B]
+            stop_outputs.append(stop_output)
 
             if self.output_type == OutputType.BINARY_CLASSIFICATION:
-                classification_output = compute_binary_classification_output(model_output=output,
+                classification_output = compute_binary_classification_output(model_output=level_output,
                                                                              labels=self._placeholders[OUTPUT])
 
                 self._ops[logits_name] = classification_output.logits
@@ -769,14 +816,14 @@ class AdaptiveModel(TFModel):
                 self._ops[accuracy_name] = classification_output.accuracy
                 self._ops[f1_score_name] = classification_output.f1_score
             elif self.output_type == OutputType.MULTI_CLASSIFICATION:
-                classification_output = compute_multi_classification_output(model_output=output,
+                classification_output = compute_multi_classification_output(model_output=level_output,
                                                                             labels=self._placeholders[OUTPUT])
                 self._ops[logits_name] = classification_output.logits
                 self._ops[prediction_name] = classification_output.predictions
                 self._ops[accuracy_name] = classification_output.accuracy
                 self._ops[f1_score_name] = classification_output.f1_score
             else:
-                self._ops[prediction_name] = output
+                self._ops[prediction_name] = level_output
 
             self._ops[gate_name] = rnn_gates.stack()  # [B, T, M, D]
             self._ops[state_name] = rnn_states.stack()  # [B, T, D]
@@ -784,14 +831,11 @@ class AdaptiveModel(TFModel):
             # Save previous state for possible reuse at the next level
             prev_state = rnn_states.read(index=last_index)
 
-            outputs.append(output)
-            stop_outputs.append(stop_output)
-
         combined_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), outputs), axis=1)
         self._ops[ALL_PREDICTIONS_NAME] = combined_outputs
 
         combined_stop_outputs = tf.concat(tf.nest.map_structure(lambda t: tf.expand_dims(t, axis=1), stop_outputs), axis=1)
-        self._ops['stop_outputs'] = combined_stop_outputs
+        self._ops[STOP_OUTPUT_NAME] = combined_stop_outputs
 
 
     def make_loss(self):
@@ -831,30 +875,20 @@ class AdaptiveModel(TFModel):
 
         losses = tf.stack(losses)  # [N], N is the number of sequences
         weighted_losses = tf.reduce_sum(losses * self._placeholders['loss_weights'], axis=-1)  # Scalar
+        self._ops[LOSS] = weighted_losses
 
-        # Apply level-wise layer penalty to get better results at higher levels
-        if self.hypers.model_params.get('enforce_level_penalty', True):
-            rolled_losses = tf.roll(losses, shift=1, axis=0)  # [N]
-            mask = tf.cast(tf.range(start=0, limit=tf.shape(losses)[0]) > 0, dtype=tf.float32)  # [N]
-            penalty = tf.reduce_sum(tf.nn.leaky_relu(mask * (losses - rolled_losses), alpha=0.01))
-
-            self._ops[LOSS] = weighted_losses + penalty
-        else:
-            self._ops[LOSS] = weighted_losses
-
+        # Add loss from stop layer
         if self.hypers.model_params.get('use_stop_layer', False):
-            stop_outputs = self._ops['stop_outputs']  # [B, L]
+            stop_outputs = self._ops[STOP_OUTPUT_NAME]  # [B, L]
 
             # [B, L]
             all_predictions = tf.cast(tf.argmax(self._ops[ALL_PREDICTIONS_NAME], axis=-1), dtype=tf.int32)  # [B, L]
             stop_labels = tf.cast(tf.equal(all_predictions, self._placeholders[OUTPUT]), dtype=tf.float32)  # [B, L]
 
             # Compute binary cross entropy loss and sum over levels, average over batch
-           # stop_element_loss = -stop_labels * tf.log(tf.math.maximum(stop_outputs, SMALL_NUMBER)) - \
-           #                     (1 - stop_labels) * tf.log(tf.math.maximum(1 - stop_outputs, SMALL_NUMBER))
             stop_element_loss = tf.nn.sigmoid_cross_entropy_with_logits(logits=stop_outputs, labels=stop_labels)
 
-            stop_loss = self.hypers.model_params['stop_loss_weight'] * tf.reduce_mean(tf.reduce_sum(stop_element_loss, axis=-1))
+            stop_loss = self._placeholders[STOP_LOSS_WEIGHT] * tf.reduce_mean(tf.reduce_sum(stop_element_loss, axis=-1))
             self._ops[LOSS] += stop_loss
 
         # Add any regularization to the loss function

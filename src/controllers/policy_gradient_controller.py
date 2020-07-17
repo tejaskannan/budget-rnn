@@ -2,7 +2,7 @@ import tensorflow as tf
 import numpy as np
 import os.path
 from collections import namedtuple
-from typing import List
+from typing import List, Tuple
 from argparse import ArgumentParser
 
 from dataset.dataset import Dataset, DataSeries
@@ -15,7 +15,7 @@ from utils.tfutils import get_activation
 from utils.constants import BIG_NUMBER, SMALL_NUMBER
 
 
-RolloutResult = namedtuple('RolloutResult', ['actions', 'rewards', 'observations', 'accuracy', 'avg_power'])
+RolloutResult = namedtuple('RolloutResult', ['actions', 'rewards', 'observations', 'accuracy', 'avg_power', 'penalty'])
 
 
 class ControllerPolicy:
@@ -27,7 +27,7 @@ class ControllerPolicy:
                  hidden_units: int,
                  activation: str,
                  learning_rate: float,
-                 budget: float,
+                 budget_range: Tuple[float, float],
                  save_folder: str,
                  name: str):
         self._batch_size = batch_size
@@ -36,10 +36,12 @@ class ControllerPolicy:
         self._hidden_units = hidden_units
         self._activation = activation
         self._learning_rate = learning_rate
-        self._budget = budget
+        self._budget_range = budget_range
         self._save_folder = save_folder
         self._name = name
         self._is_made = False
+
+        self._rand = np.random.RandomState(seed=32)
 
         self._sess = tf.Session(graph=tf.Graph())
         
@@ -73,7 +75,7 @@ class ControllerPolicy:
                             should_bias_final=True)
             self._logits = logits
 
-            self._policy_sample = tf.multinomial(logits=logits, num_samples=1, seed=42, name='policy-sample')
+            self._policy_sample = tf.random.categorical(logits=logits, num_samples=1, seed=42, name='policy-sample')
 
             log_prob = tf.log(tf.nn.softmax(logits, axis=-1))
 
@@ -86,12 +88,17 @@ class ControllerPolicy:
             self._action_logits = action_logits
 
             # Calculate the surrogate loss function
-            regularized_rewards = (self._rewards - tf.reduce_mean(self._rewards)) - self._penalty
+            regularized_rewards = (self._rewards - tf.reduce_mean(self._rewards)) - 25 * self._penalty
             self._loss = -1 * tf.reduce_sum(action_logits * regularized_rewards)
 
             # Create the training step
             self._optimizer = tf.train.RMSPropOptimizer(learning_rate=self._learning_rate)
-            self._train_step = self._optimizer.minimize(self._loss)
+
+            trainable_vars = self._sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+            gradients = tf.gradients(self._loss, trainable_vars)
+            clipped_gradients, _ = tf.clip_by_global_norm(gradients, 1)
+            pruned_gradients = [(grad, var) for grad, var in zip(gradients, trainable_vars) if grad is not None]
+            self._train_step = self._optimizer.apply_gradients(pruned_gradients)
 
             self._is_made = True
 
@@ -113,7 +120,18 @@ class ControllerPolicy:
         assert self._is_made, 'Must make the model first'
 
         # Sample the policy. We do this in one tensorflow operation for efficiency.
-        reshaped_inputs = inputs.reshape(-1, inputs.shape[-1])  # [B * (T - 1), D]
+        power = POWER[0:-1].reshape(1, -1, 1)  # [1, T-1, 1]
+        budgets = self._rand.uniform(low=self._budget_range[0], high=self._budget_range[1], size=(1, 1, 1))
+        input_features = np.expand_dims(inputs, axis=-1)  # [B, T-1, 1]
+
+        # Min / Max Normalize the power and budget features
+        avg_power, std_power = np.average(POWER), np.std(POWER)
+        normalized_power = (power - avg_power) / std_power
+        normalized_budgets = (budgets - avg_power) / std_power
+        penalty = np.squeeze(normalized_power - normalized_budgets)
+
+        features = np.concatenate([input_features, np.broadcast_to(normalized_power, input_features.shape), np.broadcast_to(normalized_budgets, input_features.shape)], axis=-1)  # [B, T-1, 3]
+        reshaped_inputs = features.reshape(-1, features.shape[-1])  # [B * (T - 1), D]
 
         with self._sess.graph.as_default():
             action_samples = self._sess.run(self._policy_sample, feed_dict={self._inputs: reshaped_inputs})
@@ -133,16 +151,18 @@ class ControllerPolicy:
         # Clip the number of actions to avoid the last index
         clipped_actions = np.clip(num_actions + 1, a_min=1, a_max=self._seq_length - 1)
         episode_rewards = np.repeat(episode_rewards, clipped_actions, axis=0)
-        episode_rewards = np.where(episode_rewards > 0, episode_rewards, 25 * episode_rewards)
+        episode_rewards = np.where(episode_rewards > 0, episode_rewards, episode_rewards)
 
         # Get the observations and actions for the sampled episodes
         observations: List[np.ndarray] = []
         actions: List[int] = []
+        penalties: List[float] = []
         for batch_idx in range(episode_action_samples.shape[0]):
             for seq_idx in range(episode_action_samples.shape[1]):
                 if seq_idx <= num_actions[batch_idx]:
-                    observations.append(inputs[batch_idx, seq_idx])
+                    observations.append(features[batch_idx, seq_idx])
                     actions.append(episode_action_samples[batch_idx, seq_idx])
+                    penalties.append(penalty[seq_idx])
 
         # Get the power for each episode and penalize violations
         # episode_power = POWER[num_actions]
@@ -154,7 +174,7 @@ class ControllerPolicy:
         normalized_seq_count = seq_count / (np.sum(seq_count) + SMALL_NUMBER)
         avg_power = np.sum(normalized_seq_count * POWER)
 
-        return RolloutResult(rewards=episode_rewards, actions=np.array(actions), observations=np.array(observations), accuracy=np.average(action_labels), avg_power=avg_power)
+        return RolloutResult(rewards=episode_rewards, actions=np.array(actions), observations=np.array(observations), accuracy=np.average(action_labels), avg_power=avg_power, penalty=np.array(penalties))
     
     def train(self, train_inputs: np.ndarray, train_labels: np.ndarray, valid_inputs: np.ndarray, valid_labels: np.ndarray, max_epochs: int, patience: int):
         """
@@ -168,14 +188,13 @@ class ControllerPolicy:
             max_epochs: The maximum number of epochs to train for
             patience: Patience for early stopping
         """
-        truncated_train_inputs = train_inputs[:, 0:-1, :]  # [N, T-1, D]
-        truncated_valid_inputs = valid_inputs[:, 0:-1, :]  # [M, T-1, D]
+        truncated_train_inputs = train_inputs[:, 0:-1]  # [N, T-1]
+        truncated_valid_inputs = valid_inputs[:, 0:-1]  # [M, T-1]
 
         num_train = truncated_train_inputs.shape[0]
         num_valid = truncated_valid_inputs.shape[0]
 
         sample_idx = np.arange(num_train)  # [N]
-        rand = np.random.RandomState(seed=32)  # Set random state for reproducible results
 
         best_accuracy = 0.0
         early_stopping_counter = 0
@@ -184,8 +203,8 @@ class ControllerPolicy:
             print('===== Starting Epoch: {0} ====='.format(epoch))
 
             # Shuffle the training set
-            rand.shuffle(sample_idx)
-            epoch_train_inputs = truncated_train_inputs[sample_idx, :, :]
+            self._rand.shuffle(sample_idx)
+            epoch_train_inputs = truncated_train_inputs[sample_idx, :]
             epoch_train_labels = train_labels[sample_idx, :]
 
             train_batch_loss: List[float] = []
@@ -195,20 +214,21 @@ class ControllerPolicy:
                 start, end = batch_idx, batch_idx + self._batch_size
 
                 # Perform a policy rollout
-                rollout_result = self.rollout(inputs=epoch_train_inputs[start:end, :, :],
+                rollout_result = self.rollout(inputs=epoch_train_inputs[start:end, :],
                                               labels=epoch_train_labels[start:end, :])
 
                 batch_obs = rollout_result.observations
                 batch_rewards = rollout_result.rewards
                 batch_actions = rollout_result.actions
+                batch_penalty = rollout_result.penalty
                 avg_power = rollout_result.avg_power
 
                 # Normalize the batch rewards
                 batch_rewards = (batch_rewards - np.average(batch_rewards)) / (np.std(batch_rewards) + SMALL_NUMBER)
 
                 # Apply penalty for power
-                penalty = 10 * np.clip(avg_power - self._budget, a_min=0.0, a_max=None)
-                batch_penalty = np.full(shape=batch_rewards.shape, fill_value=penalty)
+                # penalty = 10 * np.clip(avg_power - self._budget, a_min=0.0, a_max=None)
+                # batch_penalty = np.full(shape=batch_rewards.shape, fill_value=penalty)
 
                 # Run the training step and calculate the loss
                 with self._sess.graph.as_default():
@@ -230,12 +250,24 @@ class ControllerPolicy:
             for batch_num, batch_idx in enumerate(range(0, num_valid, self._batch_size)):
                 start, end = batch_idx, batch_idx + self._batch_size
 
-                batch_inputs = valid_inputs[start:end, :, :]
+                batch_inputs = truncated_valid_inputs[start:end, :]
                 batch_labels = valid_labels[start:end, :]
+
+                power = POWER[0:-1].reshape(1, -1, 1)  # [1, T-1, 1]
+                budgets = self._rand.uniform(low=self._budget_range[0], high=self._budget_range[1], size=(batch_inputs.shape[0], 1, 1))
+                input_features = np.expand_dims(batch_inputs, axis=-1)  # [B, T-1, 1]
+
+                # Min / Max Normalize the power and budget features
+                avg_power, std_power = np.average(POWER), np.std(POWER)
+                normalized_power = (power - avg_power) / std_power
+                normalized_budgets = (budgets - avg_power) / std_power
+
+                features = np.concatenate([input_features, np.broadcast_to(normalized_power, input_features.shape), np.broadcast_to(normalized_budgets, input_features.shape)], axis=-1)  # [B, T-1, 3]
+                reshaped_inputs = features.reshape(-1, features.shape[-1])  # [B * (T - 1), D]
 
                 # Sample the policy
                 with self._sess.graph.as_default():
-                    feed_dict = {self._inputs: batch_inputs.reshape(-1, valid_inputs.shape[-1])}
+                    feed_dict = {self._inputs: reshaped_inputs.reshape(-1, reshaped_inputs.shape[-1])}
                     action_samples = self._sess.run(self._policy_sample, feed_dict=feed_dict)
 
                 episode_action_samples = action_samples.reshape(batch_inputs.shape[0], batch_inputs.shape[1])  # [B, T - 1]
@@ -273,11 +305,21 @@ class ControllerPolicy:
                 print('Converged.')
                 break
 
-    def test(self, inputs: np.ndarray, labels: np.ndarray):
+    def test(self, inputs: np.ndarray, labels: np.ndarray, budget: float):
         """
         Evaluates the current policy on the given testing set.
         """
-        truncated_inputs = inputs[:, 0:-1, :]
+        truncated_inputs = np.expand_dims(inputs[:, 0:-1], axis=-1)  # [B, T-1, 1]
+        power = POWER[0:-1].reshape(1, -1, 1)  # [1, T-1, 1]
+
+        # Min / Max Normalize the power and budget features
+        avg_power, std_power = np.average(POWER), np.std(POWER)
+        normalized_power = (power - avg_power) / std_power
+
+        normalized_power = (power - avg_power) / std_power
+        normalized_budget = (budget - avg_power) / std_power
+
+        input_features = np.concatenate([truncated_inputs, np.broadcast_to(normalized_power, truncated_inputs.shape), np.broadcast_to(normalized_budget, truncated_inputs.shape)], axis=-1)  # [B, T-1, 3]
 
         num_correct: List[int] = []
         seq_counts = np.zeros(shape=(self._seq_length,))
@@ -286,26 +328,11 @@ class ControllerPolicy:
         for batch_num, batch_idx in enumerate(range(0, num_samples, self._batch_size)):
             start, end = batch_idx, batch_idx + self._batch_size
 
-            batch_inputs = truncated_inputs[start:end]
-            batch_labels = labels[start:end]
-
-            # Run the training step and calculate the loss
-            feed_dict = {self._inputs: batch_inputs.reshape(-1, inputs.shape[-1])}
-            #result = self._sess.run({'logits': self._logits}, feed_dict=feed_dict)
-
-            ## Reshape the logits for each unique episode
-            #batch_logits = result['logits'].reshape(-1, self._seq_length - 1, 2)
-
-            ## Get the actions for each sequence element using a greedy strategy
-            #batch_actions = np.argmax(batch_logits, axis=-1)  # [B, T - 1]
-            #selected_elements = np.argmax(batch_actions, axis=1)  # [B]
-            #selected_elements = np.where(np.all(batch_actions == 0, axis=1), self._seq_length - 1, selected_elements)
-
-            #batch_indices = np.arange(batch_labels.shape[0])
-            #selected_labels = batch_labels[batch_indices, selected_elements]  # [B]
-            #num_correct.extend(selected_labels)
+            batch_inputs = input_features[start:end, :, :]
+            batch_labels = labels[start:end, :]
 
             # Sample the policy
+            feed_dict = {self._inputs: batch_inputs.reshape(-1, input_features.shape[-1])}
             with self._sess.graph.as_default():
                 action_samples = self._sess.run(self._policy_sample, feed_dict=feed_dict)
 
@@ -340,11 +367,11 @@ class ControllerPolicy:
             'hidden_units': self._hidden_units,
             'activation': self._activation,
             'learning_rate': self._learning_rate,
-            'budget': self._budget
+            'budget_range': self._budget_range
         }
 
         # Create the output path
-        output_path = os.path.join(self._save_folder, 'model-policy-{0}-{1}.pkl.gz'.format(self._budget, self._name))
+        output_path = os.path.join(self._save_folder, 'model-policy-{0}.pkl.gz'.format(self._name))
 
         # Get the trainable variables
         with self._sess.graph.as_default():
@@ -367,7 +394,7 @@ class ControllerPolicy:
                                   hidden_units=hypers['hidden_units'],
                                   activation=hypers['activation'],
                                   learning_rate=hypers['learning_rate'],
-                                  budget=hypers['budget'])
+                                  budget_range=hypers['budget_range'])
         policy.make()
 
         # Read the saved variables
@@ -396,26 +423,28 @@ if __name__ == '__main__':
 
     model, dataset, _ = get_serialized_info(args.model_path, dataset_folder=args.dataset_folder) 
 
-    X_train, y_train, _, _, _ = fetch_model_states(model=model, dataset=dataset, series=DataSeries.TRAIN)
-    X_valid, y_valid, _, _, _ = fetch_model_states(model=model, dataset=dataset, series=DataSeries.VALID)
+    _, y_train, _, _, X_train = fetch_model_states(model=model, dataset=dataset, series=DataSeries.TRAIN)
+    _, y_valid, _, _, X_valid = fetch_model_states(model=model, dataset=dataset, series=DataSeries.VALID)
 
     y_max = np.max(y_train, axis=-1)  # [B]
 
     policy = ControllerPolicy(batch_size=64,
                               seq_length=X_train.shape[1],
-                              input_units=X_train.shape[2],
+                              input_units=3,
                               hidden_units=16,
                               activation='leaky_relu',
                               learning_rate=0.001,
-                              budget=49,
+                              budget_range=(40, 50),
                               save_folder=save_folder,
                               name=model_name)
     policy.make()
     policy.init()
 
     # Train the policy
-    policy.train(train_inputs=X_train, train_labels=y_train, valid_inputs=X_valid, valid_labels=y_valid, max_epochs=150, patience=50)
+    policy.train(train_inputs=X_train, train_labels=y_train, valid_inputs=X_valid, valid_labels=y_valid, max_epochs=50, patience=50)
 
     # Load the test data
-    X_test, y_test, _, _, _ = fetch_model_states(model=model, dataset=dataset, series=DataSeries.TEST)
-    policy.test(inputs=X_test, labels=y_test)
+    _, y_test, _, _, X_test = fetch_model_states(model=model, dataset=dataset, series=DataSeries.TEST)
+    policy.test(inputs=X_test, labels=y_test, budget=49)
+
+    policy.test(inputs=X_test, labels=y_test, budget=45)

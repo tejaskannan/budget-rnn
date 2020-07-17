@@ -14,16 +14,15 @@ from models.standard_model import StandardModel
 from dataset.dataset import DataSeries, Dataset
 from dataset.dataset_factory import get_dataset
 from utils.hyperparameters import HyperParameters
-from utils.rnn_utils import get_logits_name, get_states_name, AdaptiveModelType
+from utils.rnn_utils import get_logits_name, get_states_name, AdaptiveModelType, is_cascade
 from utils.file_utils import extract_model_name, read_by_file_suffix, save_by_file_suffix, make_dir
 from utils.np_utils import min_max_normalize, round_to_precision
 from utils.constants import OUTPUT, SMALL_NUMBER, INPUTS, OPTIMIZED_TEST_LOG_PATH, METADATA_PATH, HYPERS_PATH, PREDICTION, SEQ_LENGTH
 from utils.adaptive_inference import normalize_logits, threshold_predictions
 from utils.testing_utils import ClassificationMetric
-from logistic_regression_controller import Controller, CONTROLLER_PATH
+from controllers.logistic_regression_controller import Controller, CONTROLLER_PATH, get_power_for_levels, POWER, RandomController
 
 
-POWER = np.array([24.085, 32.776, 37.897, 43.952, 48.833, 50.489, 54.710, 57.692, 59.212, 59.251])
 PowerEstimate = namedtuple('PowerEstimate', ['avg_power', 'fraction'])
 SMOOTHING_FACTOR = 100
 
@@ -73,7 +72,7 @@ def get_baseline_model_results(model: Model, dataset: Dataset, series: DataSerie
                                                  batch_size=model.hypers.batch_size,
                                                  should_shuffle=shuffle)
     for batch in data_generator:
-        feed_dict = model.batch_to_feed_dict(batch, is_train=False)
+        feed_dict = model.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
 
         batch_predictions = model.execute(ops=[PREDICTION], feed_dict=feed_dict)
 
@@ -147,35 +146,13 @@ class PIController:
         self._integral = 0.0
 
 
-class RandomController(PIController):
-    
-    def __init__(self, budget: float):
-        super().__init__(0.0, 0.0)
-        self._budget = budget
-
-        power_array = np.array(POWER)
-        weights = np.linalg.lstsq(power_array.reshape(1, -1), np.array([self._budget]))[0]
-
-        self._weights = weights / np.sum(weights)
-        self._indices = np.arange(start=0, stop=len(POWER))
-        self._rand = np.random.RandomState(seed=42)
-    
-    def step(self, y_true: Union[float, int], y_pred: Union[float, int], time: float) -> Union[float, int]:
-        return int(self._rand.choice(self._indices, size=1, p=self._weights))
-
-
 class BudgetController(PIController):
 
-    def __init__(self, kp: float, ki: float, output_range: Tuple[int, int], budget: float, margin: float, power_factor: float):
+    def __init__(self, kp: float, ki: float, output_range: Tuple[int, int], budget: float, power_factor: float):
         super().__init__(kp, ki)
         self._output_range = output_range
         self._budget = budget
-        self._margin = margin
         self._power_factor = power_factor
-
-    def update(self, **kwargs):
-        anneal_rate = kwargs['anneal_rate']
-        self._margin = self._margin * anneal_rate
 
     def plant_function(self, y_true: Union[float, int], y_pred: Union[float, int], proportional_error: float, integral_error: float) -> Union[float, int]:
         # Error in power budget. For now, we only care about the upper bound budget
@@ -183,22 +160,14 @@ class BudgetController(PIController):
 
         power = y_pred
         step = abs(control_signal) * self._power_factor
+        limit = y_true
 
-        lower_limit = y_true * (1.0 - self._margin)
-        upper_limit = y_true * (1.0 + self._margin)
-
-        if power <= upper_limit:
+        if power <= limit:
             return 0  # By returning the highest # of levels, we allow the model controller to control
-        
-        sign = 1
-        if power > upper_limit:
-            sign = -1
 
-        step = int(math.floor(sign * step))
-
-        if step == 0:
-            return sign
-        return step
+        # The power is too high, so we decrease it
+        step = int(math.floor(step))
+        return -step
 
 
 class BudgetDistribution:
@@ -209,19 +178,15 @@ class BudgetDistribution:
                  max_time: int,
                  num_levels: int,
                  num_classes: int,
-                 warmup_frac: float,
                  panic_frac: float,
-                 margin: float,
-                 anneal_rate: float):
+                 power: np.ndarray):
         self._prior_counts = prior_counts  # key: class index, value: array [L] counts for each level
         self._max_time = max_time
         self._budget = budget
         self._num_levels = num_levels
         self._num_classes = num_classes
-        self._warmup_time = int(warmup_frac * max_time)
         self._panic_time = int(panic_frac * max_time)
-        self._margin = margin
-        self._anneal_rate = anneal_rate
+        self._power = power
 
         # Estimated count of each label over the time window
         self._estimated_label_counts = np.zeros(shape=(num_classes, ))
@@ -233,9 +198,8 @@ class BudgetDistribution:
         self._observed_label_counts = np.zeros_like(self._estimated_label_counts)
 
     def get_budget(self, time: int) -> float:
-        if time < self._warmup_time:
-            return budget * (1 + self._margin)
-        elif time > self._panic_time:
+        # Force the budget after the panic time is reached
+        if time > self._panic_time:
             return budget
 
         expected_rest = 0
@@ -243,7 +207,7 @@ class BudgetDistribution:
         time_delta = self._max_time - time
 
         class_count_diff = np.maximum(self._estimated_label_counts - self._observed_label_counts, 0)
-        estimated_remaining = np.sum(np.maximum(self._estimated_label_counts - self._observed_label_counts, 0))
+        estimated_remaining = np.sum(class_count_diff)
 
         # We compute the MLE estimates for the mean and variance power given the observed samples
         # and the training set
@@ -251,21 +215,24 @@ class BudgetDistribution:
         count_rest = 0
         for class_idx in range(self._num_classes):
             class_level_counts = self._prior_counts[class_idx]
-            n_class = np.sum(class_level_counts)
+            n_class = max(np.sum(class_level_counts), SMALL_NUMBER)
            
             # MLE estimate of the mean power
-            power_mean = np.sum((class_level_counts * POWER) / n_class)
-            
-            squared_diff = np.square(POWER - power_mean)
+            power_mean = np.sum((class_level_counts * self._power) / (n_class))
+
+            squared_diff = np.square(self._power - power_mean)
             power_var = np.sum((class_level_counts * squared_diff) / n_class)
 
             count_diff = max(self._estimated_label_counts[class_idx] - self._observed_label_counts[class_idx], 0)
             remaining_fraction = count_diff / estimated_remaining
+
             expected_rest += power_mean * remaining_fraction
 
             variance_rest += np.square(count_diff / time) * power_var
 
         expected_power = (1.0 / time) * (self._max_time * self._budget - time_delta * expected_rest)
+        expected_power = max(expected_power, self._power[0])  # We clip the power to the lowest level (this is the lowest feasible amount)
+
         estimator_variance = 2 * (1.0 / time) * variance_rest
         current_budget = expected_power + estimator_variance
 
@@ -274,9 +241,6 @@ class BudgetDistribution:
     def update(self, label: int, levels: int, time: int):
         self._observed_label_counts[label] += 1
         self._prior_counts[label][levels] += 1
-
-        if time > self._warmup_time:
-            self._margin = self._margin * self._anneal_rate
 
 
 # Function to get model results
@@ -297,18 +261,18 @@ def get_model_results(model: AdaptiveModel, dataset: Dataset, shuffle: bool, ser
                                                  should_shuffle=shuffle)
 
     states_idx = 0
-    if model.model_type == AdaptiveModelType.CASCADE:
+    if is_cascade(model.model_type):
         states_idx = -1
 
     for batch_num, batch in enumerate(data_generator):
         # Compute the predicted log probabilities
-        feed_dict = model.batch_to_feed_dict(batch, is_train=False)
+        feed_dict = model.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
         model_results = model.execute(feed_dict, logit_ops + state_ops)
 
         first_states = np.concatenate([np.expand_dims(np.squeeze(model_results[op][states_idx]), axis=1) for op in state_ops], axis=1)
 
         inputs = np.array(batch[INPUTS])
-        if model.model_type == AdaptiveModelType.CASCADE:
+        if is_cascade(model.model_type):
             stride = int(seq_length / num_sequences)
             first_inputs = np.concatenate([inputs[:, :, i, :] for i in range(0, seq_length, stride)], axis=1)
         else:
@@ -342,33 +306,34 @@ def get_model_results(model: AdaptiveModel, dataset: Dataset, shuffle: bool, ser
     return labels, level_predictions, states, level_acc, dataset_inputs
 
 
-def interpolate_power(num_levels: int) -> List[float]:
-    num_readings = len(POWER)
-
+def interpolate_power(power: np.ndarray, num_levels: int) -> List[float]:
+    num_readings = len(power)
+    
     assert int(math.ceil(num_levels / num_readings)) == int(num_levels / num_readings), 'Number of levels must be a multiple of the number of budgets'
 
     stride = int(num_levels / num_readings)
     power_readings: List[float] = []
 
     # For levels below the stride, we interpolate up to the first reading
-    start = POWER[0] * 0.9
-    end = POWER[0]
+    start = power[0] * 0.9
+    end = power[0]
     interpolated_power = np.linspace(start=start, stop=end, endpoint=True, num=stride)
     power_readings.extend(interpolated_power[:-1])
 
-    for i in range(1, len(POWER)):
-        interpolated_power = np.linspace(start=POWER[i-1], stop=POWER[i], endpoint=False, num=stride)
+    for i in range(1, len(power)):
+        interpolated_power = np.linspace(start=power[i-1], stop=power[i], endpoint=False, num=stride)
         power_readings.extend(interpolated_power)
 
     # Add in the final reading
-    power_readings.append(POWER[-1])
+    power_readings.append(power[-1])
 
     return power_readings
 
 
-def get_budget_index(budget: int, level_accuracy: np.ndarray) -> int:
+def get_budget_index(power: np.ndarray, budget: int, level_accuracy: np.ndarray) -> int:
     num_levels = level_accuracy.shape[0]
-    power_readings = interpolate_power(num_levels)
+
+    power_readings = interpolate_power(power=power, num_levels=num_levels)
 
     fixed_index = 0
     best_index = 0
@@ -386,28 +351,28 @@ def get_budget_index(budget: int, level_accuracy: np.ndarray) -> int:
 def get_accuracy_index(system_acc: float, level_accuracy: np.ndarray) -> int:
     num_levels = len(level_accuracy)
     diff = np.abs(system_acc - level_accuracy)
-    return np.argmin(diff)  # Index of closest level
+    nearest_level = np.argmin(diff)
 
-    #mask = (level_accuracy <= system_acc).astype(float)
+    best_level_above = level_accuracy.shape[0] - 1
+    for idx, acc in enumerate(level_accuracy):
+        if acc >= system_acc:
+            best_level_above = idx
+            break
 
-    #if np.sum(mask) < SMALL_NUMBER:
-    #    policy_index = np.argmax(level_accuracy)
-    #else:
-    #    policy_index = np.argmax(level_accuracy * mask)
-
-    #return min(policy_index, num_levels - 1)
+    return min(nearest_level, best_level_above)
 
 
 def run_fixed_policy(labels: np.ndarray,
                      level_predictions: int,
                      policy_index: int,
+                     power_estimates: np.ndarray,
                      noise: float) -> Tuple[List[float], List[float]]:
     rand = np.random.RandomState(seed=42)
 
     correct: List[float] = []
     power: List[float] = []
 
-    power_readings = interpolate_power(level_predictions.shape[1])
+    power_readings = interpolate_power(power_estimates, level_predictions.shape[1])
 
     max_time = labels.shape[0]
     for t in range(max_time):
@@ -440,16 +405,19 @@ def estimate_label_counts(controller: Controller, budget: float, num_levels: int
 def run_simulation(labels: np.ndarray,
                    level_predictions: np.ndarray,
                    states: np.ndarray,
+                   power_estimates: np.ndarray,
                    budget: int,
                    controller_type: str,
                    num_levels: int,
                    num_classes: int,
                    noise: float,
                    precision: int,
-                   model_path: str):
+                   model_path: str,
+                   dataset_folder: str):
     # Create the model controller
     if controller_type == 'random':
-        controller = RandomController(budget=budget)
+        controller = RandomController(model_path=model_path, dataset_folder=dataset_folder, budgets=[budget], power=power_estimates)
+        controller.fit(series=DataSeries.VALID)
     elif controller_type == 'logistic':
         save_folder, model_file_name = os.path.split(model_path)
         model_name = extract_model_name(model_file_name)
@@ -475,14 +443,9 @@ def run_simulation(labels: np.ndarray,
 
     rand = np.random.RandomState(seed=42)
 
-    # Parameters for model schedule
-    start_margin = 5.0
-    end_margin = margin
-    anneal_rate = np.exp((1.0 / max_time) * np.log(end_margin / start_margin))
-
     # Create the budget controller
     output_range = (0, num_levels - 1)
-    budget_controller = BudgetController(kp=1.0, ki=0.0625, output_range=output_range, budget=budget, margin=margin, power_factor=0.5)
+    budget_controller = BudgetController(kp=1.0, ki=0.0625, output_range=output_range, budget=budget, power_factor=1.0)
     current_budget = budget
 
     level_counts = np.zeros(shape=(num_levels, ))
@@ -496,10 +459,8 @@ def run_simulation(labels: np.ndarray,
                                              max_time=max_time,
                                              num_levels=num_levels,
                                              num_classes=num_classes,
-                                             warmup_frac=0.0,
-                                             panic_frac=0.97,
-                                             margin=0.2,
-                                             anneal_rate=0.9)
+                                             panic_frac=0.95,
+                                             power=power_estimates)
 
     for t in range(max_time):
         current_budget = budget_distribution.get_budget(t+1)
@@ -517,7 +478,7 @@ def run_simulation(labels: np.ndarray,
         y_pred = clip(y_pred_model + budget_step, bounds=output_range)
 
         # Compute the (noisy) power consumption for using this number of levels
-        p = POWER[y_pred] + power_noise[t]
+        p = power_estimates[y_pred] + power_noise[t]
 
         power.append(p)
         errors.append(y_pred_model - y_pred)
@@ -529,8 +490,6 @@ def run_simulation(labels: np.ndarray,
 
         levels_per_label[model_prediction].append(y_pred)
         level_counts[y_pred_model] += 1
-
-        budget_distribution.update(label=model_prediction, levels=y_pred, time=t+1)
 
     print('Level Distribution: {0}'.format(level_counts / max_time))
     print('Accuracy: {0}'.format(np.average(num_correct)))
@@ -556,7 +515,8 @@ def plot_and_save(power: List[float],
                   level_predictions: np.ndarray,
                   noise: float,
                   baseline_labels: np.ndarray,
-                  baseline_predictions: np.ndarray):
+                  baseline_predictions: np.ndarray,
+                  power_estimates: np.ndarray):
     times = np.arange(start=0, stop=len(power), dtype=float)
     avg_power = np.cumsum(power) / (times + 1)
     cumulative_accuracy = np.cumsum(num_correct) / (times + 1)
@@ -586,17 +546,19 @@ def plot_and_save(power: List[float],
 
     # Get the index of the best 'fixed' policy
     baseline_level_acc = np.average(np.isclose(baseline_predictions, baseline_labels).astype(float), axis=0)  # [L]
-    budget_index = get_budget_index(budget, baseline_level_acc)
+    budget_index = get_budget_index(power_estimates, budget, baseline_level_acc)
     acc_index = get_accuracy_index(accuracy, baseline_level_acc)
 
     budget_policy_acc, budget_policy_power = run_fixed_policy(labels=baseline_labels,
                                                               level_predictions=baseline_predictions,
                                                               policy_index=budget_index,
+                                                              power_estimates=power_estimates,
                                                               noise=noise)
 
     accuracy_policy_acc, accuracy_policy_power = run_fixed_policy(labels=baseline_labels,
                                                                   level_predictions=baseline_predictions,
                                                                   policy_index=acc_index,
+                                                                  power_estimates=power_estimates,
                                                                   noise=noise)
 
     cumulative_budget_policy_acc = np.cumsum(budget_policy_acc) / (times + 1)
@@ -666,17 +628,13 @@ if __name__ == '__main__':
     parser.add_argument('--budgets', type=float, nargs='+')
     parser.add_argument('--output-folder', type=str)
     parser.add_argument('--noise', type=float, default=1.0)
-    parser.add_argument('--margin', type=float, default=0.001)
     parser.add_argument('--shuffle', action='store_true')
     parser.add_argument('--controller', type=str, choices=['random', 'logistic'], default='logistic')
     args = parser.parse_args()
 
-    # Validate the budget and margin
+    # Validate the budget
     budgets = args.budgets
     assert all([b > 0 for b in budgets]), 'Must have a positive budgets'
-
-    margin = args.margin
-    assert margin >= 0 and margin <= 1, 'Must have a margin in the range [0, 1]'
 
     # Create the adaptive model
     adaptive_model, dataset = get_serialized_info(args.adaptive_model_path, dataset_folder=args.dataset_folder)
@@ -691,6 +649,9 @@ if __name__ == '__main__':
     # TODO: Get the baseline model results
     base_labels, base_predictions = get_baseline_model_results(model=baseline_model, dataset=dataset, shuffle=args.shuffle, series=DataSeries.TEST)
 
+    # Truncate the power readings
+    power_estimates = get_power_for_levels(power=POWER, num_levels=adaptive_model.num_outputs)
+
     # Run the simulation for each budget
     for budget in budgets:
         power, errors, num_correct, predictions, desired_levels = run_simulation(labels=labels,
@@ -700,9 +661,12 @@ if __name__ == '__main__':
                                                                                  controller_type=args.controller,
                                                                                  num_levels=adaptive_model.num_outputs,
                                                                                  num_classes=adaptive_model.metadata['num_classes'],
+                                                                                 power_estimates=power_estimates,
                                                                                  noise=args.noise,
                                                                                  precision=args.precision,
-                                                                                 model_path=args.adaptive_model_path)
+                                                                                 model_path=args.adaptive_model_path,
+                                                                                 dataset_folder=args.dataset_folder)
+        
         # Plot and save the results
         plot_and_save(power=power,
                       errors=errors,
@@ -712,6 +676,7 @@ if __name__ == '__main__':
                       desired_levels=desired_levels,
                       model_path=args.adaptive_model_path,
                       output_folder=args.output_folder,
+                      power_estimates=power_estimates,
                       budget=budget,
                       controller_type=args.controller,
                       num_levels=adaptive_model.num_outputs,

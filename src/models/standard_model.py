@@ -69,7 +69,7 @@ class StandardModel(TFModel):
     def output_ops(self) -> List[str]:
         return self.prediction_ops
 
-    def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool) -> Dict[tf.Tensor, np.ndarray]:
+    def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool, epoch_num: int) -> Dict[tf.Tensor, np.ndarray]:
         dropout = self.hypers.dropout_keep_rate if is_train else 1.0
         input_batch = np.array(batch[INPUTS])
         output_batch = np.array(batch[OUTPUT])
@@ -404,7 +404,7 @@ class StandardModel(TFModel):
         latencies: List[float] = []
 
         for batch_num, batch in enumerate(test_batch_generator):
-            feed_dict = self.batch_to_feed_dict(batch, is_train=False)
+            feed_dict = self.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
 
             start = time.time()
             prediction = self.sess.run(self._ops[PREDICTION], feed_dict=feed_dict)
