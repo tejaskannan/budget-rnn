@@ -44,10 +44,10 @@ def fuse_states(curr_state: tf.Tensor,
     elif mode in ('max', 'max-pool', 'max_pool'):
         concat = tf.concat([tf.expand_dims(curr_state, axis=-1), tf.expand_dims(prev_state, axis=-1)], axis=-1)  # [B, D, 2]
         return tf.reduce_max(concat, axis=-1)  # [B, D]
-    elif mode in ('gate', 'gate_layer', 'gate-layer'):
+    elif mode == 'gate':
         concat_states = tf.concat([curr_state, prev_state], axis=-1)  # [B, 2 * D]
 
-        # [B, 1]
+        # [B, D]
         update_weight, _ = dense(inputs=concat_states,
                                  units=state_size,
                                  name=name,
@@ -56,6 +56,33 @@ def fuse_states(curr_state: tf.Tensor,
                                  compression_fraction=compression_fraction,
                                  compression_seed=compression_seed)
 
+        return update_weight * curr_state + (1.0 - update_weight) * prev_state
+    elif mode == 'shared-gate':  # Gate layer with shared parameters
+        # [B, D]
+        curr_transformed, _ = dense(inputs=curr_state,
+                                    units=state_size,
+                                    name=name,
+                                    activation=None,
+                                    use_bias=False,
+                                    compression_fraction=compression_fraction,
+                                    compression_seed=compression_seed)
+        # [B, D]
+        prev_transformed, _ = dense(inputs=prev_state,
+                                    units=state_size,
+                                    name=name,
+                                    activation=None,
+                                    use_bias=False,
+                                    compression_fraction=compression_fraction,
+                                    compression_seed=compression_seed)
+        # [B, D]
+        gate_bias = tf.get_variable(name='{0}-bias'.format(name),
+                                    shape=(1, state_size),
+                                    initializer=tf.initializers.random_uniform(minval=-0.7, maxval=0.7),
+                                    trainable=True)
+        # [B, D]
+        update_weight = tf.math.sigmoid(curr_transformed + prev_transformed + gate_bias)
+
+        # Apply the update weight combine the previous and current states
         return update_weight * curr_state + (1.0 - update_weight) * prev_state
     else:
         raise ValueError(f'Unknown fusion mode: {mode}')
@@ -100,28 +127,6 @@ def dynamic_rnn(inputs: tf.Tensor,
     gates_array = tf.TensorArray(dtype=tf.float32, size=sequence_length, dynamic_size=False)
 
     combine_layer_name = get_combine_states_name(name, should_share_weights)
-
-    fusion_layers: List[FusionLayer] = []
-    if previous_states is not None and fusion_mode.lower() == 'gate':
-
-        # Initialize all variables before the while loop
-        for i in range(rnn_layers):
-            if compression_fraction is None or compression_fraction >= 1:
-                state_transform = tf.get_variable(name='{0}-{1}-kernel'.format(combine_layer_name, i),
-                                                  shape=(state_size * 2, state_size),
-                                                  initializer=tf.initializers.glorot_uniform(),
-                                                  trainable=True)
-            else:
-                state_transform = tf.get_variable(name='{0}-{1}-kernel'.format(combine_layer_name, i),
-                                                  shape=int(compression_fraction * (state_size * state_size * 2)),
-                                                  initializer=tf.initializers.glorot_uniform(),
-                                                  trainable=True)
-
-            # We don't compress biases, so the bias variable remains the same
-            state_transform_bias = tf.get_variable(name='{0}-{1}-bias'.format(combine_layer_name, i),
-                                                   shape=(1, state_size),
-                                                   initializer=tf.initializers.random_uniform(minval=-0.7, maxval=0.7),
-                                                   trainable=True)
 
     # While loop step
     def step(index, state, outputs, states, gates):

@@ -29,9 +29,6 @@ class AdaptiveModel(TFModel):
         super().__init__(hyper_parameters, save_folder, is_train)
 
         model_type = self.hypers.model_params['model_type'].upper()
-        if model_type == 'CASCADE':
-            model_type = 'CASCADE_RNN'
-
         self.model_type = AdaptiveModelType[model_type]
 
         self.name = model_type
@@ -477,8 +474,6 @@ class AdaptiveModel(TFModel):
             f1_score_name = get_f1_score_name(i)
             embedding_name = get_embedding_name(i, self.hypers.model_params['share_embedding_weights'])
 
-            self._ops['inputs_{0}'.format(i)] = self._placeholders[input_name]
-
             # Create the embedding layer. Output is a [B, T, D] tensor where T is the seq length of this level.
             input_sequence, _ = dense(inputs=self._placeholders[input_name],
                                       units=self.hypers.model_params['state_size'],
@@ -502,8 +497,6 @@ class AdaptiveModel(TFModel):
                                           compression_fraction=compression_fraction)
             # Save the states
             self._ops[state_name] = tf.transpose(transformed_sequence, perm=[1, 0, 2])  # [T, B, D]
-
-            self._ops['transformed_{0}'.format(i)] = transformed_sequence
 
             # Compute attention weights for aggregation. We only compute the
             # weights for this sequence to avoid redundant computation. [B, T, 1] tensor.
@@ -563,11 +556,6 @@ class AdaptiveModel(TFModel):
                 # [B, K]
                 level_output = tf.reduce_sum(level_outputs_concat * normalized_attn_weights, axis=1)
 
-                self._ops['logits_concat_{0}'.format(i)] = level_outputs_concat
-                self._ops['pooled_logits_{0}'.format(i)] = level_output
-                self._ops['attn_weights_concat_{0}'.format(i)] = attn_weight_concat
-                self._ops['normalized_attn_weights_{0}'.format(i)] = normalized_attn_weights
-
             # Compute the stop output using a dense layer. This results in a [B, 1] array.
             # The state used to compute the stop output depends on the model type (sample or cascade)
             if is_cascade(self.model_type):
@@ -582,12 +570,6 @@ class AdaptiveModel(TFModel):
                 normalize_factor = tf.maximum(tf.reduce_sum(first_attn_weights, axis=1, keepdims=True), SMALL_NUMBER)  # [B, 1, 1]
                 normalized_attn_weights = first_attn_weights / normalize_factor  # [B, L, 1]
                 stop_output_state = tf.reduce_sum(first_states * normalized_attn_weights, axis=1)  # [B, D]
-
-                self._ops['first_states_{0}'.format(i)] = first_states
-                self._ops['first_attn_weights_{0}'.format(i)] = first_attn_weights
-                self._ops['normalized_attn_weights_{0}'.format(i)] = normalized_attn_weights
-                self._ops['stop_output_state_{0}'.format(i)] = stop_output_state
-
 
             stop_output, _ = mlp(inputs=stop_output_state,
                                  output_size=1,
@@ -802,11 +784,6 @@ class AdaptiveModel(TFModel):
 
                 # [B, K]
                 level_output = tf.reduce_sum(level_outputs_concat * normalized_attn_weights, axis=1)
-
-                self._ops['logits_concat_{0}'.format(i)] = level_outputs_concat
-                self._ops['pooled_logits_{0}'.format(i)] = level_output
-                self._ops['attn_weights_concat_{0}'.format(i)] = attn_weight_concat
-                self._ops['normalized_attn_weights_{0}'.format(i)] = normalized_attn_weights
 
             # Append the output (pooled or not) to the list of outputs
             outputs.append(level_output)

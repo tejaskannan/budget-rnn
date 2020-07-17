@@ -404,7 +404,7 @@ class StandardModel(TFModel):
         latencies: List[float] = []
 
         for batch_num, batch in enumerate(test_batch_generator):
-            feed_dict = self.batch_to_feed_dict(batch, is_train=False)
+            feed_dict = self.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
 
             start = time.time()
             prediction = self.sess.run(self._ops[PREDICTION], feed_dict=feed_dict)

@@ -12,6 +12,7 @@ LOGITS = 'logits'
 GLOBAL_STEP = 'global_step'
 PREDICTION = 'prediction'
 DROPOUT_KEEP_RATE = 'dropout-keep-rate'
+STOP_LOSS_WEIGHT = 'stop-loss-weight'
 NODE_REGEX_FORMAT = '.*{0}.*'
 
 # Data format constants
