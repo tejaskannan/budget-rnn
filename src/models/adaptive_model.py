@@ -105,12 +105,16 @@ class AdaptiveModel(TFModel):
         # Calculate the stop loss weight based on the patience, number of levels, and epoch number
         # This weight will start at 1 / (L + Patience) and end at 1 / L after `patience` epochs.
         # We clip the output to 1 / L as a maximum value.
-        reciprocal_stop_loss_weight = self.num_sequences + max(self.hypers.patience - epoch_num, 0)
+        if self.hypers.model_params.get('should_increase_stop_loss_weight', False):
+            reciprocal_stop_loss_weight = self.num_sequences + max(self.hypers.patience - epoch_num, 0)
+            stop_loss_weight = 1.0 / reciprocal_stop_loss_weight
+        else:
+            stop_loss_weight = self.hypers.model_params.get('stop_loss_weight', 0.0)
 
         feed_dict = {
             self._placeholders[OUTPUT]: output_batch.reshape(-1, num_output_features),
             self._placeholders[DROPOUT_KEEP_RATE]: dropout,
-            self._placeholders[STOP_LOSS_WEIGHT]: (1.0 / reciprocal_stop_loss_weight)
+            self._placeholders[STOP_LOSS_WEIGHT]: stop_loss_weight
         }
 
         # Sample the batch down to the correct sequence length
