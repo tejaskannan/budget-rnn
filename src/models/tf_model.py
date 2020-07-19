@@ -693,9 +693,12 @@ class TFModel(Model):
             # Collect all saved variables
             assign_ops = []
             for trainable_var in self.trainable_vars:
-                saved_value = vars_dict[trainable_var.name]
-                assign_op = trainable_var.assign(saved_value, use_locking=True, read_value=False)
-                assign_ops.append(assign_op)
+                saved_value = vars_dict.get(trainable_var.name)
+                if saved_value is None:
+                    print('WARNING: No value for {0}'.format(trainable_var.name))
+                else:
+                    assign_op = trainable_var.assign(saved_value, use_locking=True, read_value=False)
+                    assign_ops.append(assign_op)
 
             # Execute assignment
             self.sess.run(assign_ops)
