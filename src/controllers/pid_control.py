@@ -238,7 +238,7 @@ class BudgetDistribution:
 
         return current_budget
 
-    def update(self, label: int, levels: int, time: int):
+    def update(self, label: int, levels: int):
         self._observed_label_counts[label] += 1
         self._prior_counts[label][levels] += 1
 
@@ -490,6 +490,9 @@ def run_simulation(labels: np.ndarray,
 
         levels_per_label[model_prediction].append(y_pred)
         level_counts[y_pred_model] += 1
+
+        # Update the controller
+        budget_distribution.update(label=model_prediction, levels=y_pred)
 
     print('Level Distribution: {0}'.format(level_counts / max_time))
     print('Accuracy: {0}'.format(np.average(num_correct)))

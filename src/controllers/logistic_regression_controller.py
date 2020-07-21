@@ -471,8 +471,6 @@ class CoordinateOptimizer(BudgetOptimizer):
             prev_level_approx_power = np.zeros_like(best_power)
             current_thresholds = np.zeros_like(best_t)  # [S]
 
-            # print('Starting threshold: {0}'.format(best_t))
-
             for offset in range(MARGIN):
 
                 # Compute the predictions using the threshold on the logistic regression model
@@ -487,35 +485,6 @@ class CoordinateOptimizer(BudgetOptimizer):
                                                               violation_factor=violation_factor,
                                                               undershoot_factor=undershoot_factor)
 
-                # print('Fitness: {0}, Candidate Value: {1}'.format(fitness, candidate_values))
-
-                # Initialize variables on first iteration
-                #if offset == 0:
-                #    prev_level_fitness = np.copy(fitness)
-                #    prev_level_approx_power = np.copy(approx_power)
-                #    current_thresholds = np.copy(thresholds[:, level])
-
-                ## Set the best values at inflection points in the fitness
-                #offset_condition = np.full(shape=fitness.shape, fill_value=(offset == MARGIN - 1 or offset == 0))
-                #is_fitness_same = np.isclose(prev_level_fitness, fitness)
-
-                #should_set = np.logical_and(prev_level_fitness <= best_fitness, \
-                #                            np.logical_or(np.logical_not(is_fitness_same), offset_condition))
-
-                #median_thresholds = np.clip(current_thresholds + ((0.5 * steps).astype(int) / fp_one), a_min=0.0, a_max=1.0)
-                #best_t = np.where(should_set, median_thresholds, best_t)  # Set the thresholds to the median amount
-                #best_power = np.where(should_set, prev_level_approx_power, best_power)
-                #best_fitness = np.where(should_set, prev_level_fitness, best_fitness)
-
-                ## If the fitness is equal to the previous fitness, then we add to the steps.
-                ## Otherwise, we reset.
-                #steps = np.where(np.isclose(prev_level_fitness, fitness), steps + 1, 0)
-
-                ## Reset variables
-                #current_thresholds = np.where(np.logical_not(is_fitness_same), thresholds[:, level], current_thresholds)
-                #prev_level_fitness = np.copy(fitness)
-                #prev_level_approx_power = np.copy(approx_power)
-
                 best_t = np.where(fitness < best_fitness, candidate_values, best_t)
                 best_power = np.where(fitness < best_fitness, approx_power, best_power)
                 best_fitness = np.where(fitness < best_fitness, fitness, best_fitness)
@@ -524,7 +493,6 @@ class CoordinateOptimizer(BudgetOptimizer):
             print('Completed Iteration: {0}: level {1}'.format(i, level))
             print('\tBest Fitness: {0}'.format(-1 * best_fitness))
             print('\tApprox Power: {0}'.format(best_power))
-            # print('\tThresholds: {0}'.format(thresholds))
 
             if i >= self._min_iter and (np.isclose(thresholds, prev_thresholds)).all():
                 early_stopping_counter += 1
@@ -571,7 +539,7 @@ class Controller:
         self._share_model = share_model
         self._num_levels = model.num_outputs
 
-        self._budgets = np.array(budgets)
+        self._budgets = np.array(list(sorted(budgets)))
         self._num_budgets = len(self._budgets)
         self._precision = precision
         self._trials = trials
@@ -631,9 +599,62 @@ class Controller:
 
     def get_thresholds(self, budget: int) -> np.ndarray:
         budget_idx = index_of(self._budgets, value=budget)
-        assert budget_idx >= 0, 'Could not find values for budget {0}'.format(budget)
 
-        return self._thresholds[budget_idx]
+        # If we already have the budget, then use the corresponding thresholds
+        if budget_idx >= 0:
+            return self._thresholds[budget_idx]
+
+        # Otherwise, we interpolate the thresholds from the nearest two known budgets
+        lower_budget_idx, upper_budget_idx = None, None
+        for idx in range(0, len(self._budgets) - 1):
+            if self._budgets[idx] < budget and self._budgets[idx + 1] > budget:
+                lower_budget_idx = idx
+                upper_budget_idx = idx + 1
+
+        # If the budget is out of the range of the learned budgets, the we supplement the learned
+        # thresholds with fixed policies at either end.
+        if lower_budget_idx is None or upper_budget_idx is None:
+            if budget < self._budgets[0]:
+                # The budget is below the lowest learned budget. If it is below the lowest power amount,
+                # then we use a fixed policy on the lowest level. Otherwise, we interpolate as usual.
+                fixed_thresholds = np.zeros_like(self._thresholds[0])
+                if budget < self._power[0]:
+                    return fixed_thresholds
+
+                lower_budget = self._power[0]
+                upper_budget = self._budgets[0]
+
+                lower_thresh = fixed_thresholds
+                upper_thresh = self._thresholds[0]
+            else:
+                # The budget is above the highest learned budget. We either fix the policy to the highest level
+                # or interpolate given the position of the budget w.r.t. the highest power level.
+                fixed_thresholds = np.ones_like(self._thresholds[0])
+                fixed_thresholds[-1] = 0
+                if budget > self._power[-1]:
+                    return fixed_thresholds
+
+                lower_budget = self._budgets[-1]
+                upper_budget  = self._power[-1]
+
+                lower_thresh = self._thresholds[-1]
+                upper_thresh = fixed_thresholds
+        else:
+            lower_budget = self._budgets[lower_budget_idx]
+            upper_budget = self._budgets[upper_budget_idx]
+
+            lower_thresh = self._thresholds[lower_budget_idx]
+            upper_thresh = self._thresholds[upper_budget_idx]
+
+            # lb, ub = self._budgets[lower_budget_idx], self._budgets[upper_budget_idx]
+
+        # Interpolation weight
+        z = (budget - lower_budget) / (upper_budget - lower_budget)
+
+        # Create thresholds
+        thresholds = lower_thresh * (1 - z) + upper_thresh * z
+
+        return thresholds
 
     def get_avg_level_counts(self, budget: int) -> np.ndarray:
         budget_idx = index_of(self._budgets, value=budget)
@@ -677,7 +698,7 @@ class Controller:
                 sample_tensor = inputs[start:end]
                 feed_dict[input_ph] = np.expand_dims(sample_tensor, axis=0)  # Make batch size 1
 
-        # Supply dropout (needed for Adaptive NBOW)
+        # Supply dropout as 1.0 (keep everything)
         feed_dict[self._model.placeholders[DROPOUT_KEEP_RATE]] = 1.0
 
         model_result = self._model.execute(ops=stop_output_ops, feed_dict=feed_dict)
@@ -693,20 +714,21 @@ class Controller:
     def predict_levels(self, series: DataSeries, budget: float) -> Tuple[np.ndarray, np.ndarray]:
         assert self._is_fitted, 'Model is not fitted'
 
-        budget_idx = index_of(self._budgets, value=budget)
-        assert budget_idx >= 0, 'Could not find values for budget {0}'.format(budget)
+        # budget_idx = index_of(self._budgets, value=budget)
+        # assert budget_idx >= 0, 'Could not find values for budget {0}'.format(budget)
+        thresholds = self.get_thresholds(budget)
 
         X, ypred, logits, _, clf_predictions = fetch_model_states(self._model, self._dataset, series=series)
         level_predictions = np.argmax(logits, axis=-1)  # [B, L]
 
-        levels = levels_to_execute(logistic_probs=clf_predictions, thresholds=self._thresholds)
+        levels = levels_to_execute(logistic_probs=clf_predictions, thresholds=np.expand_dims(thresholds, axis=0))
 
         batch_idx = np.arange(level_predictions.shape[0])
         predictions = predictions_for_levels(model_predictions=level_predictions,
                                              levels=levels,
                                              batch_idx=batch_idx)
 
-        return levels[budget_idx].astype(int), predictions[budget_idx].astype(int)
+        return levels[0].astype(int), predictions[0].astype(int)
 
     def as_dict(self):
         return {
@@ -763,6 +785,8 @@ class Controller:
         controller._thresholds = serialized_info['thresholds']
         controller._avg_level_counts = serialized_info['avg_level_counts']
         controller._is_fitted = serialized_info['is_fitted']
+
+        print('Thresholds: {0}'.format(serialized_info['thresholds']))
 
         return controller
 
@@ -876,6 +900,3 @@ if __name__ == '__main__':
         # Fit the model on the validation set
         controller.fit(series=DataSeries.VALID)
         controller.save()
-
-        # print('Validation Accuracy: {0:.5f}'.format(controller.score(series=DataSeries.VALID))) 
-        # print('Test Accuracy: {0:.5f}'.format(controller.score(series=DataSeries.TEST)))
