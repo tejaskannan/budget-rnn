@@ -95,7 +95,6 @@ def fetch_model_states(model: AdaptiveModel, dataset: Dataset, series: DataSerie
     stop_outputs = np.concatenate(stop_outputs, axis=0)
 
     y = (level_predictions == labels).astype(float)
-    print('Level Accuracy: {0}'.format(np.average(y, axis=0)))
 
     return states, y, level_logits, labels, stop_outputs
 
@@ -786,9 +785,54 @@ class Controller:
         controller._avg_level_counts = serialized_info['avg_level_counts']
         controller._is_fitted = serialized_info['is_fitted']
 
-        print('Thresholds: {0}'.format(serialized_info['thresholds']))
-
         return controller
+
+
+class GreedyController:
+
+    def __init__(self, model_predictions: np.ndarray, max_time: int, power: float, num_classes: int):
+        self._model_predictions = model_predictions
+        self._num_classes = num_classes
+        
+        # Save variables corresponding to the budget
+        self._max_time = max_time
+        self._power = power
+        self._model_executions = 0
+
+        # Create random state for reproducible results
+        self._rand = np.random.RandomState(seed=72)
+
+    def predict_sample(self, current_time: int,  budget: int) -> Tuple[int, bool]:
+        """
+        Predicts the label for the given inputs.
+
+        Args:
+            current_time: The current time index
+            budget: The power budget
+        Returns:
+            A tuple of two element: (1) A classification for the t-th sample (given by current time)
+                (2) Whether the model is executed (True) or the system acted randomly (False)
+        """
+        # Calculate used energy to determine whether to use the model
+        used_energy = self._model_executions * self._power
+        energy_budget = budget * self._max_time
+
+        should_use_model = bool(used_energy < energy_budget)
+
+        # By acting randomly, we incur no energy (no need to collect input samples)
+        if not should_use_model:
+            return self._rand.randint(low=0, high=self._num_classes), not should_use_model
+
+        # If not acting randomly, we use the neural network to perform the classification.
+        prediction = self._model_predictions[current_time, -1]  # Always take label from the top-level model
+
+        # Increment Execution Counter
+        self._model_executions += 1
+
+        return prediction, should_use_model
+
+    def get_consumed_energy(self) -> float:
+        return self._model_executions * self._power
 
 
 class RandomController(Controller):
