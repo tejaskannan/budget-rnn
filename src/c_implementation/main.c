@@ -11,7 +11,7 @@ uint16_t getCurrentLevel(uint16_t seqIndex) {
     #ifdef IS_SAMPLE
     return seqIndex % numSequences;
     #else
-    return seqIndex / numSequences;
+    return seqIndex / SAMPLES_PER_SEQ;
     #endif
 }
 
@@ -23,7 +23,8 @@ uint8_t isLastSampleInLevel(uint16_t seqIndex, uint16_t fixedSeqIndex) {
         UNUSED(fixedSeqIndex);
         return (SEQ_LENGTH - seqIndex) <= (SEQ_LENGTH / SAMPLES_PER_SEQ);
     #else
-        return (seqIndex % SAMPLES_PER_SEQ) == 0;
+        UNUSED(fixedSeqIndex);
+        return ((seqIndex + 1) % SAMPLES_PER_SEQ) == 0;
     #endif
 }
 
@@ -45,7 +46,6 @@ int main(int argc, char **argv) {
 
     uint16_t outputBufferSize = 10;
     char outputBuffer[outputBufferSize];
-
 
     // Initialize an buffer for states
     matrix states[SEQ_LENGTH];
@@ -83,9 +83,10 @@ int main(int argc, char **argv) {
     uint16_t currentLevel;
     uint8_t isEnd;
 
-    uint16_t budgetIndex = 5;
+    uint16_t budgetIndex = 0;
     uint16_t numSamples = 0;
-    int16_t numCorrect = 0;
+    uint16_t numCorrect = 0;
+    uint16_t numLevels = 0;
     int16_t label;
 
     while (fgets(buffer, buffer_size, inputs_file) != NULL) {
@@ -110,12 +111,13 @@ int main(int argc, char **argv) {
 
             // Fetch features for the i-th element
             for (int j = 0; j < NUM_INPUT_FEATURES; j++) {
-                float feature_val = atof(token);
-                int16_t val = float_to_fp(feature_val, FIXED_POINT_PRECISION);
+                //float feature_val = atof(token);
+                //int16_t val = float_to_fp(feature_val, FIXED_POINT_PRECISION);
 
-                // Normalize the input feature
-                input.data[j] = fp_mul(fp_sub(val, INPUT_MEAN[j]), INPUT_STD[j], FIXED_POINT_PRECISION);
+                //// Normalize the input feature
+                //input.data[j] = fp_mul(fp_sub(val, INPUT_MEAN[j]), INPUT_STD[j], FIXED_POINT_PRECISION);
 
+                input.data[j] = atoi(token);
                 token = strtok(NULL, " ");
             }
 
@@ -152,17 +154,9 @@ int main(int argc, char **argv) {
             #ifdef IS_ADAPTIVE
                 #ifdef IS_SAMPLE
                     if (i < numSequences) {
-                        int16_t stopProb = compute_stop_output(states + i, FIXED_POINT_PRECISION);
-                        int16_t threshold = THRESHOLDS[budgetIndex][currentLevel];
-
-                        if (threshold < stopProb) {
-                            levelsToExecute = currentLevel;
-                            isStopped = 1;
-                        }
-
-                    }
                 #else
-                    if (i % SAMPLES_PER_SEQ == 0) {
+                    if ((i+1) % SAMPLES_PER_SEQ == 0) {
+                #endif
                         int16_t stopProb = compute_stop_output(states + i, FIXED_POINT_PRECISION);
                         int16_t threshold = THRESHOLDS[budgetIndex][currentLevel];
 
@@ -171,7 +165,6 @@ int main(int argc, char **argv) {
                             isStopped = 1;
                         }
                     }
-                #endif
             #endif
 
             // If we reach the last element of the highest level, we compute the output.
@@ -179,6 +172,7 @@ int main(int argc, char **argv) {
             if ((currentLevel == levelsToExecute && isStopped && isEnd) || (i == SEQ_LENGTH - 1)) {
                 int16_t prediction = compute_prediction(states + i, FIXED_POINT_PRECISION);
                 numCorrect += (uint16_t) (prediction == label);
+                numLevels += levelsToExecute + 1;
                 break;
             }
         }
@@ -190,7 +184,7 @@ int main(int argc, char **argv) {
     }
 
     printf("Accuracy for model: %d / %d\n", numCorrect, time);
-    //printf("Average number of levels: %d / %d\n", levels, num_samples);
+    printf("Average number of levels: %d / %d\n", numLevels, time);
 
     fclose(inputs_file);
     fclose(output_file);

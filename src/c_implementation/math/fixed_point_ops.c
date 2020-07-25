@@ -81,7 +81,9 @@ int16_t fp_leaky_relu(int16_t x, uint16_t precision) {
     if (x >= 0) {
         return x;
     }
-    return fp_mul(x, 1 << (precision - 3), precision);  // Factor set to 1 / 8
+
+    // Fixed factor of 1/4
+    return fp_mul(x, 1 << (precision - 2), precision);
 }
 
 
