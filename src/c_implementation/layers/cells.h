@@ -47,7 +47,23 @@ struct TFGRU {
 typedef struct TFGRU TFGRU;
 
 
-// Supported Cell Types
-enum CellType { GRUCell = 0, TFGRUCell = 1 };
+struct UGRNN {
+    matrix *wUpdate;
+    matrix *uUpdate;
+    matrix *bUpdate;
+    matrix *wCandidate;
+    matrix *uCandidate;
+    matrix *bCandidate;
+};
+typedef struct UGRNN UGRNN;
+
+
+struct UGRNNTempStates {
+    matrix *update;
+    matrix *candidate;
+    matrix *inputTemp;
+    matrix *gateTemp;
+};
+typedef struct UGRNNTempStates UGRNNTempStates;
 
 #endif

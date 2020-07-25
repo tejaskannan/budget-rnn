@@ -71,7 +71,15 @@ matrix *matrix_add(matrix *result, matrix *mat1, matrix *mat2) {
 }
 
 
-matrix *matrix_multiply(matrix *result, matrix *mat1, matrix *mat2, int16_t precision) {
+matrix *matrix_neg(matrix *result, matrix *mat, uint16_t precision) {
+    /*
+     * Multiplies all elements by -1.
+     */
+    return scalar_product(result, mat, int_to_fp(-1, precision), precision);
+}
+
+
+matrix *matrix_multiply(matrix *result, matrix *mat1, matrix *mat2, uint16_t precision) {
     /**
      * Performs matrix multiplication and stores value in given result array
      */
@@ -109,7 +117,7 @@ matrix *matrix_multiply(matrix *result, matrix *mat1, matrix *mat2, int16_t prec
 }
 
 
-matrix *matrix_hadamard(matrix* result, matrix *mat1, matrix *mat2, int16_t precision) {
+matrix *matrix_hadamard(matrix* result, matrix *mat1, matrix *mat2, uint16_t precision) {
     /**
      * Elementwise matrix product. Result stored in matrix 1.
      */
@@ -129,7 +137,7 @@ matrix *matrix_hadamard(matrix* result, matrix *mat1, matrix *mat2, int16_t prec
 }
 
 
-matrix *scalar_product(matrix *result, matrix *mat, int16_t scalar, int16_t precision) {
+matrix *scalar_product(matrix *result, matrix *mat, int16_t scalar, uint16_t precision) {
     /**
      * Multiplies every element in the matrix by the given scalar.
      * Result stored directly into the given array.
@@ -167,7 +175,7 @@ matrix *scalar_add(matrix *result, matrix *mat, int16_t scalar) {
 }
 
 
-matrix *apply_elementwise(matrix *result, matrix *mat, int16_t (*fn)(int16_t, int16_t), int16_t precision) {
+matrix *apply_elementwise(matrix *result, matrix *mat, int16_t (*fn)(int16_t, uint16_t), uint16_t precision) {
     /**
      * Applies the given function to every element of the
      * input matrix. Result stored directly in the matrix.
@@ -322,7 +330,7 @@ int16_t argmax(matrix *vec) {
 }
 
 
-int8_t threshold_prediction(matrix *logits, int16_t threshold, int16_t precision, dtype *temp_buffer) {
+int8_t threshold_prediction(matrix *logits, int16_t threshold, uint16_t precision, dtype *temp_buffer) {
     /**
      * Returns the highest-probability class if the normalized log probability is above the given threshold.
      * If the threshold is not satisfied, then the function returns -1.
@@ -357,7 +365,7 @@ int8_t threshold_prediction(matrix *logits, int16_t threshold, int16_t precision
 }
 
 
-matrix *normalize(matrix *vec, const int16_t *mean, const int16_t *std, int16_t precision) {
+matrix *normalize(matrix *vec, const int16_t *mean, const int16_t *std, uint16_t precision) {
     /**
      * Normalizes the vector to a standard normal distribution. This operation is in-place,
      * so the original vector is mutated.
@@ -378,7 +386,7 @@ matrix *normalize(matrix *vec, const int16_t *mean, const int16_t *std, int16_t 
 }
 
 
-matrix *hashed_matrix_vector_product(matrix *result, matrix *mat, matrix *vec, char *seed, uint8_t should_transpose, int16_t precision) {
+matrix *hashed_matrix_vector_product(matrix *result, matrix *mat, matrix *vec, char *seed, uint8_t should_transpose, uint16_t precision) {
     /**
      * Computes the matrix vector product using the hashing trick where the matrix is compressed into a vector.
      */

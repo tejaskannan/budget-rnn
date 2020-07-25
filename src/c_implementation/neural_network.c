@@ -1,73 +1,154 @@
 #include "neural_network.h"
-int16_t *execute_model(matrix *inputs[SEQ_LENGTH], int16_t *outputs) {
-	GRU rnn_cell = { TRANSFORM_RNN_CELL_W_UPDATE_0_MAT, TRANSFORM_RNN_CELL_U_UPDATE_0_MAT, TRANSFORM_RNN_CELL_B_UPDATE_0_MAT, TRANSFORM_RNN_CELL_W_RESET_0_MAT, TRANSFORM_RNN_CELL_U_RESET_0_MAT, TRANSFORM_RNN_CELL_B_RESET_0_MAT, TRANSFORM_RNN_CELL_W_0_MAT, TRANSFORM_RNN_CELL_U_0_MAT, TRANSFORM_RNN_CELL_B_0_MAT };
 
-	matrix *transformed = matrix_allocate(16, 1);
-	matrix *state = matrix_allocate(16, 1);
-	matrix *temp_state = matrix_allocate(16, 1);
-	matrix *fusion_stack = matrix_allocate(2 * 16, 1);
-	matrix *fusion_gate = matrix_allocate(16, 1);
-    matrix *output_temp0 = matrix_allocate(OUTPUT_HIDDEN_KERNEL_0_MAT->numRows, state->numCols);
-	matrix *output_temp1 = matrix_allocate(OUTPUT_HIDDEN_KERNEL_1_MAT->numRows, output_temp0->numCols);
-    matrix *gate_temp = matrix_allocate(16, 1);
+// Buffer for intermediate states
+dtype DATA_BUFFER[400];
 
-	matrix *output = matrix_allocate(OUTPUT_KERNEL_0_MAT->numRows, 1);
 
-	matrix *prev_states[SAMPLES_PER_SEQ];
-	for (int16_t i = 0; i < SAMPLES_PER_SEQ; i++) {
-		prev_states[i] = matrix_allocate(16, 1);
-	}
+matrix *apply_transformation(matrix *result, matrix *input, matrix *state, uint16_t precision) {
+    /**
+     * Applies both the embedding layer and the transformation to the input and previous state.
+     */
+    uint16_t data_buffer_offset = 0;
 
-    GRUTempStates gruTemp;
-    gruTemp.update = matrix_allocate(16, 1);
-    gruTemp.reset = matrix_allocate(16, 1);
-    gruTemp.candidate = matrix_allocate(16, 1);
-    gruTemp.inputTemp = matrix_allocate(16, 1);
-    gruTemp.gateTemp = matrix_allocate(16, 1);
+    // Allocate intermediate state for the embedding
+    matrix embedding = { DATA_BUFFER + data_buffer_offset, state->numRows, state->numCols };
+    data_buffer_offset += embedding.numRows * embedding.numCols;
 
-	for (int16_t i = 0; i < 5; i++) {
-		matrix_set(state, 0);
-		for (int16_t j = 0; j < SAMPLES_PER_SEQ; j++) {
-			matrix *input = inputs[j * 5 + i];
-			transformed = dense(transformed, input, EMBEDDING_KERNEL_0_MAT, EMBEDDING_BIAS_0_MAT, &fp_tanh, FIXED_POINT_PRECISION);
-			if (i > 0) {
-				fusion_stack = stack(fusion_stack, state, prev_states[j]);
-				fusion_gate = dense(fusion_gate, fusion_stack, FUSION_KERNEL_0_MAT, FUSION_BIAS_0_MAT, &fp_sigmoid, FIXED_POINT_PRECISION);
-				temp_state = apply_gate(temp_state, fusion_gate, state, prev_states[j], gate_temp, FIXED_POINT_PRECISION);
-				state = matrix_replace(state, temp_state);
-			}
-			temp_state = apply_gru(temp_state, transformed, state, &rnn_cell, &gruTemp, FIXED_POINT_PRECISION);
-			state = matrix_replace(state, temp_state);
-			matrix_replace(prev_states[j], state);
-		}
+    // Apply the embedding layer
+    dense(&embedding, input, EMBEDDING_KERNEL_0_MAT, EMBEDDING_BIAS_0_MAT, &fp_leaky_relu, precision);
 
-		output_temp0 = dense(output_temp0, state, OUTPUT_HIDDEN_KERNEL_0_MAT, OUTPUT_HIDDEN_BIAS_0_MAT, &fp_tanh, FIXED_POINT_PRECISION);
-		output_temp1 = dense(output_temp1, output_temp0, OUTPUT_HIDDEN_KERNEL_1_MAT, OUTPUT_HIDDEN_BIAS_1_MAT, &fp_tanh, FIXED_POINT_PRECISION);
-		output = dense(output, output_temp1, OUTPUT_KERNEL_0_MAT, NULL_PTR, &fp_linear, FIXED_POINT_PRECISION);
+    // Apply the specified transformation layer
+    #ifdef GRU_TRANSFORM
+        // Allocate temporary states
+        matrix inputTemp = { DATA_BUFFER + data_buffer_offset, state->numRows, state->numCols };
+        data_buffer_offset += inputTemp.numRows * inputTemp.numCols;
 
-		int16_t prediction = argmax(output);
-		outputs[i] = prediction;
-	}
+        matrix update = { DATA_BUFFER + data_buffer_offset, state->numRows, state->numCols };
+        data_buffer_offset += update.numRows * update.numCols;
 
-    matrix_free(gate_temp);
-    matrix_free(output_temp0);
-    matrix_free(output_temp1);
-	matrix_free(transformed);
-	matrix_free(state);
-	matrix_free(fusion_gate);
-	matrix_free(fusion_stack);
-	matrix_free(output);
-	matrix_free(temp_state);
+        matrix reset = { DATA_BUFFER + data_buffer_offset, state->numRows, state->numCols };
+        data_buffer_offset += reset.numRows * reset.numCols;
 
-    matrix_free(gruTemp.update);
-    matrix_free(gruTemp.reset);
-    matrix_free(gruTemp.candidate);
-    matrix_free(gruTemp.inputTemp);
-    matrix_free(gruTemp.gateTemp);
+        matrix candidate = { DATA_BUFFER + data_buffer_offset, state->numRows, state->numCols };
+        data_buffer_offset += candidate.numRows * candidate.numCols;
 
-	for (int16_t i = 0; i < SAMPLES_PER_SEQ; i++) {
-		matrix_free(prev_states[i]);
-	}
+        matrix gateTemp = { DATA_BUFFER + data_buffer_offset, state->numRows, state->numCols };
+        data_buffer_offset += gateTemp.numRows * gateTemp.numCols;
 
-	return outputs;
+        GRUTempStates rnnTemp;
+        rnnTemp.inputTemp = &inputTemp;
+        rnnTemp.update = &update;
+        rnnTemp.reset = &reset;
+        rnnTemp.candidate = &candidate;
+        rnnTemp.gateTemp = &gateTemp;
+
+        /// Create the GRU Cell
+	    GRU rnn_cell = { TRANSFORM_RNN_CELL_W_UPDATE_KERNEL_0_MAT, TRANSFORM_RNN_CELL_U_UPDATE_KERNEL_0_MAT, TRANSFORM_RNN_CELL_B_UPDATE_BIAS_0_MAT, TRANSFORM_RNN_CELL_W_RESET_KERNEL_0_MAT, TRANSFORM_RNN_CELL_U_RESET_KERNEL_0_MAT, TRANSFORM_RNN_CELL_B_RESET_BIAS_0_MAT, TRANSFORM_RNN_CELL_W_KERNEL_0_MAT, TRANSFORM_RNN_CELL_U_KERNEL_0_MAT, TRANSFORM_RNN_CELL_B_BIAS_0_MAT };
+	
+        // Apply the GRU Cell
+        apply_gru(result, &embedding, state, &rnn_cell, &rnnTemp, precision);
+    #endif
+    #ifdef UGRNN_TRANSFORM
+        // Allocate temporary states
+        matrix inputTemp = { DATA_BUFFER + data_buffer_offset, state->numRows, state->numCols };
+        data_buffer_offset += inputTemp.numRows * inputTemp.numCols;
+
+        matrix update = { DATA_BUFFER + data_buffer_offset, state->numRows, state->numCols };
+        data_buffer_offset += update.numRows * update.numCols;
+
+        matrix candidate = { DATA_BUFFER + data_buffer_offset, state->numRows, state->numCols };
+        data_buffer_offset += candidate.numRows * candidate.numCols;
+
+        matrix gateTemp = { DATA_BUFFER + data_buffer_offset, state->numRows, state->numCols };
+        data_buffer_offset += gateTemp.numRows * gateTemp.numCols;
+
+        UGRNNTempStates rnnTemp;
+        rnnTemp.inputTemp = &inputTemp;
+        rnnTemp.update = &update;
+        rnnTemp.candidate = &candidate;
+        rnnTemp.gateTemp = &gateTemp;
+
+        /// Create the UGRNN Cell
+	    UGRNN rnn_cell = { TRANSFORM_RNN_CELL_W_UPDATE_KERNEL_0_MAT, TRANSFORM_RNN_CELL_U_UPDATE_KERNEL_0_MAT, TRANSFORM_RNN_CELL_B_UPDATE_BIAS_0_MAT, TRANSFORM_RNN_CELL_W_KERNEL_0_MAT, TRANSFORM_RNN_CELL_U_KERNEL_0_MAT, TRANSFORM_RNN_CELL_B_BIAS_0_MAT };
+
+        // Apply the GRU Cell
+        apply_ugrnn(result, &embedding, state, &rnn_cell, &rnnTemp, precision);
+    #endif
+
+    return result;
 }
+
+
+// Function to compute output (1 or 2 hidden layer depending on model type)
+int16_t compute_prediction(matrix *input, uint16_t precision) {
+    /**
+     * Function to compute the prediction using a feed-forward network.
+     */
+    // Allocate intermediate states
+    uint16_t data_buffer_offset = 0;
+    matrix hidden = { DATA_BUFFER + data_buffer_offset, OUTPUT_HIDDEN_BIAS_0_MAT->numRows, 1 };
+    data_buffer_offset += hidden.numRows * hidden.numCols;
+
+    matrix output = { DATA_BUFFER + data_buffer_offset, NUM_OUTPUT_FEATURES, 1 };
+    data_buffer_offset += output.numRows * output.numCols;
+
+    // Apply the dense layers
+    dense(&hidden, input, OUTPUT_HIDDEN_KERNEL_0_MAT, OUTPUT_HIDDEN_BIAS_0_MAT, &fp_leaky_relu, precision);
+    dense(&output, &hidden, OUTPUT_KERNEL_0_MAT, OUTPUT_BIAS_0_MAT, &fp_linear, precision);
+
+    return argmax(&output);
+}
+
+
+#ifdef IS_ADAPTIVE
+int16_t compute_stop_output(matrix *state, uint16_t precision) {
+    /**
+     * Computes the stop output from the given state.
+     */
+    // Allocate intermediate states
+    uint16_t data_buffer_offset = 0;
+    matrix hidden = { DATA_BUFFER + data_buffer_offset, STOP_PREDICTION_HIDDEN_BIAS_0_MAT->numRows, 1 };
+    data_buffer_offset += hidden.numRows * hidden.numCols;
+
+    matrix output = { DATA_BUFFER + data_buffer_offset, 1, 1 };
+    data_buffer_offset += output.numRows * output.numCols;
+
+    // Apply the dense layers
+    dense(&hidden, state, STOP_PREDICTION_HIDDEN_KERNEL_0_MAT, STOP_PREDICTION_HIDDEN_BIAS_0_MAT, &fp_leaky_relu, precision);
+    dense(&output, &hidden, STOP_PREDICTION_KERNEL_0_MAT, STOP_PREDICTION_BIAS_0_MAT, &fp_sigmoid, precision);
+
+    return output.data[0];
+}
+#endif
+
+
+#if defined(IS_SAMPLE) && defined(IS_RNN)
+matrix *fuse_states(matrix *result, matrix *current, matrix *previous, uint16_t precision) {
+    /**
+     * Combines the given states using a learned weighted average.
+     */
+    // Allocate intermediate states
+    uint16_t data_buffer_offset = 0;
+
+    matrix fusionInput = { DATA_BUFFER + data_buffer_offset, current->numRows + previous->numRows, current->numCols };
+    data_buffer_offset += fusionInput.numRows * fusionInput.numCols;
+
+    matrix fusionGate = { DATA_BUFFER + data_buffer_offset, current->numRows, current->numCols };
+    data_buffer_offset += fusionGate.numRows * fusionGate.numCols;
+
+    matrix gateTemp = { DATA_BUFFER + data_buffer_offset, current->numRows, current->numCols };
+    data_buffer_offset += gateTemp.numRows * gateTemp.numCols;
+
+    // Stack the states
+    stack(&fusionInput, current, previous);
+
+    // Compute the fusion gate
+    dense(&fusionGate, &fusionInput, FUSION_KERNEL_0_MAT, FUSION_BIAS_0_MAT, &fp_sigmoid, precision);
+
+    apply_gate(result, &fusionGate, current, previous, &gateTemp, precision);
+    return result;
+}
+#endif
+
+
+// Function to pool states in NBOW models
