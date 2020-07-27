@@ -19,7 +19,7 @@ from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, DROPOU
 from utils.constants import AGGREGATE_SEED, TRANSFORM_SEED, OUTPUT_SEED, EMBEDDING_SEED, SMALL_NUMBER
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
 from utils.loss_utils import binary_classification_loss, f1_score_loss
-from utils.rnn_utils import get_backward_name
+from utils.rnn_utils import get_backward_name, OUTPUT_ATTENTION
 from .base_model import Model
 
 
@@ -133,9 +133,7 @@ class StandardModel(TFModel):
                                   units=state_size,
                                   activation=self.hypers.model_params['embedding_activation'],
                                   use_bias=True,
-                                  name=EMBEDDING_LAYER_NAME,
-                                  compression_fraction=compression_fraction,
-                                  compression_seed=EMBEDDING_SEED)
+                                  name=EMBEDDING_LAYER_NAME)
 
         # Apply the transformation layer. The output is a [B, T, D] tensor of transformed inputs for each model type.
         if self.model_type == StandardModelType.NBOW:
@@ -148,18 +146,14 @@ class StandardModel(TFModel):
                                  should_activate_final=True,
                                  should_bias_final=True,
                                  should_dropout_final=True,
-                                 name=TRANSFORM_LAYER_NAME,
-                                 compression_fraction=compression_fraction,
-                                 compression_seed=TRANSFORM_SEED)
+                                 name=TRANSFORM_LAYER_NAME)
 
             # Compute weights for aggregation layer, [B, T, 1]
             aggregation_weights, _ = dense(inputs=transformed,
                                            units=1,
                                            activation='sigmoid',
                                            use_bias=True,
-                                           name=AGGREGATION_LAYER_NAME,
-                                           compression_fraction=compression_fraction,
-                                           compression_seed=AGGREGATE_SEED)
+                                           name=AGGREGATION_LAYER_NAME)
 
             # Pool the data in a successive fashion, [B, T, D]
             transformed = successive_pooling(inputs=transformed,
@@ -169,122 +163,29 @@ class StandardModel(TFModel):
         elif self.model_type == StandardModelType.RNN:
             # We either use a tensorflow cell or a custom RNN cell depending on whether we
             # are compressing the trainable parameters. The compressed cell uses the custom implementation.
-            if compression_fraction is None:
-                cell = tf_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
-                                   num_units=state_size,
-                                   activation=self.hypers.model_params['rnn_activation'],
-                                   layers=self.hypers.model_params['rnn_layers'],
-                                   name_prefix=TRANSFORM_LAYER_NAME)
+            cell = tf_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
+                               num_units=state_size,
+                               activation=self.hypers.model_params['rnn_activation'],
+                               layers=self.hypers.model_params['rnn_layers'],
+                               name_prefix=TRANSFORM_LAYER_NAME)
 
-                initial_state = cell.zero_state(batch_size=batch_size, dtype=tf.float32)
-                rnn_outputs, state = tf.nn.dynamic_rnn(cell=cell,
-                                                       inputs=input_sequence,
-                                                       initial_state=initial_state,
-                                                       dtype=tf.float32,
-                                                       scope=RNN_NAME)
-                transformed = rnn_outputs
-            else:
-                cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
-                                     input_units=state_size,
-                                     output_units=state_size,
-                                     activation=self.hypers.model_params['rnn_activation'],
-                                     num_layers=self.hypers.model_params['rnn_layers'],
-                                     name=TRANSFORM_LAYER_NAME,
-                                     compression_fraction=compression_fraction,
-                                     compression_seed=TRANSFORM_SEED)
+            initial_state = cell.zero_state(batch_size=batch_size, dtype=tf.float32)
+            rnn_outputs, state = tf.nn.dynamic_rnn(cell=cell,
+                                                   inputs=input_sequence,
+                                                   initial_state=initial_state,
+                                                   dtype=tf.float32,
+                                                   scope=RNN_NAME)
+            transformed = rnn_outputs  # [B, T, D]
 
-                initial_state = cell.zero_state(batch_size=batch_size, dtype=tf.float32)
-
-                # Run RNN and collect outputs
-                rnn_out = dynamic_rnn(cell=cell,
-                                      inputs=input_sequence,
-                                      previous_states=None,
-                                      initial_state=initial_state,
-                                      name=RNN_NAME,
-                                      compression_fraction=compression_fraction)
-                rnn_outputs = rnn_out.outputs
-                rnn_states = rnn_out.states
-                rnn_gates = rnn_out.gates
-
-                transformed = rnn_outputs.stack()  # [T, B, D]
-                transformed = tf.transpose(transformed, perm=[1, 0, 2])  # [B, T, D]
-        elif self.model_type == StandardModelType.BIRNN:
-            if compression_fraction is None:
-                fw_cell = tf_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
-                                      num_units=state_size,
-                                      activation=self.hypers.model_params['rnn_activation'],
-                                      layers=self.hypers.model_params['rnn_layers'],
-                                      name_prefix='{0}-fw'.format(TRANSFORM_LAYER_NAME))
-
-                bw_cell = tf_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
-                                      num_units=state_size,
-                                      activation=self.hypers.model_params['rnn_activation'],
-                                      layers=self.hypers.model_params['rnn_layers'],
-                                      name_prefix='{0}-bw'.format(TRANSFORM_LAYER_NAME))
-
-                fw_initial_state = fw_cell.zero_state(batch_size=batch_size, dtype=tf.float32)
-                bw_initial_state = bw_cell.zero_state(batch_size=batch_size, dtype=tf.float32)
-
-                transformed, state = tf.nn.bidirectional_dynamic_rnn(cell_fw=fw_cell,
-                                                                     cell_bw=bw_cell,
-                                                                     inputs=input_sequence,
-                                                                     initial_state_fw=fw_initial_state,
-                                                                     initial_state_bw=bw_initial_state,
-                                                                     dtype=tf.float32,
-                                                                     scope=BIRNN_NAME)
-                # Concatenate forward and backward states / outputs
-                transformed = tf.concat(transformed, axis=-1)  # [B, T, 2 * D]
-            else:
-                # Make the RNN cells
-                fw_cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
-                                        input_units=state_size,
-                                        output_units=state_size,
-                                        activation=self.hypers.model_params['rnn_activation'],
-                                        num_layers=self.hypers.model_params['rnn_layers'],
-                                        name=TRANSFORM_LAYER_NAME,
-                                        compression_fraction=compression_fraction,
-                                        compression_seed=TRANSFORM_SEED)
-
-                bw_cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
-                                        input_units=state_size,
-                                        output_units=state_size,
-                                        activation=self.hypers.model_params['rnn_activation'],
-                                        num_layers=self.hypers.model_params['rnn_layers'],
-                                        name=get_backward_name(TRANSFORM_LAYER_NAME),
-                                        compression_fraction=compression_fraction,
-                                        compression_seed=get_backward_name(TRANSFORM_SEED))
-
-                # Create the initial states
-                fw_initial_state = fw_cell.zero_state(batch_size=batch_size, dtype=tf.float32)
-                bw_initial_state = bw_cell.zero_state(batch_size=batch_size, dtype=tf.float32)
-
-                # Run RNN in both directions
-                fw_output = dynamic_rnn(cell=fw_cell,
-                                        inputs=input_sequence,
-                                        previous_states=None,
-                                        initial_state=fw_initial_state,
-                                        name=RNN_NAME,
-                                        compression_fraction=compression_fraction)
-                bw_output = dynamic_rnn(cell=bw_cell,
-                                        inputs=input_sequence,
-                                        previous_states=None,
-                                        initial_state=fw_initial_state,
-                                        name=get_backward_name(RNN_NAME),
-                                        compression_fraction=compression_fraction,
-                                        should_reverse=True)
-
-                # Get the outputs from each direction
-                fw_outputs = fw_output.outputs.stack()  # [T, B, D]
-                bw_outputs = bw_output.outputs.stack()  # [T, B, D]
-                transformed = tf.concat([fw_outputs, bw_outputs], axis=-1)  # [T, B, 2 * D]
-                transformed = tf.transpose(transformed, perm=[1, 0, 2])  # [B, T, 2 * D]
+        # Reshape the output to match the sequence length. The output is tiled along the sequence length
+        # automatically via broadcasting rules.
+        if self.hypers.model_params.get('has_single_output', False):
+            transformed = transformed[:, -1, :]  # Take the final transformed state, [B, D]
+            expected_output = self._placeholders[OUTPUT]
         else:
-            raise ValueError(f'Unknown transformation type: {0}'.format(self.model_type))
+            expected_output = tf.expand_dims(self._placeholders[OUTPUT], axis=-1)  # [B, 1, 1]
 
-        # Apply dropout to the aggregated state
-        transformed = tf.nn.dropout(transformed, keep_prob=self._placeholders[DROPOUT_KEEP_RATE])
-
-        # Create the output layer, result is a [B, T, C] tensor
+        # Create the output layer, result is a [B, T, C] tensor or a [B, C] tensor depending on the output type
         output_size = self.metadata[NUM_OUTPUT_FEATURES] if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[NUM_CLASSES]
         output, _ = mlp(inputs=transformed,
                         output_size=output_size,
@@ -294,13 +195,24 @@ class StandardModel(TFModel):
                         should_bias_final=True,
                         should_activate_final=False,
                         should_dropout_final=False,
-                        name=OUTPUT_LAYER_NAME,
-                        compression_fraction=compression_fraction,
-                        compression_seed=OUTPUT_SEED)
+                        name=OUTPUT_LAYER_NAME)
 
-        # Reshape the output to match the sequence length. The output is tiled along the sequence length
-        # automatically via broadcasting rules.
-        expected_output = tf.expand_dims(self._placeholders[OUTPUT], axis=-1)  # [B, 1, 1]
+        if self.hypers.model_params.get('pool_outputs', False):
+            # Compute the self-attention pooling weight
+            output_attn_weights, _ = mlp(inputs=transformed,
+                                         output_size=1,
+                                         hidden_sizes=[],
+                                         activations='sigmoid',
+                                         dropout_keep_rate=1.0,
+                                         should_bias_final=True,
+                                         should_activate_final=True,
+                                         name=OUTPUT_ATTENTION)
+
+            # Use the learned weights to pool the output logits, [B, T, C]
+            output = successive_pooling(inputs=output,
+                                        aggregation_weights=output_attn_weights,
+                                        name='output-pooling',
+                                        seq_length=self.metadata[SEQ_LENGTH])
 
         if self.output_type == OutputType.BINARY_CLASSIFICATION:
             classification_output = compute_binary_classification_output(model_output=output,
@@ -322,13 +234,18 @@ class StandardModel(TFModel):
 
     def make_loss(self):
         # Tile the output along all sequence elements. This is necessary for the sparse softmax
-        # cross entropy function.
+        # cross entropy function. We only do this for multiple output models.
         seq_length = self.metadata[SEQ_LENGTH]
-        expected_output = tf.expand_dims(self._placeholders[OUTPUT], axis=-1)  # [B, 1, 1]
-        expected_output = tf.tile(expected_output, multiples=(1, seq_length, 1))  # [B, T, 1]
-        
-        predictions = self._ops[PREDICTION]  # [B, T, C]
-       
+        has_single_output = self.hypers.model_params.get('has_single_output', False)
+
+        if has_single_output:
+            expected_output = self._placeholders[OUTPUT]
+        else:
+            expected_output = tf.expand_dims(self._placeholders[OUTPUT], axis=-1)  # [B, 1, 1]
+            expected_output = tf.tile(expected_output, multiples=(1, seq_length, 1))  # [B, T, 1]
+
+        predictions = self._ops[PREDICTION]  # [B, T, C] or [B, C] depending on the output type
+
         # Create the loss weights
         if self.hypers.model_params.get('use_loss_weights', False):
             loss_weights = np.linspace(start=(1.0 / seq_length), stop=1.0, endpoint=True, num=seq_length)
@@ -345,14 +262,18 @@ class StandardModel(TFModel):
                                                                   logits=logits)
         elif self.output_type == OutputType.MULTI_CLASSIFICATION:
             logits = self._ops[LOGITS]
-            labels = tf.squeeze(expected_output, axis=-1)  # [B, T]
+            labels = tf.squeeze(expected_output, axis=-1)  # [B, T] or [B] depending on the output type
 
             sample_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=labels)
         else:
             sample_loss = tf.square(predictions - expected_output)
 
-        # Compute weighted average over samples and unweighted average over batch
-        self._ops[LOSS] = tf.reduce_mean(tf.reduce_sum(sample_loss * loss_weights, axis=-1))
+        # Compute weighted average over sequence elements if the model has multiple outputs
+        if not has_single_output:
+            sample_loss = tf.reduce_sum(sample_loss * loss_weights, axis=-1)
+
+        # Average loss over the batch
+        self._ops[LOSS] = tf.reduce_mean(sample_loss)
 
         # Add any regularization to the loss function
         reg_loss = self.regularize_weights(name=self.hypers.model_params.get('regularization_name'),
@@ -413,24 +334,38 @@ class StandardModel(TFModel):
             predictions_list.append(np.vstack(prediction))
             latencies.append(elapsed)
 
-        predictions = np.vstack(predictions_list)  # [B, T]
+        predictions = np.vstack(predictions_list)  # [B, T] or [B] depending on the output type
         labels = np.squeeze(np.vstack(labels_list), axis=-1)  # [B]
 
         avg_latency = np.average(latencies[1:])  # Skip first due to outliers in caching
         flops = flops_dict[self.output_ops[0]]
 
         result: DefaultDict[str, Dict[str, float]] = defaultdict(dict)
-        for i in range(self.metadata[SEQ_LENGTH]):
-            level_name = '{0}_{1}'.format(PREDICTION, i)
+
+        if self.hypers.model_params.get('has_single_output', False):
+            predictions = np.squeeze(predictions, axis=-1)  # [B]
 
             for metric_name in ClassificationMetric:
                 if self.output_type == OutputType.BINARY_CLASSIFICATION:
-                    metric_value = get_binary_classification_metric(metric_name, predictions[:, i], labels, avg_latency, 1, flops)
+                    metric_value = get_binary_classification_metric(metric_name, predictions, labels, avg_latency, 1, flops)
                 else:
-                    metric_value = get_multi_classification_metric(metric_name, predictions[:, i], labels, avg_latency, 1, flops, self.metadata[NUM_CLASSES])
+                    metric_value = get_multi_classification_metric(metric_name, predictions, labels, avg_latency, 1, flops, self.metadata[NUM_CLASSES])
 
-                result[level_name][metric_name.name] = metric_value
+                result[PREDICTION][metric_name.name] = metric_value
 
-            result[level_name][ALL_LATENCY] = latencies[1:]
+            result[PREDICTION][ALL_LATENCY] = latencies[1:]
+        else:
+            for i in range(self.metadata[SEQ_LENGTH]):
+                level_name = '{0}_{1}'.format(PREDICTION, i)
+
+                for metric_name in ClassificationMetric:
+                    if self.output_type == OutputType.BINARY_CLASSIFICATION:
+                        metric_value = get_binary_classification_metric(metric_name, predictions[:, i], labels, avg_latency, 1, flops)
+                    else:
+                        metric_value = get_multi_classification_metric(metric_name, predictions[:, i], labels, avg_latency, 1, flops, self.metadata[NUM_CLASSES])
+
+                    result[level_name][metric_name.name] = metric_value
+
+                result[level_name][ALL_LATENCY] = latencies[1:]
 
         return result
