@@ -21,13 +21,14 @@ from utils.np_utils import min_max_normalize, round_to_precision
 from utils.constants import OUTPUT, SMALL_NUMBER, INPUTS, OPTIMIZED_TEST_LOG_PATH, METADATA_PATH, HYPERS_PATH, PREDICTION, SEQ_LENGTH, DROPOUT_KEEP_RATE
 from utils.adaptive_inference import normalize_logits, threshold_predictions
 from utils.testing_utils import ClassificationMetric
-from controllers.logistic_regression_controller import Controller, CONTROLLER_PATH, get_power_for_levels, POWER, RandomController, GreedyController
+from controllers.logistic_regression_controller import Controller, CONTROLLER_PATH, get_power_for_levels, POWER, RandomController, FixedController, BudgetWrapper
 
 
 PowerEstimate = namedtuple('PowerEstimate', ['avg_power', 'fraction'])
 SimulationResult = namedtuple('SimulationResult', ['adaptive_accuracy', 'adaptive_power', 'greedy_accuracy', 'greedy_power', 'randomized_accuracy', 'randomized_power', \
                                                    'adaptive_desired_levels', 'adaptive_controller_error'])
 SMOOTHING_FACTOR = 100
+POWER_PRIOR_COUNT = 100
 
 
 def make_dataset(model_name: str, save_folder: str, dataset_type: str, dataset_folder: Optional[str]) -> Dataset:
@@ -96,15 +97,15 @@ def clip(x: int, bounds: Tuple[int, int]) -> int:
     return x
 
 
-class PIController:
+class PIDController:
 
-    def __init__(self, kp: float, ki: float):
+    def __init__(self, kp: float, ki: float, kd: float):
         self._kp = kp
         self._ki = ki
+        self._kd = kd
 
         self._errors: List[float] = []
         self._times: List[float] = []
-        self._integral = 0.0
 
     def errors(self) -> List[float]:
         return self._errors
@@ -131,7 +132,6 @@ class PIController:
             error = y_true[0] - y_pred
         elif y_pred > y_true[1]:
             error = y_true[1] - y_pred
-            # error = (y_true[0] + y_true[1]) / 2 - y_pred
 
         self._errors.append(error)
         self._times.append(time)
@@ -139,18 +139,18 @@ class PIController:
         integral = 0
         if len(self._errors) > 1:
             integral = integrate.trapz(self._errors, self._times)
-            # 2-point integral rule
-            #h = (error + self._errors[-1]) / 2
-            #w = time - self._times[-1]
-            #self._integral += h * w
+            
+        derivative = (self._errors[-1] - error)
 
+        derivative_error = self._kd * derivative
         integral_error = self._ki * integral
         proportional_error = self._kp * error
+        control_error = proportional_error + integral_error + derivative_error
 
         self._errors.append(error)
         self._times.append(time)
 
-        return self.plant_function(y_true, y_pred, proportional_error, integral_error)
+        return self.plant_function(y_true, y_pred, control_error)
 
     def reset(self):
         """
@@ -161,48 +161,24 @@ class PIController:
         self._integral = 0.0
 
 
-class BudgetController(PIController):
+class BudgetController(PIDController):
 
-    def __init__(self, kp: float, ki: float, output_range: Tuple[int, int], budget: float, power_factor: float, window: int):
-        super().__init__(kp, ki)
+    def __init__(self, kp: float, ki: float, kd: float, output_range: Tuple[int, int], budget: float, power_factor: float, window: int):
+        super().__init__(kp, ki, kd)
         self._output_range = output_range
         self._budget = budget
         self._power_factor = power_factor
         self._window = window
         self._rand = np.random.RandomState(seed=92)
 
-    def plant_function(self, y_true: Tuple[float, float], y_pred: Tuple[float, float], proportional_error: float, integral_error: float) -> float:
+    def plant_function(self, y_true: Tuple[float, float], y_pred: Tuple[float, float], control_error: float) -> float:
         # If within bounds, we don't apply and adjustments
         if y_pred >= y_true[0] and y_pred < y_true[1]:
             return 0
 
-        # Error in power budget
-        control_signal = proportional_error + integral_error
-
-        # print('Integral Error: {0}'.format(integral_error))
-
         # Otherwise, we apply and offset proportional to the error
-        step = control_signal * self._power_factor
+        step = control_error * self._power_factor
         return step
-
-        # Don't enforce corrections when we undershoot the budget. This usually
-        # is not a problem because of look-ahead, and the budget can be abnormally
-        # high early on due to estimator variance.
-        #power, limit = y_pred, y_true
-        #if power <= limit:
-        #    return np.zeros(shape=(self._window, ), dtype=int)
-
-        ## Calculate the signal to apply to each step in the window
-        #step_proportion = step / self._window
-
-        ## Generate a pseudo-random plan to limit power over the window. We first get the 
-        ## constant amount to apply to each step, and then randomly generate the remainder.
-        #signals = np.full(shape=(self._window, ), fill_value=int(step_proportion), dtype=int)
-
-        #remainder = step_proportion - int(step_proportion)
-        #signals = signals + (self._rand.uniform(low=0.0, high=1.0, size=(self._window, )) < remainder).astype(int)
-
-        #return signals
 
 
 class BudgetDistribution:
@@ -221,7 +197,9 @@ class BudgetDistribution:
         self._num_levels = num_levels
         self._num_classes = num_classes
         self._panic_time = int(panic_frac * max_time)
-        self._power = power
+        self._prior_power = np.copy(power)  # [L] array of power readings
+        self._level_counts = np.zeros_like(self._prior_power)
+        self._observed_power = np.zeros_like(self._prior_power)
 
         # Estimated count of each label over the time window
         self._estimated_label_counts = np.zeros(shape=(num_classes, ))
@@ -244,38 +222,42 @@ class BudgetDistribution:
         class_count_diff = np.maximum(self._estimated_label_counts - self._observed_label_counts, 0)
         estimated_remaining = np.sum(class_count_diff)
 
+        # MLE estimate of the mean power, [L] array
+        power_estimates = (POWER_PRIOR_COUNT * self._prior_power + self._observed_power) / (POWER_PRIOR_COUNT + self._level_counts)
+
         # We compute the MLE estimates for the mean and variance power given the observed samples
         # and the training set
-
         count_rest = 0
         for class_idx in range(self._num_classes):
             class_level_counts = self._prior_counts[class_idx]
             n_class = max(np.sum(class_level_counts), SMALL_NUMBER)
-           
-            # MLE estimate of the mean power
-            power_mean = np.sum((class_level_counts * self._power) / (n_class))
 
-            squared_diff = np.square(self._power - power_mean)
+            # MLE estimate of the mean power
+            power_mean = np.sum((class_level_counts * power_estimates) / (n_class))
+
+            squared_diff = np.square(power_estimates - power_mean)
             power_var = np.sum((class_level_counts * squared_diff) / n_class)
 
             count_diff = max(self._estimated_label_counts[class_idx] - self._observed_label_counts[class_idx], 0)
             remaining_fraction = count_diff / estimated_remaining
 
             expected_rest += power_mean * remaining_fraction
-
             variance_rest += np.square(count_diff / time) * power_var
 
         expected_power = (1.0 / time) * (self._max_time * self._budget - time_delta * expected_rest)
-        expected_power = max(expected_power, self._power[0])  # We clip the power to the lowest level (this is the lowest feasible amount)
+        expected_power = max(expected_power, power_estimates[0])  # We clip the power to the lowest level (this is the lowest feasible amount)
 
         estimator_variance = 2 * (1.0 / time) * variance_rest
-        current_budget = expected_power + estimator_variance
+        estimator_std = np.sqrt(estimator_variance)
 
-        return expected_power - estimator_variance, expected_power + estimator_variance
+        # Upper and lower bounds as determined by one std from the mean
+        return expected_power - estimator_std, expected_power + estimator_std
 
-    def update(self, label: int, levels: int):
+    def update(self, label: int, levels: int, power: float):
         self._observed_label_counts[label] += 1
         self._prior_counts[label][levels] += 1
+        self._level_counts[levels] += 1
+        self._observed_power[levels] += power
 
 
 # Function to get model results
@@ -457,19 +439,40 @@ def run_simulation(labels: np.ndarray,
     save_folder, model_file_name = os.path.split(model_path)
     model_name = extract_model_name(model_file_name)
     adaptive_controller = Controller.load(os.path.join(save_folder, CONTROLLER_PATH.format(model_name)))
+    adaptive_budget_controller = BudgetWrapper(controller=adaptive_controller,
+                                               model_predictions=adaptive_predictions,
+                                               power_estimates=power_estimates,
+                                               max_time=max_time,
+                                               num_classes=num_classes,
+                                               budget=budget,
+                                               seed=70)
 
     randomized_controller = RandomController(model_path=model_path,
                                              dataset_folder=dataset_folder,
                                              budgets=[budget],
                                              power=power_estimates)
     randomized_controller.fit(series=DataSeries.VALID)
+    randomized_budget_controller = BudgetWrapper(controller=randomized_controller,
+                                                 model_predictions=adaptive_predictions,
+                                                 max_time=max_time,
+                                                 power_estimates=power_estimates,
+                                                 num_classes=num_classes,
+                                                 budget=budget,
+                                                 seed=71)
 
     # Create the greedy controller
     baseline_level_accuracy = np.average(np.isclose(baseline_predictions, np.expand_dims(labels, axis=1)), axis=0)
     baseline_index = np.argmax(baseline_level_accuracy)
 
     max_power = get_power_for_levels(power_estimates, num_levels)[-1]  # Power of the top-level model
-    greedy_controller = GreedyController(model_predictions=baseline_predictions, max_time=max_time, power=max_power, num_classes=num_classes, model_index=baseline_index)
+    greedy_controller = FixedController(model_index=baseline_index)
+    greedy_budget_controller = BudgetWrapper(controller=greedy_controller,
+                                             model_predictions=baseline_predictions,
+                                             max_time=max_time,
+                                             power_estimates=interpolate_power(power_estimates, baseline_predictions.shape[1]),
+                                             num_classes=num_classes,
+                                             budget=budget,
+                                             seed=72)
 
     # Execute model on the validation set and collect levels
     adaptive_level_accuracy = np.average((adaptive_predictions == np.expand_dims(labels, axis=1)).astype(float), axis=0)
@@ -479,8 +482,8 @@ def run_simulation(labels: np.ndarray,
     randomized_correct: List[float] = []
     greedy_correct: List[float] = []
 
-    adaptive_power: List[float] = []
-    randomized_power: List[float] = []
+    adaptive_energy: List[float] = []
+    randomized_energy: List[float] = []
     greedy_energy: List[float] = []
 
     adaptive_desired_levels: List[float] = []
@@ -491,8 +494,14 @@ def run_simulation(labels: np.ndarray,
 
     # Create the budget controller
     output_range = (0, num_levels - 1)
-    budget_controller = BudgetController(kp=1.0, ki=(1.0 / 64.0), output_range=output_range, budget=budget, power_factor=1.0, window=controller_window)
-    current_budget = budget
+    budget_controller = BudgetController(kp=1.0,
+                                         ki=(1.0 / 64.0),
+                                         kd=(1.0 / 32.0),
+                                         output_range=output_range,
+                                         budget=budget,
+                                         power_factor=1.0,
+                                         window=controller_window)
+    current_budget = (budget, budget)
 
     level_counts = np.zeros(shape=(num_levels, ))
     power_noise = rand.normal(loc=noise[0], scale=noise[1], size=(max_time, ))
@@ -508,69 +517,56 @@ def run_simulation(labels: np.ndarray,
                                              panic_frac=0.95,
                                              power=power_estimates)
 
-    # control_signals = np.zeros(shape=(controller_window, ), dtype=int)
     budget_step = 0
-
     for t in range(max_time):
         # Perform inference using the adaptive controller
         # We first determine the number of states to collect
-        # shifted_budget = clip(budget + budget_step, bounds=(power_estimates[0], power_estimates[-1]))
-
-        # print('Shifted Budget: {0}'.format(budget + budget_step))
-        adaptive_level_pred = adaptive_controller.predict_sample(inputs=dataset_inputs[t], budget=budget + budget_step)
-
-        # budget_step = budget_controller.step(y_true=current_budget, y_pred=avg_power, time=t)
-        # budget_step = control_signals[t % controller_window]
-
-        # Form predicted levels using both controllers
-        # adaptive_level = clip(adaptive_level_pred + budget_step, bounds=output_range)
-        adaptive_level = adaptive_level_pred
-
-        # Compute the (noisy) power consumption for using this number of levels
-        p = power_estimates[adaptive_level] + power_noise[t]
+        adaptive_pred, adaptive_level = adaptive_budget_controller.predict_sample(inputs=dataset_inputs[t],
+                                                                                  budget=budget + budget_step,
+                                                                                  noise=power_noise[t],
+                                                                                  current_time=t)
 
         # Save adaptive controller results
-        adaptive_pred = adaptive_predictions[t, adaptive_level]
         adaptive_correct.append(float(adaptive_pred == labels[t]))
-        adaptive_power.append(p)
-        adaptive_controller_error.append(adaptive_level_pred - adaptive_level)
+        adaptive_energy.append(adaptive_budget_controller.get_consumed_energy())
+        adaptive_controller_error.append(budget + budget_step)
         adaptive_desired_levels.append(adaptive_level)
 
         # Update the budget distribution
-        budget_distribution.update(label=adaptive_pred, levels=adaptive_level)
+        p = power_estimates[adaptive_level] + power_noise[t]
+        budget_distribution.update(label=adaptive_pred, levels=adaptive_level, power=p)
 
         # Perform inference with the randomized policy
-        randomized_level = randomized_controller.predict_sample(inputs=dataset_inputs[t], budget=budget)
-        randomized_pred = adaptive_predictions[t, randomized_level]
-        p = power_estimates[randomized_level] + power_noise[t]
-
-        randomized_power.append(p)
+        randomized_pred, randomized_level = randomized_budget_controller.predict_sample(inputs=dataset_inputs[t],
+                                                                                        budget=budget,
+                                                                                        noise=power_noise[t],
+                                                                                        current_time=t)
+        randomized_energy.append(randomized_budget_controller.get_consumed_energy())
         randomized_correct.append(float(randomized_pred == labels[t]))
 
         # Perform inference with the greedy baseline policy
-        greedy_pred, did_use_model = greedy_controller.predict_sample(current_time=t, budget=budget, noise=power_noise[t])
-        greedy_energy.append(greedy_controller.get_consumed_energy())
+        greedy_pred, greedy_level = greedy_budget_controller.predict_sample(inputs=dataset_inputs[t],
+                                                                            budget=budget,
+                                                                            noise=power_noise[t],
+                                                                            current_time=t)
+        greedy_energy.append(greedy_budget_controller.get_consumed_energy())
         greedy_correct.append(float(greedy_pred == labels[t]))
 
         # Get new control signals
         if (t + 1) % controller_window == 0:
             current_budget = budget_distribution.get_budget(t+1)
-            # avg_power = np.clip(np.average(adaptive_power), a_min=current_budget, a_max=None)  # Clip to prevent negative error
-            budget_step = budget_controller.step(y_true=current_budget, y_pred=np.average(adaptive_power), time=t)
+            adaptive_power = adaptive_energy[-1] / t
+            budget_step = budget_controller.step(y_true=current_budget, y_pred=adaptive_power, time=t)
 
     # Create the simulation result tuple
     times = np.arange(max_time) + 1
 
-    #split_point = greedy_controller._model_executions
-    #print('Split Point: {0}'.format(split_point))
-    #print('Accuracy After: {0}'.format(np.average(greedy_correct[split_point:])))
-
     result = SimulationResult(adaptive_accuracy=np.cumsum(adaptive_correct) / times,
-                              adaptive_power=np.cumsum(adaptive_power) / times,
+                              adaptive_power=adaptive_energy / times,
                               greedy_accuracy=np.cumsum(greedy_correct) / times,
                               greedy_power=greedy_energy / times,
                               randomized_accuracy=np.cumsum(randomized_correct) / times,
-                              randomized_power=np.cumsum(randomized_power) / times,
+                              randomized_power=randomized_energy / times,
                               adaptive_desired_levels=adaptive_desired_levels,
                               adaptive_controller_error=adaptive_controller_error)
     return result
