@@ -11,15 +11,12 @@ int16_t fp_sub(int16_t x, int16_t y) {
 }
 
 
-int16_t fp_mul(int16_t x, int16_t y, int16_t precision) {
+int16_t fp_mul(int16_t x, int16_t y, uint16_t precision) {
     return (int16_t) (((int) x * (int) y) / (1 << precision));
 }
 
 
-int16_t fp_div(int16_t x, int16_t y, int16_t precision) {
-    if (y == 0) {
-        y = 1;
-    }
+int16_t fp_div(int16_t x, int16_t y, uint16_t precision) {
     return (int16_t) (((int) x * (1 << precision)) / y);
 }
 
@@ -29,22 +26,22 @@ int16_t fp_neg(int16_t x) {
 }
 
 
-int16_t convert_fp(int16_t x, int16_t old_precision, int16_t new_precision) {
+int16_t convert_fp(int16_t x, uint16_t old_precision, uint16_t new_precision) {
     return (x * (1 << new_precision)) / (1 << old_precision);
 }
 
 
-int16_t float_to_fp(float x, int16_t precision) {
+int16_t float_to_fp(float x, uint16_t precision) {
     return (int16_t) (x * (1 << precision));
 }
 
 
-int16_t int_to_fp(int16_t x, int16_t precision) {
+int16_t int_to_fp(int16_t x, uint16_t precision) {
     return x * (1 << precision);
 }
 
 
-int16_t fp_round_to_int(int16_t x, int16_t precision) {
+int16_t fp_round_to_int(int16_t x, uint16_t precision) {
     int8_t should_invert_sign = 0;
     if (x < 0) {
         should_invert_sign = 1;
@@ -71,7 +68,7 @@ int16_t fp_round_to_int(int16_t x, int16_t precision) {
 }
 
 
-int16_t fp_relu(int16_t x, int16_t precision) {
+int16_t fp_relu(int16_t x, uint16_t precision) {
     UNUSED(precision);
     if (x >= 0) {
         return x;
@@ -80,13 +77,23 @@ int16_t fp_relu(int16_t x, int16_t precision) {
 }
 
 
-int16_t fp_linear(int16_t x, int16_t precision) {
+int16_t fp_leaky_relu(int16_t x, uint16_t precision) {
+    if (x >= 0) {
+        return x;
+    }
+
+    // Fixed factor of 1/4
+    return fp_mul(x, 1 << (precision - 2), precision);
+}
+
+
+int16_t fp_linear(int16_t x, uint16_t precision) {
     UNUSED(precision);
     return x;
 }
 
 
-int16_t fp_exp(int16_t x, int16_t precision) {
+int16_t fp_exp(int16_t x, uint16_t precision) {
     /**
      * Approximates e^x using the Power Series
      */
@@ -123,7 +130,7 @@ int16_t fp_exp(int16_t x, int16_t precision) {
 }
 
 
-int16_t fp_tanh(int16_t x, int16_t precision) {
+int16_t fp_tanh(int16_t x, uint16_t precision) {
     /**
      * Approximates tanh using a polynomial.
      */
@@ -164,7 +171,7 @@ int16_t fp_tanh(int16_t x, int16_t precision) {
 }
 
 
-int16_t fp_sigmoid(int16_t x, int16_t precision) {
+int16_t fp_sigmoid(int16_t x, uint16_t precision) {
     /**
      * Approximates the sigmoid function using tanh.
      */

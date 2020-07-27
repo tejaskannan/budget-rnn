@@ -33,10 +33,7 @@ def get_power_for_levels(power: np.ndarray, num_levels: int) -> np.ndarray:
     if len(power) == num_levels:
         return power
 
-    median_index = int(len(power) / 2)
-    start_index = median_index - int(num_levels / 2)
-    end_index = start_index + num_levels
-    return power[start_index:end_index]
+    return power[:num_levels]
 
 
 def fetch_model_states(model: AdaptiveModel, dataset: Dataset, series: DataSeries):
@@ -95,7 +92,6 @@ def fetch_model_states(model: AdaptiveModel, dataset: Dataset, series: DataSerie
     stop_outputs = np.concatenate(stop_outputs, axis=0)
 
     y = (level_predictions == labels).astype(float)
-    print('Level Accuracy: {0}'.format(np.average(y, axis=0)))
 
     return states, y, level_logits, labels, stop_outputs
 
@@ -646,8 +642,6 @@ class Controller:
             lower_thresh = self._thresholds[lower_budget_idx]
             upper_thresh = self._thresholds[upper_budget_idx]
 
-            # lb, ub = self._budgets[lower_budget_idx], self._budgets[upper_budget_idx]
-
         # Interpolation weight
         z = (budget - lower_budget) / (upper_budget - lower_budget)
 
@@ -662,23 +656,20 @@ class Controller:
 
         return self._avg_level_counts[budget_idx]
 
-    def predict_sample(self, inputs: np.ndarray, budget: int, thresholds: Optional[np.ndarray] = None) -> int:
+    def predict_sample(self, inputs: np.ndarray, budget: int) -> int:
         """
         Predicts the number of levels given the list of hidden states. The states are assumed to be in order.
 
         Args:
             inputs: An array of inputs for this sequence
             budget: The budget to perform inference under. This controls the employed thresholds.
-            thresholds: Optional set of thresholds to use. This argument overrides the inferred thresholds.
         Returns:
             The number of levels to execute.
         """
         assert self._is_fitted, 'Model is not fitted'
 
-        # Get thresholds for this budget
-        if thresholds is None:
-            # Infer the thresholds for this budget
-            thresholds = self.get_thresholds(budget)
+        # Infer the thresholds for this budget
+        thresholds = self.get_thresholds(budget)
 
         stop_output_ops = ['stop_output_{0}'.format(i) for i in range(self._model.num_outputs)]
       
@@ -786,9 +777,22 @@ class Controller:
         controller._avg_level_counts = serialized_info['avg_level_counts']
         controller._is_fitted = serialized_info['is_fitted']
 
-        print('Thresholds: {0}'.format(serialized_info['thresholds']))
-
         return controller
+
+
+class FixedController(Controller):
+
+    def __init__(self, model_index: int):
+        self._model_index = model_index
+    
+    def fit(self, series: DataSeries):
+        pass
+    
+    def predict_sample(self, inputs: np.ndarray, budget: int) -> int:
+        """
+        Predicts the label for the given inputs. This strategy always uses the same index.
+        """
+        return self._model_index
 
 
 class RandomController(Controller):
@@ -827,23 +831,20 @@ class RandomController(Controller):
 
         self._is_fitted = True
 
-    def predict_sample(self, inputs: np.ndarray, budget: int, thresholds: Optional[np.ndarray] = None) -> int:
+    def predict_sample(self, inputs: np.ndarray, budget: int) -> int:
         """
         Predicts the number of levels given the list of hidden states. The states are assumed to be in order.
 
         Args:
             inputs: An array of inputs for this sequence
             budget: The budget to perform inference under. This controls the employed thresholds.
-            thresholds: Optional set of thresholds to use. This argument overrides the inferred thresholds.
         Returns:
             The number of levels to execute.
         """
         assert self._is_fitted, 'Model is not fitted'
 
         # Get thresholds for this budget if needed to infer
-        if thresholds is None:
-            thresholds = self.get_thresholds(budget)
-
+        thresholds = self.get_thresholds(budget)
         levels = np.arange(thresholds.shape[0])  # [L]
         return self._rand.choice(levels, p=thresholds)
 
@@ -866,6 +867,62 @@ class RandomController(Controller):
                                              batch_idx=batch_idx)
 
         return levels.astype(int), predictions[budget_idx].astype(int)
+
+
+class BudgetWrapper:
+
+    def __init__(self, model_predictions: np.ndarray, controller: Controller, max_time: int, power_estimates: np.ndarray, num_classes: int, budget: float, seed: int = 72):
+        self._controller = controller
+        self._num_classes = num_classes
+        self._model_predictions = model_predictions
+        self._power_budget = budget
+        self._energy_budget = budget * max_time
+
+        # Save variables corresponding to the budget
+        self._max_time = max_time
+        self._power_estimates = power_estimates
+        self._power_results: List[float] = []
+
+        # Create random state for reproducible results
+        self._rand = np.random.RandomState(seed=seed)
+
+    def predict_sample(self, inputs: np.ndarray, current_time: int, budget: int, noise: float) -> int:
+        """
+        Predicts the label for the given inputs.
+
+        Args:
+            inputs: The inputs for this sample
+            current_time: The current time index
+            budget: The power budget
+            noise: The noise on the power reading
+        Returns:
+            A tuple of two element: (1) A classification for the t-th sample (given by current time)
+                (2) Whether the model is executed (True) or the system acted randomly (False)
+        """
+        # Calculate used energy to determine whether to use the model
+        used_energy = self.get_consumed_energy()
+        should_use_controller = bool(used_energy < self._energy_budget)
+
+        # By acting randomly, we incur no energy (no need to collect input samples)
+        if not should_use_controller:
+            pred = self._rand.randint(low=0, high=self._num_classes)
+            level = 0
+        else:
+            # If not acting randomly, we use the neural network to perform the classification.
+            level = self._controller.predict_sample(inputs=inputs, budget=budget)
+            pred = self._model_predictions[current_time, level]
+
+            # Add to power results
+            self._power_results.append(self._power_estimates[level] + noise)
+
+        return pred, level
+
+    @property
+    def power(self) -> float:
+        return self._power
+
+    def get_consumed_energy(self) -> float:
+        return np.sum(self._power_results)
 
 
 if __name__ == '__main__':
