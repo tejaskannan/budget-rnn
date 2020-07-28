@@ -450,7 +450,7 @@ def run_simulation(labels: np.ndarray,
     # Create the three different controllers: Adaptive, Randomized and Greedy
     save_folder, model_file_name = os.path.split(model_path)
     model_name = extract_model_name(model_file_name)
-    adaptive_controller = Controller.load(os.path.join(save_folder, CONTROLLER_PATH.format(model_name)))
+    adaptive_controller = Controller.load(os.path.join(save_folder, CONTROLLER_PATH.format(model_name)), dataset_folder=dataset_folder)
     adaptive_budget_controller = BudgetWrapper(controller=adaptive_controller,
                                                model_predictions=adaptive_predictions,
                                                power_estimates=power_estimates,

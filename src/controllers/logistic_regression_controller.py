@@ -752,12 +752,13 @@ class Controller:
         save_pickle_gz(self.as_dict(), output_file)
 
     @classmethod
-    def load(cls, save_file: str):
+    def load(cls, save_file: str, dataset_folder: Optional[str] = None):
         """
         Loads the controller from the given serialized file.
         """
         # Load the serialized information.
         serialized_info = read_pickle_gz(save_file)
+        dataset_folder = dataset_folder if dataset_folder is not None else serialized_info['dataset_folder']
 
         # Initialize the new controller
         controller = Controller(model_path=serialized_info['model_path'],
