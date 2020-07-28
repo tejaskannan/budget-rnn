@@ -24,9 +24,11 @@ from utils.testing_utils import ClassificationMetric
 from controllers.logistic_regression_controller import Controller, CONTROLLER_PATH, get_power_for_levels, POWER, RandomController, FixedController, BudgetWrapper
 
 
+LOG_FILE_FMT = 'model-{0}-{1}.jsonl.gz'
+
 PowerEstimate = namedtuple('PowerEstimate', ['avg_power', 'fraction'])
 SimulationResult = namedtuple('SimulationResult', ['adaptive_accuracy', 'adaptive_power', 'greedy_accuracy', 'greedy_power', 'randomized_accuracy', 'randomized_power', \
-                                                   'adaptive_desired_levels', 'adaptive_controller_error'])
+                                                   'adaptive_desired_levels', 'adaptive_controller_error', 'fixed_accuracy', 'fixed_power'])
 SMOOTHING_FACTOR = 100
 POWER_PRIOR_COUNT = 100
 
@@ -99,13 +101,14 @@ def clip(x: int, bounds: Tuple[int, int]) -> int:
 
 class PIDController:
 
-    def __init__(self, kp: float, ki: float, kd: float):
+    def __init__(self, kp: float, ki: float, kd: float, integral_bounds: Tuple[float, float]):
         self._kp = kp
         self._ki = ki
         self._kd = kd
 
         self._errors: List[float] = []
         self._times: List[float] = []
+        self._integral_bounds = integral_bounds
 
     def errors(self) -> List[float]:
         return self._errors
@@ -133,19 +136,26 @@ class PIDController:
         elif y_pred > y_true[1]:
             error = y_true[1] - y_pred
 
+        # Approximate the derivative term
+        derivative = 0
+        if len(self._errors) > 0:
+            derivative = (error - self._errors[-1]) / (time - self._times[-1])
+
         self._errors.append(error)
         self._times.append(time)
 
+        # Approximate the integral term using a trapezoid rule
         integral = 0
         if len(self._errors) > 1:
             integral = integrate.trapz(self._errors, self._times)
+            integral = clip(integral, bounds=self._integral_bounds)
             
-        derivative = (self._errors[-1] - error)
-
         derivative_error = self._kd * derivative
         integral_error = self._ki * integral
         proportional_error = self._kp * error
         control_error = proportional_error + integral_error + derivative_error
+
+        # print('Proportional Error: {0}, Integral Error: {1}, Derivative Error: {2}'.format(proportional_error, integral_error, derivative_error))
 
         self._errors.append(error)
         self._times.append(time)
@@ -163,8 +173,8 @@ class PIDController:
 
 class BudgetController(PIDController):
 
-    def __init__(self, kp: float, ki: float, kd: float, output_range: Tuple[int, int], budget: float, power_factor: float, window: int):
-        super().__init__(kp, ki, kd)
+    def __init__(self, kp: float, ki: float, kd: float, output_range: Tuple[int, int], integral_bounds: Tuple[float, float], budget: float, power_factor: float, window: int):
+        super().__init__(kp, ki, kd, integral_bounds)
         self._output_range = output_range
         self._budget = budget
         self._power_factor = power_factor
@@ -245,7 +255,9 @@ class BudgetDistribution:
             variance_rest += np.square(count_diff / time) * power_var
 
         expected_power = (1.0 / time) * (self._max_time * self._budget - time_delta * expected_rest)
-        expected_power = max(expected_power, power_estimates[0])  # We clip the power to the lowest level (this is the lowest feasible amount)
+        expected_power = max(expected_power, power_estimates[0])  # We clip the power to the lowest level
+
+        # print('Expected Power: {0}, Expected Rest: {1}'.format(expected_power, expected_rest))
 
         estimator_variance = 2 * (1.0 / time) * variance_rest
         estimator_std = np.sqrt(estimator_variance)
@@ -461,18 +473,29 @@ def run_simulation(labels: np.ndarray,
                                                  seed=71)
 
     # Create the greedy controller
+    baseline_power_estimates = interpolate_power(power_estimates, baseline_predictions.shape[1])
     baseline_level_accuracy = np.average(np.isclose(baseline_predictions, np.expand_dims(labels, axis=1)), axis=0)
     baseline_index = np.argmax(baseline_level_accuracy)
 
-    max_power = get_power_for_levels(power_estimates, num_levels)[-1]  # Power of the top-level model
     greedy_controller = FixedController(model_index=baseline_index)
     greedy_budget_controller = BudgetWrapper(controller=greedy_controller,
                                              model_predictions=baseline_predictions,
                                              max_time=max_time,
-                                             power_estimates=interpolate_power(power_estimates, baseline_predictions.shape[1]),
+                                             power_estimates=baseline_power_estimates,
                                              num_classes=num_classes,
                                              budget=budget,
                                              seed=72)
+
+    # Create the fixed policy controller (based on the budget)
+    budget_index = get_budget_index(power_estimates, budget, baseline_level_accuracy)
+    fixed_controller = FixedController(model_index=budget_index)
+    fixed_budget_controller = BudgetWrapper(controller=fixed_controller,
+                                            model_predictions=baseline_predictions,
+                                            max_time=max_time,
+                                            power_estimates=baseline_power_estimates,
+                                            num_classes=num_classes,
+                                            budget=budget,
+                                            seed=73)
 
     # Execute model on the validation set and collect levels
     adaptive_level_accuracy = np.average((adaptive_predictions == np.expand_dims(labels, axis=1)).astype(float), axis=0)
@@ -481,10 +504,12 @@ def run_simulation(labels: np.ndarray,
     adaptive_correct: List[float] = []
     randomized_correct: List[float] = []
     greedy_correct: List[float] = []
+    fixed_correct: List[float] = []
 
     adaptive_energy: List[float] = []
     randomized_energy: List[float] = []
     greedy_energy: List[float] = []
+    fixed_energy: List[float] = []
 
     adaptive_desired_levels: List[float] = []
     adaptive_controller_error: List[float] = []
@@ -497,6 +522,7 @@ def run_simulation(labels: np.ndarray,
     budget_controller = BudgetController(kp=1.0,
                                          ki=(1.0 / 64.0),
                                          kd=(1.0 / 32.0),
+                                         integral_bounds=(-100, 100),
                                          output_range=output_range,
                                          budget=budget,
                                          power_factor=1.0,
@@ -552,11 +578,22 @@ def run_simulation(labels: np.ndarray,
         greedy_energy.append(greedy_budget_controller.get_consumed_energy())
         greedy_correct.append(float(greedy_pred == labels[t]))
 
+        # Perform inference with the fixed baseline policy
+        fixed_pred, fixed_level = fixed_budget_controller.predict_sample(inputs=dataset_inputs[t],
+                                                                         budget=budget,
+                                                                         noise=power_noise[t],
+                                                                         current_time=t)
+        fixed_energy.append(fixed_budget_controller.get_consumed_energy())
+        fixed_correct.append(float(fixed_pred == labels[t]))
+
         # Get new control signals
         if (t + 1) % controller_window == 0:
             current_budget = budget_distribution.get_budget(t+1)
             adaptive_power = adaptive_energy[-1] / t
             budget_step = budget_controller.step(y_true=current_budget, y_pred=adaptive_power, time=t)
+
+            # print('Current Budget: {0}, Budget Step: {1}, Adaptive Power: {2}'.format(current_budget, budget_step, adaptive_power))
+
 
     # Create the simulation result tuple
     times = np.arange(max_time) + 1
@@ -567,9 +604,27 @@ def run_simulation(labels: np.ndarray,
                               greedy_power=greedy_energy / times,
                               randomized_accuracy=np.cumsum(randomized_correct) / times,
                               randomized_power=randomized_energy / times,
+                              fixed_accuracy=np.cumsum(fixed_correct) / times,
+                              fixed_power=fixed_energy / times,
                               adaptive_desired_levels=adaptive_desired_levels,
                               adaptive_controller_error=adaptive_controller_error)
     return result
+
+
+def save_test_log(accuracy: float, power: float, budget: float, noise_loc: float, output_file: str):
+    test_log: Dict[float, Dict[str, Any]] = dict()
+    if os.path.exists(output_file):
+        test_log = list(read_by_file_suffix(output_file))[0]
+
+    log_value = {
+        'SHIFT': noise_loc,
+        ClassificationMetric.ACCURACY.name: accuracy,
+        'AVG_POWER': power,
+        'BUDGET': budget
+    }
+    test_log['{0} {1}'.format(budget, noise_loc)] = log_value
+
+    save_by_file_suffix([test_log], output_file)
 
 
 def plot_and_save(sim_result: SimulationResult,
@@ -578,73 +633,40 @@ def plot_and_save(sim_result: SimulationResult,
                   baseline_model_path: str,
                   output_folder: Optional[str],
                   budget: int,
+                  noise_loc: float,
                   num_levels: int,
-                  noise: Tuple[float, float],
-                  baseline_predictions: np.ndarray,
-                  power_estimates: np.ndarray,
                   should_plot: bool):
-    # Create optimized test log path for the adaptive policy
+    # Create test log for the adaptive policy
     save_folder, model_file_name = os.path.split(adaptive_model_path)
     model_name = extract_model_name(model_file_name)
-    adaptive_log_file = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format('adaptive', 'power', budget, model_name))
+    adaptive_log_file = os.path.join(save_folder, LOG_FILE_FMT.format('adaptive', model_name))
+    save_test_log(sim_result.adaptive_accuracy[-1], sim_result.adaptive_power[-1], budget, noise_loc, adaptive_log_file)
 
-    adaptive_test_log = {
-        ClassificationMetric.ACCURACY.name: sim_result.adaptive_accuracy[-1],
-        'APPROX_POWER': sim_result.adaptive_power[-1]
-    }
-    save_by_file_suffix([adaptive_test_log], adaptive_log_file)
+    # Create test log for the randomized policy
+    randomized_log_file = os.path.join(save_folder, LOG_FILE_FMT.format('randomized', model_name))
+    save_test_log(sim_result.randomized_accuracy[-1], sim_result.randomized_power[-1], budget, noise_loc, randomized_log_file)
 
-    # Create optimized test log path for the randomized policy
-    randomized_log_file = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format('randomized', 'power', budget, model_name))
-
-    randomized_test_log = {
-        ClassificationMetric.ACCURACY.name: sim_result.randomized_accuracy[-1],
-        'APPROX_POWER': sim_result.randomized_power[-1]
-    }
-    save_by_file_suffix([randomized_test_log], randomized_log_file)
-
-    # Create optimized test log path for the greedy
+    # Create test log for the greedy policy
     save_folder, model_file_name = os.path.split(baseline_model_path)
     model_name = extract_model_name(model_file_name)
-    greedy_log_file = os.path.join(save_folder, OPTIMIZED_TEST_LOG_PATH.format('greedy', 'power', budget, model_name))
+    greedy_log_file = os.path.join(save_folder, LOG_FILE_FMT.format('greedy', model_name))
+    save_test_log(sim_result.greedy_accuracy[-1], sim_result.greedy_power[-1], budget, noise_loc, greedy_log_file)
+
+    # Create test log for the randomized policy
+    fixed_log_file = os.path.join(save_folder, LOG_FILE_FMT.format('fixed', model_name))
+    save_test_log(sim_result.fixed_accuracy[-1], sim_result.fixed_power[-1], budget, noise_loc, fixed_log_file)
 
     print('Greedy Accuracy: {0:.5f}, Greedy Power: {1:.5f}'.format(sim_result.greedy_accuracy[-1], sim_result.greedy_power[-1]))
     print('Randomized Accuracy: {0:.5f}, Randomized Power: {1:.5f}'.format(sim_result.randomized_accuracy[-1], sim_result.randomized_power[-1]))
     print('Adaptive Accuracy: {0:.5f}, Adaptive Power: {1:.5f}'.format(sim_result.adaptive_accuracy[-1], sim_result.adaptive_power[-1]))
-
-    greedy_test_log = {
-        ClassificationMetric.ACCURACY.name: sim_result.greedy_accuracy[-1],
-        'APPROX_POWER': sim_result.greedy_power[-1]
-    }
-    save_by_file_suffix([greedy_test_log], greedy_log_file)
+    print('Fixed Accuracy: {0:.5f}, Fixed Power: {1:.5f}'.format(sim_result.fixed_accuracy[-1], sim_result.fixed_power[-1]))
 
     # This is for convenience for testing
     if not should_plot:
         return
 
-    # Get the index of the best 'fixed' policy
-    baseline_level_acc = np.average(np.isclose(baseline_predictions, np.expand_dims(labels, axis=1)).astype(float), axis=0)  # [L]
-    budget_index = get_budget_index(power_estimates, budget, baseline_level_acc)
-    acc_index = get_accuracy_index(sim_result.adaptive_accuracy[-1], baseline_level_acc)
-
-    budget_policy_acc, budget_policy_power = run_fixed_policy(labels=labels,
-                                                              level_predictions=baseline_predictions,
-                                                              policy_index=budget_index,
-                                                              power_estimates=power_estimates,
-                                                              noise=noise)
-
-    accuracy_policy_acc, accuracy_policy_power = run_fixed_policy(labels=labels,
-                                                                  level_predictions=baseline_predictions,
-                                                                  policy_index=acc_index,
-                                                                  power_estimates=power_estimates,
-                                                                  noise=noise)
-
     times = np.arange(sim_result.adaptive_accuracy.shape[0]) + 1
-    cumulative_budget_policy_acc = np.cumsum(budget_policy_acc) / (times + 1)
-    cumulative_accuracy_policy_acc = np.cumsum(accuracy_policy_acc) / (times + 1)
-    budget_avg_power = np.cumsum(budget_policy_power) / (times + 1)
-    accuracy_avg_power = np.cumsum(accuracy_policy_power) / (times + 1)
-
+    
     # Plot the results
     with plt.style.context('ggplot'):
         fig, (ax1, ax2, ax3, ax4, ax5) = plt.subplots(figsize=(16, 12), nrows=5, ncols=1, sharex=True)
@@ -663,12 +685,11 @@ def plot_and_save(sim_result: SimulationResult,
         ax3.set_ylabel('Label Number')
 
         # Set ranges for formatting purposes
-        acc_min = np.percentile(cumulative_budget_policy_acc, 0.5) - 0.05
+        acc_min = np.percentile(sim_result.fixed_accuracy, 0.5) - 0.05
         ax4.plot(times, sim_result.adaptive_accuracy, label='Adaptive')
         ax4.plot(times, sim_result.randomized_accuracy, label='Randomized')
         ax4.plot(times, sim_result.greedy_accuracy, label='Greedy Baseline')
-        ax4.plot(times, cumulative_budget_policy_acc, label='Budget Policy')
-        ax4.plot(times, cumulative_accuracy_policy_acc, label='Accuracy Policy')
+        ax4.plot(times, sim_result.fixed_accuracy, label='Budget Policy')
         ax4.legend()
         ax4.set_ylim((acc_min, 1.0))
         ax4.set_title('Model Accuracy over Time')
@@ -678,11 +699,10 @@ def plot_and_save(sim_result: SimulationResult,
         ax5.plot(times, sim_result.adaptive_power, label='Adaptive')
         ax5.plot(times, sim_result.randomized_power, label='Randomized')
         ax5.plot(times, sim_result.greedy_power, label='Greedy Baseline')
-        ax5.plot(times, budget_avg_power, label='Budget Policy')
-        ax5.plot(times, accuracy_avg_power, label='Accuracy Policy')
+        ax5.plot(times, sim_result.fixed_power, label='Budget Policy')
         ax5.plot(times, power_budget, label='Budget')
         ax5.legend()
-        ax5.set_ylim((budget - 5, power_estimates[-1] + 5))
+        ax5.set_ylim((budget - 10, budget + 10))
 
         ax5.set_title('Cumulative Average Power')
         ax5.set_ylabel('Power (mW)')
@@ -761,9 +781,7 @@ if __name__ == '__main__':
                       adaptive_model_path=args.adaptive_model_path,
                       baseline_model_path=args.baseline_model_path,
                       output_folder=args.output_folder,
-                      power_estimates=power_estimates,
                       budget=budget,
+                      noise_loc=args.noise_loc,
                       num_levels=adaptive_model.num_outputs,
-                      noise=(args.noise_loc, args.noise_scale),
-                      baseline_predictions=base_predictions,
                       should_plot=not args.skip_plotting)

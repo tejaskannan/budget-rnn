@@ -882,6 +882,7 @@ class BudgetWrapper:
         self._max_time = max_time
         self._power_estimates = power_estimates
         self._power_results: List[float] = []
+        self._energy_margin = 0.02  # Small margin to prevent going over the budget unknowingly
 
         # Create random state for reproducible results
         self._rand = np.random.RandomState(seed=seed)
@@ -901,7 +902,7 @@ class BudgetWrapper:
         """
         # Calculate used energy to determine whether to use the model
         used_energy = self.get_consumed_energy()
-        should_use_controller = bool(used_energy < self._energy_budget)
+        should_use_controller = bool(used_energy < self._energy_budget - self._energy_margin)
 
         # By acting randomly, we incur no energy (no need to collect input samples)
         if not should_use_controller:
