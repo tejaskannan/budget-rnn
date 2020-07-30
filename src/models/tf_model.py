@@ -666,9 +666,6 @@ class TFModel(Model):
             # Save results
             save_by_file_suffix(vars_dict, model_path)
 
-            # Save the graph in a protobuf file
-            tf.io.write_graph(self.sess.graph_def, self.save_folder, GRAPH_PATH.format(name))
-
     def restore(self, name: str, is_train: bool, is_frozen: bool):
         """
         Restore model metadata, hyper-parameters, and trainable parameters.

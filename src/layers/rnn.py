@@ -8,7 +8,7 @@ from utils.rnn_utils import get_combine_states_name, get_rnn_while_loop_name
 from utils.constants import FUSION_SEED
 
 
-RnnOutput = namedtuple('RnnOutput', ['outputs', 'states', 'gates'])
+RnnOutput = namedtuple('RnnOutput', ['outputs', 'states', 'gates', 'fusion'])
 
 
 def fuse_states(curr_state: tf.Tensor,
@@ -125,11 +125,12 @@ def dynamic_rnn(inputs: tf.Tensor,
     states_array = tf.TensorArray(dtype=tf.float32, size=sequence_length, dynamic_size=False, clear_after_read=False)
     outputs_array = tf.TensorArray(dtype=tf.float32, size=sequence_length, dynamic_size=False)
     gates_array = tf.TensorArray(dtype=tf.float32, size=sequence_length, dynamic_size=False)
+    fusion_array = tf.TensorArray(dtype=tf.float32, size=sequence_length, dynamic_size=False)
 
     combine_layer_name = get_combine_states_name(name, should_share_weights)
 
     # While loop step
-    def step(index, state, outputs, states, gates):
+    def step(index, state, outputs, states, gates, fusion):
         # Get the sequence element based on the direction of processing
         data_index = index if not should_reverse else sequence_length - index - 1
         step_inputs = tf.gather(inputs, indices=data_index, axis=1)  # [B, D]
@@ -162,6 +163,8 @@ def dynamic_rnn(inputs: tf.Tensor,
         # Apply RNN Cell
         output, state, gates_tuple = cell(step_inputs, combined_state, skip_input=None)
 
+        fusion = fusion.write(index=index, value=combined_state)
+
         # Fuse together states afterwards if processing in the backward direction
         if should_reverse:
             combined_state: List[tf.Tensor] = []
@@ -189,9 +192,9 @@ def dynamic_rnn(inputs: tf.Tensor,
                                  axis=1)
         gates = gates.write(index=index, value=concat_gates)
 
-        return [index + 1, tf.stack(state), outputs, states, gates]
+        return [index + 1, tf.stack(state), outputs, states, gates, fusion]
 
-    def cond(index, _1, _2, _3, _4):
+    def cond(index, _1, _2, _3, _4, _5):
         return index < sequence_length
 
     # Index to track iteration number
@@ -204,14 +207,14 @@ def dynamic_rnn(inputs: tf.Tensor,
         initial_state = tf.stack(initial_state)
 
     while_loop_name = get_rnn_while_loop_name(name)
-    _, _, final_outputs, final_states, final_gates = tf.while_loop(cond=cond,
-                                                                   body=step,
-                                                                   loop_vars=[i, initial_state, outputs_array, states_array, gates_array],
-                                                                   parallel_iterations=1,
-                                                                   maximum_iterations=sequence_length,
-                                                                   name=while_loop_name)
+    _, _, final_outputs, final_states, final_gates, final_fusion = tf.while_loop(cond=cond,
+                                                                                 body=step,
+                                                                                 loop_vars=[i, initial_state, outputs_array, states_array, gates_array, fusion_array],
+                                                                                 parallel_iterations=1,
+                                                                                 maximum_iterations=sequence_length,
+                                                                                 name=while_loop_name)
 
-    return RnnOutput(outputs=final_outputs, states=final_states, gates=final_gates)
+    return RnnOutput(outputs=final_outputs, states=final_states, gates=final_gates, fusion=final_fusion)
 
 
 def dropped_rnn(inputs: tf.Tensor,
