@@ -67,7 +67,6 @@ def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperPa
                                  max_num_batches=max_num_batches,
                                  flops_dict=flops_dict,
                                  series=series)
-
     # Close the dataset
     dataset.close()
 

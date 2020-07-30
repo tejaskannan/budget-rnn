@@ -18,7 +18,7 @@ from utils.constants import ACCURACY, OUTPUT, INPUTS, LOSS, PREDICTION, F1_SCORE
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, NUM_CLASSES
 from utils.constants import AGGREGATE_SEED, TRANSFORM_SEED, OUTPUT_SEED, EMBEDDING_SEED, SMALL_NUMBER
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
-from utils.loss_utils import binary_classification_loss, f1_score_loss
+from utils.loss_utils import binary_classification_loss, f1_score_loss, get_loss_weights
 from utils.rnn_utils import get_backward_name, OUTPUT_ATTENTION
 from .base_model import Model
 
@@ -247,11 +247,7 @@ class StandardModel(TFModel):
         predictions = self._ops[PREDICTION]  # [B, T, C] or [B, C] depending on the output type
 
         # Create the loss weights
-        if self.hypers.model_params.get('use_loss_weights', False):
-            loss_weights = np.linspace(start=(1.0 / seq_length), stop=1.0, endpoint=True, num=seq_length)
-            loss_weights = loss_weights / np.sum(loss_weights)  # NOrmalize the loss weights
-        else:
-            loss_weights = np.ones(shape=seq_length) / seq_length
+        loss_weights = get_loss_weights(n=seq_length, mode=self.hypers.model_params.get('loss_weights'))
 
         # Expand for later broadcasting
         loss_weights = np.expand_dims(loss_weights, axis=0)  # [1, T]

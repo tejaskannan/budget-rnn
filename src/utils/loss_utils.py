@@ -1,9 +1,40 @@
 import tensorflow as tf
+import numpy as np
+from typing import Optional
 
 from .constants import SMALL_NUMBER, ONE_HALF
 
 
 BETA = 10.0
+
+
+def get_loss_weights(n: int, mode: Optional[str]) -> np.ndarray:
+    """
+    Returns the loss weights for the given mode. The weights are normalized
+    to sum to one.
+
+    Args:
+        n: Number of weights
+        mode: Optional name of the loss mode. Must be one of None, 'linear', or 'quadratic'.
+            If None, then the weighting is even.
+    Returns:
+        An array of normalized weights for each output.
+    """
+    # Construct the weights
+    if mode is None:
+        weights = np.ones(shape=(n, ))
+    elif mode.lower() == 'linear':
+        weights = np.linspace(start=1, stop=n, num=n, endpoint=True)
+    elif mode.lower() == 'quadratic':
+        weights = np.linspace(start=1, stop=n, num=n, endpoint=True)
+        weights = np.square(weights)
+    else:
+        raise ValueError('Unknown loss weight mode: {0}'.format(mode))
+
+    # Normalize to a simplex
+    weights = weights / np.sum(weights, keepdims=True)
+
+    return weights
 
 
 def binary_classification_loss(predicted_probs: tf.Tensor,

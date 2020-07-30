@@ -17,7 +17,7 @@ from utils.misc import sample_sequence_batch, batch_sample_noise
 from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, OUTPUT, INPUTS, LOSS, OUTPUT_SEED, OPTIMIZER_OP, GLOBAL_STEP
 from utils.constants import NODE_REGEX_FORMAT, DROPOUT_KEEP_RATE, MODEL, SCHEDULED_MODEL, NUM_CLASSES, TRANSFORM_SEED
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE, EMBEDDING_SEED, AGGREGATE_SEED, STOP_LOSS_WEIGHT
-from utils.loss_utils import f1_score_loss, binary_classification_loss
+from utils.loss_utils import f1_score_loss, binary_classification_loss, get_loss_weights
 from utils.rnn_utils import *
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
 from utils.np_utils import sigmoid
@@ -127,19 +127,11 @@ class AdaptiveModel(TFModel):
         num_sequences = self.num_sequences
         num_outputs = self.num_outputs
 
-        loss_weights = self.hypers.model_params.get('loss_weights', False)
-        if not loss_weights:
-            loss_weights = np.ones(shape=num_outputs, dtype=float)
-        else:
-            loss_weights = np.linspace(start=self.sample_frac, stop=1.0, endpoint=True, num=self.num_sequences)
-
-        assert len(loss_weights) == num_outputs, f'Loss weights ({len(loss_weights)}) must match the number of outputs ({num_outputs}).'
-
         # The loss weights are sorted in ascending order to more-heavily weight larger sample sizes.
         # This operation is included to prevent bugs as we intuitively want to increase
         # accuracy with larger samples.
-        loss_weights = list(sorted(loss_weights))
-        feed_dict[self._placeholders['loss_weights']] = loss_weights / (np.sum(loss_weights) + SMALL_NUMBER)  # Normalize the loss weights
+        loss_weights = get_loss_weights(n=num_outputs, mode=self.hypers.model_params.get('loss_weights'))
+        feed_dict[self._placeholders['loss_weights']] = loss_weights  # Normalize the loss weights
 
         seq_indexes: List[int] = []
         for i in range(num_sequences):
@@ -527,11 +519,12 @@ class AdaptiveModel(TFModel):
 
             # [B, K]
             output_size = num_output_features if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[NUM_CLASSES]
-            level_output, _ = mlp(inputs=aggregated_sequence,
+            level_output, output_hidden = mlp(inputs=aggregated_sequence,
                                   output_size=output_size,
                                   hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
                                   activations=self.hypers.model_params['output_hidden_activation'],
                                   dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                                  should_bias_final=True,
                                   name=output_layer_name,
                                   compression_seed=OUTPUT_SEED,
                                   compression_fraction=compression_fraction)
@@ -653,6 +646,8 @@ class AdaptiveModel(TFModel):
                                       compression_seed=EMBEDDING_SEED,
                                       compression_fraction=self.hypers.model_params.get('compression_fraction'))
 
+            self._ops['embedding_{0}'.format(i)] = input_sequence
+
             # Create the RNN Cell
             cell = make_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
                                  input_units=self.hypers.model_params['state_size'],
@@ -700,6 +695,9 @@ class AdaptiveModel(TFModel):
 
             # [B, D]
             rnn_output = pool_rnn_outputs(rnn_outputs, final_state, pool_mode=self.hypers.model_params['pool_mode'])
+
+            self._ops['transformed_{0}'.format(i)] = rnn_outputs.stack()
+            self._ops['fusion_{0}'.format(i)] = rnn_out.fusion.stack()
 
             # If the model is bidirectional, then we also run the backward direction
             if is_bidirectional(self.model_type):

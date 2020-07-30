@@ -7,7 +7,7 @@ from utils.constants import TRAIN, VALID, TEST
 from utils.file_utils import read_by_file_suffix, make_dir, iterate_files
 from models.model_factory import get_model
 from dataset.dataset_factory import get_dataset
-from dataset.rnn_sample_dataset import RNNSampleDataset
+from dataset.dataset import DataSeries
 from typing import Optional, Dict, List
 from test import test
 
@@ -102,10 +102,21 @@ if __name__ == '__main__':
                              max_epochs=max_epochs)
 
                 print('==========')
+                # Collect Results from the validation set
                 test(model_name=name,
                      dataset_folder=data_folder,
                      save_folder=save_folder,
                      hypers=hypers,
                      max_num_batches=None,
-                     batch_size=None)
+                     batch_size=None,
+                     series=DataSeries.VALID)
+
+                # Collect Results from the testing set
+                test(model_name=name,
+                     dataset_folder=data_folder,
+                     save_folder=save_folder,
+                     hypers=hypers,
+                     max_num_batches=None,
+                     batch_size=None,
+                     series=DataSeries.TEST)
                 print('====================')
