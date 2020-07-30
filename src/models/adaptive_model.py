@@ -479,8 +479,6 @@ class AdaptiveModel(TFModel):
                                       compression_seed=EMBEDDING_SEED,
                                       compression_fraction=compression_fraction)
 
-            self._ops['embedding_{0}'.format(i)] = input_sequence
-
             # Transform the input sequence, [B, T, D]
             transformed_sequence, _ = mlp(inputs=input_sequence,
                                           output_size=self.hypers.model_params['state_size'],
@@ -496,8 +494,6 @@ class AdaptiveModel(TFModel):
             # Save the states
             self._ops[state_name] = tf.transpose(transformed_sequence, perm=[1, 0, 2])  # [T, B, D]
 
-            self._ops['transformed_{0}'.format(i)] = transformed_sequence
-
             # Compute attention weights for aggregation. We only compute the
             # weights for this sequence to avoid redundant computation. [B, T, 1] tensor.
             attn_weights, _ = dense(inputs=transformed_sequence,
@@ -507,8 +503,6 @@ class AdaptiveModel(TFModel):
                                     name=aggregation_name,
                                     compression_seed=AGGREGATE_SEED,
                                     compression_fraction=compression_fraction)
-
-            self._ops['attn_weights_{0}'.format(i)] = attn_weights
 
             # Save results of this level to avoid redundant computation
             all_attn_weights.append(attn_weights)  # List of [B, T, 1] tensors
@@ -523,8 +517,6 @@ class AdaptiveModel(TFModel):
             weighted_sequence = tf.concat(all_samples, axis=1) * normalized_attn_weights  # [B, L * T, D]
             aggregated_sequence = tf.reduce_sum(weighted_sequence, axis=1)  # [B, L * T, D]
 
-            self._ops['pooled_{0}'.format(i)] = aggregated_sequence
-
             # [B, K]
             output_size = num_output_features if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[NUM_CLASSES]
             level_output, output_hidden = mlp(inputs=aggregated_sequence,
@@ -532,12 +524,10 @@ class AdaptiveModel(TFModel):
                                   hidden_sizes=self.hypers.model_params.get('output_hidden_units'),
                                   activations=self.hypers.model_params['output_hidden_activation'],
                                   dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                                  should_bias_final=True,
                                   name=output_layer_name,
                                   compression_seed=OUTPUT_SEED,
                                   compression_fraction=compression_fraction)
-
-            self._ops['hidden0_{0}'.format(i)] = output_hidden[0]
-            self._ops['hidden1_{0}'.format(i)] = output_hidden[1]
 
             # Pooling of output logits to directly combine outputs from each level
             if self.hypers.model_params.get('pool_outputs', False):
