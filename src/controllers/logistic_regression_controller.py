@@ -14,9 +14,9 @@ from utils.np_utils import index_of, round_to_precision
 from utils.constants import OUTPUT, BIG_NUMBER, SMALL_NUMBER, INPUTS, SEQ_LENGTH, DROPOUT_KEEP_RATE
 from utils.file_utils import save_pickle_gz, read_pickle_gz, extract_model_name
 from controllers.distribution_prior import DistributionPrior
+from controllers.controller_utils import get_power_for_levels, POWER
 
 
-POWER = np.array([24.085, 32.776, 37.897, 43.952, 48.833, 50.489, 54.710, 57.692, 59.212, 59.251])
 VIOLATION_FACTOR = 0.01
 UNDERSHOOT_FACTOR = 0.01
 CONTROLLER_PATH = 'model-logistic-controller-{0}.pkl.gz'
@@ -25,15 +25,6 @@ MIN_INIT = 0.8
 MAX_INIT = 1.0
 C = 0.01
 NOISE = 0.01
-
-
-def get_power_for_levels(power: np.ndarray, num_levels: int) -> np.ndarray:
-    assert num_levels <= len(power), 'Must have fewer levels than power estimates'    
-
-    if len(power) == num_levels:
-        return power
-
-    return power[:num_levels]
 
 
 def fetch_model_states(model: AdaptiveModel, dataset: Dataset, series: DataSeries):
@@ -775,25 +766,15 @@ class FixedController(Controller):
 
 class RandomController(Controller):
 
-    def __init__(self, model_path: str, dataset_folder: str, budgets: List[float], power: np.ndarray):
-        self._model_path = model_path
-        self._dataset_folder = dataset_folder
-
-        # Load the model and dataset
-        self._model, self._dataset, _ = get_serialized_info(model_path, dataset_folder=dataset_folder)
-
-        self._share_model = False
-        self._precision = 0
+    def __init__(self, budgets: List[float], power: np.ndarray):
         self._budgets = np.array(budgets)
-        self._trials = 0
         self._power = power
-        self._budget_optimizer_type = 'random'
-        self._patience = 0
-        self._max_iter = 0
-        self._min_iter = 0
+
+        self._threshold_dict: Dict[float, np.ndarray] = dict()
 
         # Create random state for reproducible results
         self._rand = np.random.RandomState(seed=62)
+        self._is_fitted = False
 
     def fit(self, series: DataSeries):
         # Fit a weighted average for each budget
@@ -803,9 +784,7 @@ class RandomController(Controller):
             distribution.make()
             distribution.init()
             
-            thresholds.append(distribution.fit())
-
-        self._thresholds = np.vstack(thresholds)
+            self._threshold_dict[budget] = distribution.fit()
 
         self._is_fitted = True
 
@@ -822,29 +801,9 @@ class RandomController(Controller):
         assert self._is_fitted, 'Model is not fitted'
 
         # Get thresholds for this budget if needed to infer
-        thresholds = self.get_thresholds(budget)
+        thresholds = self._threshold_dict[budget]
         levels = np.arange(thresholds.shape[0])  # [L]
         return self._rand.choice(levels, p=thresholds)
-
-    def predict_levels(self, series: DataSeries, budget: float) -> Tuple[np.ndarray, np.ndarray]:
-        assert self._is_fitted, 'Model is not fitted'
-
-        budget_idx = index_of(self._budgets, value=budget)
-        assert budget_idx >= 0, 'Could not find values for budget {0}'.format(budget)
-
-        _, _, logits, _, _ = fetch_model_states(self._model, self._dataset, series=series)
-        level_predictions = np.argmax(logits, axis=-1)  # [B, L]
-
-        budget_distribution = self._thresholds[budget_idx]
-        levels_idx = np.arange(budget_distribution.shape[0])  # [L]
-        levels = self._rand.choice(levels_idx, p=budget_distribution, size=level_predictions.shape[0])  # [B]
-
-        batch_idx = np.arange(level_predictions.shape[0])
-        predictions = predictions_for_levels(model_predictions=level_predictions,
-                                             levels=np.expand_dims(levels, axis=0),
-                                             batch_idx=batch_idx)
-
-        return levels.astype(int), predictions[budget_idx].astype(int)
 
 
 class BudgetWrapper:
@@ -865,7 +824,7 @@ class BudgetWrapper:
         # Create random state for reproducible results
         self._rand = np.random.RandomState(seed=seed)
 
-    def predict_sample(self, stop_probs: np.ndarray, current_time: int, budget: int, noise: float) -> int:
+    def predict_sample(self, stop_probs: np.ndarray, current_time: int, budget: int, noise: float) -> Tuple[int, int]:
         """
         Predicts the label for the given inputs.
 
@@ -886,6 +845,7 @@ class BudgetWrapper:
         if not should_use_controller:
             pred = self._rand.randint(low=0, high=self._num_classes)
             level = 0
+            self._power_results.append(0)
         else:
             # If not acting randomly, we use the neural network to perform the classification.
             level = self._controller.predict_sample(stop_probs=stop_probs, budget=budget)
@@ -898,7 +858,7 @@ class BudgetWrapper:
 
     @property
     def power(self) -> float:
-        return self._power
+        return self._power_results
 
     def get_consumed_energy(self) -> float:
         return np.sum(self._power_results)
