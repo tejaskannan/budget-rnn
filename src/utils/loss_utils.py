@@ -21,7 +21,7 @@ def get_loss_weights(n: int, mode: Optional[str]) -> np.ndarray:
         An array of normalized weights for each output.
     """
     # Construct the weights
-    if mode is None:
+    if mode is None or not isinstance(mode, str):
         weights = np.ones(shape=(n, ))
     elif mode.lower() == 'linear':
         weights = np.linspace(start=1, stop=n, num=n, endpoint=True)
@@ -29,12 +29,22 @@ def get_loss_weights(n: int, mode: Optional[str]) -> np.ndarray:
         weights = np.linspace(start=1, stop=n, num=n, endpoint=True)
         weights = np.square(weights)
     else:
-        raise ValueError('Unknown loss weight mode: {0}'.format(mode))
+        # The default behavior is even weights. We do this for backwards compatibility.
+        weights = np.ones(shape=(n, ))
 
     # Normalize to a simplex
     weights = weights / np.sum(weights, keepdims=True)
 
     return weights
+
+
+def get_temperate_loss_weight(start_weight: float, end_weight: float, step: int, max_steps: int) -> float:
+    if step >= max_steps or end_weight <= start_weight:
+        return max(end_weight, 0)
+
+    k = np.exp((1.0 / max_steps) * np.log(end_weight / start_weight))
+    return np.power(k, step) * start_weight
+
 
 
 def binary_classification_loss(predicted_probs: tf.Tensor,
