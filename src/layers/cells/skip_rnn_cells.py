@@ -79,22 +79,24 @@ class SkipUGRNNCell(tf.nn.rnn_cell.RNNCell):
     def output_size(self) -> SkipUGRNNOutputTuple:
         return SkipUGRNNOutputTuple(self._units, 1)
 
-    def get_intial_state(self, inputs: Optional[tf.Tensor], batch_size: Optional[int], dtype: Any) -> SkipUGRNNStateTuple:
+    def get_initial_state(self, inputs: Optional[tf.Tensor], batch_size: Optional[int], dtype: Any) -> SkipUGRNNStateTuple:
         """
         Creates an initial state by setting the hidden state to zero and the update probability to 1.
         """
         initial_state = tf.get_variable(name='initial-hidden-state',
-                                        initial_state=tf.zeros_intializer(),
-                                        shape=[batch_size, self._units],
+                                        initializer=tf.zeros_initializer(),
+                                        shape=[1, self._units],
                                         dtype=dtype,
                                         trainable=False)
         initial_state_update_prob = tf.get_variable(name='initial-state-update-prob',
-                                                    initial_state=tf.ones_initializer(),
-                                                    shape=[batch_size, 1],
+                                                    initializer=tf.ones_initializer(),
+                                                    shape=[1, 1],
                                                     dtype=dtype,
                                                     trainable=False)
-        return SkipUGRNNStateTuple(initial_state, initial_state_update_prob)
 
+        # We tile the initial states across the entire batch
+        return SkipUGRNNStateTuple(state=tf.tile(initial_state, multiples=(batch_size, 1)),
+                                   cumulative_state_update=tf.tile(initial_state_update_prob, multiples=(batch_size, 1)))
 
     def __call__(self, inputs: tf.Tensor, state: SkipUGRNNStateTuple, scope=None) -> Tuple[SkipUGRNNStateTuple, SkipUGRNNOutputTuple]:
         # Unpack the previous state

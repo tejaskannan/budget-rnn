@@ -31,6 +31,7 @@ AGGREGATION_LAYER_NAME = 'aggregation-layer'
 OUTPUT_LAYER_NAME = 'output-layer'
 RNN_NAME = 'rnn'
 BIRNN_NAME = 'birnn'
+SKIP_GATES = 'skip-gates'
 
 
 class StandardModelType(Enum):
@@ -183,7 +184,6 @@ class StandardModel(TFModel):
                                  activation=self.hypers.model_params['rnn_activation'],
                                  name=TRANSFORM_LAYER_NAME)
 
-            print(batch_size)
             initial_state = cell.get_initial_state(inputs=input_sequence,
                                                    batch_size=batch_size,
                                                    dtype=tf.float32)
@@ -194,7 +194,7 @@ class StandardModel(TFModel):
                                                         dtype=tf.float32,
                                                         scope=RNN_NAME)
             transformed = rnn_outputs.output  # [B, T, D]
-            self._ops['skip_gates'] = rnn_outputs.state_update_gate
+            self._ops[SKIP_GATES] = rnn_outputs.state_update_gate
 
         # Reshape the output to match the sequence length. The output is tiled along the sequence length
         # automatically via broadcasting rules.
@@ -292,9 +292,8 @@ class StandardModel(TFModel):
 
         # If we have a skip RNN, then we apply the update penalty
         if self.model_type == StandardModelType.SKIP_RNN:
-            skip_gates = self._ops['skip_gates']  # [B, T, 1]
+            skip_gates = self._ops[SKIP_GATES]  # [B, T, 1]
             skip_gates = tf.squeeze(skip_gates, axis=-1)  # [B, T]
-            print(skip_gates)
             target_updates = self.hypers.model_params['target_updates']
             update_penalty = tf.square(tf.reduce_sum(skip_gates, axis=-1) - target_updates)
             self._ops[LOSS] += self.hypers.model_params['update_loss_weight'] * update_penalty
