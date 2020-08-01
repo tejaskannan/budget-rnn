@@ -8,6 +8,7 @@ from typing import Optional, Dict, List, Any, DefaultDict, Iterable
 from models.tf_model import TFModel
 from layers.rnn import dynamic_rnn
 from layers.cells.cells import make_rnn_cell
+from layers.cells.skip_rnn_cells import SkipUGRNNCell, SoftSkipUGRNNCell
 from layers.basic import mlp, pool_sequence, dense
 from layers.output_layers import OutputType, compute_binary_classification_output, compute_multi_classification_output
 from dataset.dataset import Dataset, DataSeries
@@ -30,6 +31,7 @@ AGGREGATION_LAYER_NAME = 'aggregation-layer'
 OUTPUT_LAYER_NAME = 'output-layer'
 RNN_NAME = 'rnn'
 BIRNN_NAME = 'birnn'
+SKIP_GATES = 'skip-gates'
 
 
 class StandardModelType(Enum):
@@ -37,6 +39,8 @@ class StandardModelType(Enum):
     CNN = auto()
     RNN = auto()
     BIRNN = auto()
+    SKIP_RNN = auto()
+    SOFT_SKIP_RNN = auto()
 
 
 class StandardModel(TFModel):
@@ -176,6 +180,39 @@ class StandardModel(TFModel):
                                                    dtype=tf.float32,
                                                    scope=RNN_NAME)
             transformed = rnn_outputs  # [B, T, D]
+        elif self.model_type == StandardModelType.SKIP_RNN:
+            cell = SkipUGRNNCell(units=state_size,
+                                 activation=self.hypers.model_params['rnn_activation'],
+                                 name=TRANSFORM_LAYER_NAME)
+
+            initial_state = cell.get_initial_state(inputs=input_sequence,
+                                                   batch_size=batch_size,
+                                                   dtype=tf.float32)
+            # Apply RNN
+            rnn_outputs, states = tf.nn.dynamic_rnn(cell=cell,
+                                                    inputs=input_sequence,
+                                                    initial_state=initial_state,
+                                                    dtype=tf.float32,
+                                                    scope=RNN_NAME)
+            transformed = rnn_outputs.output  # [B, T, D]
+            self._ops[SKIP_GATES] = tf.squeeze(rnn_outputs.state_update_gate, axis=-1)  # [B, T]
+            self._ops['transformed'] = transformed
+        elif self.model_type == StandardModelType.SOFT_SKIP_RNN:
+            cell = SoftSkipUGRNNCell(units=state_size,
+                                     activation=self.hypers.model_params['rnn_activation'],
+                                     name=TRANSFORM_LAYER_NAME)
+
+            initial_state = cell.get_initial_state(inputs=input_sequence,
+                                                   batch_size=batch_size,
+                                                   dtype=tf.float32)
+            # Apply RNN
+            rnn_outputs, states = tf.nn.dynamic_rnn(cell=cell,
+                                                           inputs=input_sequence,
+                                                           dtype=tf.float32,
+                                                           scope=RNN_NAME)
+            transformed = rnn_outputs.output  # [B, T, D]
+            self._ops[SKIP_GATES] = tf.squeeze(rnn_outputs.state_update_gate, axis=-1)  # [B, T]
+            self._ops['transformed'] = transformed
 
         # Reshape the output to match the sequence length. The output is tiled along the sequence length
         # automatically via broadcasting rules.
@@ -271,6 +308,18 @@ class StandardModel(TFModel):
         # Average loss over the batch
         self._ops[LOSS] = tf.reduce_mean(sample_loss)
 
+        # If we have a skip RNN, then we apply the L2 update penalty
+        if self.model_type == StandardModelType.SKIP_RNN:
+            skip_gates = self._ops[SKIP_GATES]  # [B, T]
+            target_updates = self.hypers.model_params['target_updates']
+            
+            # L2 penalty for deviation from target
+            update_penalty = tf.square(tf.reduce_sum(skip_gates, axis=-1) - target_updates)  # [B]
+            update_loss = tf.reduce_mean(update_penalty)  # Average over batch to get scalar loss
+
+            self._ops['update_penalty'] = update_loss
+            self._ops[LOSS] += self.hypers.model_params['update_loss_weight'] * update_loss
+
         # Add any regularization to the loss function
         reg_loss = self.regularize_weights(name=self.hypers.model_params.get('regularization_name'),
                                            scale=self.hypers.model_params.get('regularization_scale'))
@@ -318,13 +367,21 @@ class StandardModel(TFModel):
         predictions_list: List[np.ndarray] = []
         labels_list: List[np.ndarray] = []
         latencies: List[float] = []
+        skip_gates_list: List[np.ndarray] = []  # Only used for Skip RNN models
+
+        ops_to_run = [PREDICTION, SKIP_GATES]
 
         for batch_num, batch in enumerate(test_batch_generator):
             feed_dict = self.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
 
             start = time.time()
-            prediction = self.sess.run(self._ops[PREDICTION], feed_dict=feed_dict)
+            result = self.execute(ops=ops_to_run, feed_dict=feed_dict)
             elapsed = time.time() - start
+
+            prediction = result[PREDICTION]
+            
+            if self.model_type == StandardModelType.SKIP_RNN:
+                skip_gates_list.append(result[SKIP_GATES])
 
             labels_list.append(np.vstack(batch[OUTPUT]))
             predictions_list.append(np.vstack(prediction))
@@ -348,6 +405,15 @@ class StandardModel(TFModel):
                     metric_value = get_multi_classification_metric(metric_name, predictions, labels, avg_latency, 1, flops, self.metadata[NUM_CLASSES])
 
                 result[PREDICTION][metric_name.name] = metric_value
+
+            # Add in the average number of updates for Skip RNNs. These always have one output, so
+            # we only need this case in the has_single_output == True case.
+            if self.model_type == StandardModelType.SKIP_RNN:
+                skip_gates = np.concatenate(skip_gates_list, axis=0)  # [B, T] if model is a Skip RNN
+                num_updates = np.sum(skip_gates, axis=-1)
+
+                result['AVG_UPDATES'] = float(np.average(num_updates))
+                result['STD_UPDATES'] = float(np.std(num_updates))
 
             result[PREDICTION][ALL_LATENCY] = latencies[1:]
         else:

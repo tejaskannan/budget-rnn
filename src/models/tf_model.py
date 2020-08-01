@@ -19,7 +19,7 @@ from utils.constants import METADATA_PATH, MODEL_PATH, TRAIN_LOG_PATH, GRAPH_PAT
 from utils.constants import LOSS, ACCURACY, OPTIMIZER_OP, F1_SCORE, INPUTS, OUTPUT, SAMPLE_ID
 from utils.constants import TRAIN, VALID, LABEL_MAP, NUM_CLASSES, REV_LABEL_MAP
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, INPUT_SCALER, OUTPUT_SCALER
-from utils.constants import SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, INPUT_NOISE
+from utils.constants import SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, INPUT_NOISE, SMALL_NUMBER
 
 
 class TFModel(Model):
@@ -414,7 +414,7 @@ class TFModel(Model):
             train_generator = dataset.minibatch_generator(DataSeries.TRAIN,
                                                           batch_size=self.hypers.batch_size,
                                                           metadata=self.metadata,
-                                                          should_shuffle=True,  # TODO: Change this back to shuffling
+                                                          should_shuffle=True,
                                                           drop_incomplete_batches=drop_incomplete_batches)
 
             epoch_train_loss: DefaultDict[str, float] = defaultdict(float)
@@ -427,12 +427,21 @@ class TFModel(Model):
             if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
                 train_ops_to_run += self.accuracy_op_names
 
+            # train_ops_to_run.extend(['skip-gates', 'update_penalty', 'transformed'])
+
             train_batch_counter = 1
             for batch in train_generator:
                 feed_dict = self.batch_to_feed_dict(batch, is_train=True, epoch_num=epoch)
 
                 # Run the training operations
                 train_results = self.execute(feed_dict, train_ops_to_run)
+
+                ## skip_gates = train_results['skip-gates'][0]
+                # if any([abs(x) < SMALL_NUMBER for x in skip_gates]):
+                # print('Skip Gates: {0}'.format(train_results['skip-gates']))
+                # print('Update Penalty: {0}'.format(train_results['update_penalty']))
+                ## print('Transformed: {0}'.format(train_results['transformed']))
+                # print('==========')
 
                 batch_loss = 0.0
                 for loss_op_name in self.loss_op_names:
@@ -681,6 +690,9 @@ class TFModel(Model):
 
         # Build the model
         self.make(is_train=is_train, is_frozen=is_frozen)
+
+        # Initialize all variables (some may not be trainable)
+        self.init()
 
         # Restore the trainable parameters
         with self.sess.graph.as_default():

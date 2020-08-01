@@ -17,7 +17,7 @@ from utils.misc import sample_sequence_batch, batch_sample_noise
 from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, OUTPUT, INPUTS, LOSS, OUTPUT_SEED, OPTIMIZER_OP, GLOBAL_STEP
 from utils.constants import NODE_REGEX_FORMAT, DROPOUT_KEEP_RATE, MODEL, SCHEDULED_MODEL, NUM_CLASSES, TRANSFORM_SEED
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE, EMBEDDING_SEED, AGGREGATE_SEED, STOP_LOSS_WEIGHT
-from utils.loss_utils import f1_score_loss, binary_classification_loss, get_loss_weights
+from utils.loss_utils import f1_score_loss, binary_classification_loss, get_loss_weights, get_temperate_loss_weight
 from utils.rnn_utils import *
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
 from utils.np_utils import sigmoid
@@ -102,14 +102,13 @@ class AdaptiveModel(TFModel):
         num_output_features = self.metadata[NUM_OUTPUT_FEATURES]
         seq_lenth = self.metadata[SEQ_LENGTH]
 
-        # Calculate the stop loss weight based on the patience, number of levels, and epoch number
-        # This weight will start at 1 / (L + Patience) and end at 1 / L after `patience` epochs.
-        # We clip the output to 1 / L as a maximum value.
-        if self.hypers.model_params.get('should_increase_stop_loss_weight', False):
-            reciprocal_stop_loss_weight = self.num_sequences + max(self.hypers.patience - epoch_num, 0)
-            stop_loss_weight = 1.0 / reciprocal_stop_loss_weight
-        else:
-            stop_loss_weight = self.hypers.model_params.get('stop_loss_weight', 0.0)
+        # Calculate the stop loss weight based on on the epoch number. The weight is increased
+        # exponentially per epoch and reaches the final value after Patience steps.
+        end_stop_loss_weight = self.hypers.model_params.get('stop_loss_weight', 0.0)
+        stop_loss_weight = get_temperate_loss_weight(start_weight=1e-5,
+                                                     end_weight=end_stop_loss_weight,
+                                                     step=epoch_num,
+                                                     max_steps=self.hypers.patience - 1)
 
         feed_dict = {
             self._placeholders[OUTPUT]: output_batch.reshape(-1, num_output_features),
@@ -886,6 +885,11 @@ class AdaptiveModel(TFModel):
             # [B, L]
             all_predictions = tf.cast(tf.argmax(self._ops[ALL_PREDICTIONS_NAME], axis=-1), dtype=tf.int32)  # [B, L]
             stop_labels = tf.cast(tf.equal(all_predictions, self._placeholders[OUTPUT]), dtype=tf.float32)  # [B, L]
+
+            # We explicitly prevent propagating the gradient through the stop labels. These labels are treated
+            # as constants with respect to the stop output. This treatment is necessary because the stop labels
+            # are not differentiable with respect to the sequence model output.
+            stop_labels = tf.stop_gradient(stop_labels)
 
             # Compute binary cross entropy loss and sum over levels, average over batch
             stop_element_loss = tf.nn.sigmoid_cross_entropy_with_logits(logits=stop_outputs, labels=stop_labels)
