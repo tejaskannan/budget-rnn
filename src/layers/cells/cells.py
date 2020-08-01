@@ -6,6 +6,9 @@ from utils.tfutils import get_activation
 from utils.constants import TRANSFORM_SEED, UPDATE_SEED, RESET_SEED, CANDIDATE_SEED
 
 
+# TODO: Implement SKIP RNN cells
+
+
 def make_rnn_cell(cell_type: str,
                   input_units: int,
                   output_units: int,
@@ -433,25 +436,10 @@ class VanillaCell(RNNCell):
                                  shape=[1, self.output_units],
                                  trainable=True)
 
-        #if self.use_skip_connections:
-        #    self.R = tf.get_variable(name=f'{self.name}-R',
-        #                             initializer=self.initializer,
-        #                             shape=[2 * self.state_size, self.state_size],
-        #                             trainable=True)
-        #    self.b_skip = tf.get_variable(name=f'{self.name}-b-skip',
-        #                                  initializer=self.initializer,
-        #                                  shape=[1, self.state_size],
-        #                                  trainable=True)
-
     def __call__(self, inputs: tf.Tensor,
                  state: tf.Tensor,
                  skip_input: Optional[tf.Tensor] = None) -> Tuple[tf.Tensor, tf.Tensor, List[tf.Tensor]]:
         assert not self.use_skip_connections or skip_input is None, 'Must provide a skip input when using skip connections'
-
-        #if self.use_skip_connections:
-        #    concat_state = tf.concat([state, skip_input], axis=-1)
-        #    skip_gate = tf.math.sigmoid(tf.matmul(concat_state, self.R) + self.b_skip)
-        #    state = skip_gate * state + (1.0 - skip_gate) * skip_input
 
         transformed_state, _ = dense(inputs=state,
                                      units=self.output_units,
@@ -470,9 +458,6 @@ class VanillaCell(RNNCell):
         
         candidate_vector = transformed_state + transformed_input + self.b
         next_state = self.activation(candidate_vector)
-        # candidate_vector = tf.matmul(state, self.W) + tf.matmul(inputs, self.U) + self.b
-
-        # next_state = self.activation(candidate_vector)
         return next_state, next_state, [candidate_vector]
 
 
