@@ -8,6 +8,7 @@ from typing import Optional, Dict, List, Any, DefaultDict, Iterable
 from models.tf_model import TFModel
 from layers.rnn import dynamic_rnn
 from layers.cells.cells import make_rnn_cell
+from layers.cells.skip_rnn_cells import SkipUGRNNCell
 from layers.basic import mlp, pool_sequence, dense
 from layers.output_layers import OutputType, compute_binary_classification_output, compute_multi_classification_output
 from dataset.dataset import Dataset, DataSeries
@@ -37,6 +38,7 @@ class StandardModelType(Enum):
     CNN = auto()
     RNN = auto()
     BIRNN = auto()
+    SKIP_RNN = auto()
 
 
 class StandardModel(TFModel):
@@ -176,6 +178,23 @@ class StandardModel(TFModel):
                                                    dtype=tf.float32,
                                                    scope=RNN_NAME)
             transformed = rnn_outputs  # [B, T, D]
+        elif self.model_type == StandardModelType.SKIP_RNN:
+            cell = SkipUGRNNCell(units=state_size,
+                                 activation=self.hypers.model_params['rnn_activation'],
+                                 name=TRANSFORM_LAYER_NAME)
+
+            print(batch_size)
+            initial_state = cell.get_initial_state(inputs=input_sequence,
+                                                   batch_size=batch_size,
+                                                   dtype=tf.float32)
+            # Apply RNN
+            rnn_outputs, skip_gates = tf.nn.dynamic_rnn(cell=cell,
+                                                        inputs=input_sequence,
+                                                        initial_state=initial_state,
+                                                        dtype=tf.float32,
+                                                        scope=RNN_NAME)
+            transformed = rnn_outputs.output  # [B, T, D]
+            self._ops['skip_gates'] = rnn_outputs.state_update_gate
 
         # Reshape the output to match the sequence length. The output is tiled along the sequence length
         # automatically via broadcasting rules.
@@ -270,6 +289,15 @@ class StandardModel(TFModel):
 
         # Average loss over the batch
         self._ops[LOSS] = tf.reduce_mean(sample_loss)
+
+        # If we have a skip RNN, then we apply the update penalty
+        if self.model_type == StandardModelType.SKIP_RNN:
+            skip_gates = self._ops['skip_gates']  # [B, T, 1]
+            skip_gates = tf.squeeze(skip_gates, axis=-1)  # [B, T]
+            print(skip_gates)
+            target_updates = self.hypers.model_params['target_updates']
+            update_penalty = tf.square(tf.reduce_sum(skip_gates, axis=-1) - target_updates)
+            self._ops[LOSS] += self.hypers.model_params['update_loss_weight'] * update_penalty
 
         # Add any regularization to the loss function
         reg_loss = self.regularize_weights(name=self.hypers.model_params.get('regularization_name'),
