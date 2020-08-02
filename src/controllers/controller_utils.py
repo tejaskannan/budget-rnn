@@ -5,11 +5,11 @@ from collections import namedtuple
 from typing import Dict, Any, Tuple, List
 
 from models.adaptive_model import AdaptiveModel
-from models.standard_model import StandardModel
+from models.standard_model import StandardModel, StandardModelType, SKIP_GATES
 from dataset.dataset import Dataset, DataSeries
 from utils.file_utils import save_by_file_suffix, read_by_file_suffix
 from utils.rnn_utils import get_logits_name, get_stop_output_name
-from utils.constants import OUTPUT, LOGITS
+from utils.constants import OUTPUT, LOGITS, SEQ_LENGTH
 
 
 POWER = np.array([24.085, 32.776, 37.897, 43.952, 48.833, 50.489, 54.710, 57.692, 59.212, 59.251])
@@ -186,3 +186,56 @@ def execute_standard_model(model: StandardModel, dataset: Dataset, series: DataS
 
     return ModelResults(predictions=level_predictions, labels=labels, stop_probs=None, accuracy=level_accuracy)
 
+
+def execute_skip_rnn_model(model: StandardModel, dataset: Dataset, series: DataSeries) -> ModelResults:
+    """
+    Executes the neural network on the given data series. We do this in a separate step
+    to avoid recomputing for multiple budgets. Executing the neural network is relatively expensive.
+
+    Args:
+        model: The Skip RNN standard model used to perform inference
+        dataset: The dataset to perform inference on
+        series: The data series to extract. This is usually the TEST set.
+    Returns:
+        A model result tuple containing the inference results. The sample fractions are placed in the stop_probs element.
+    """
+    assert model.model_type == StandardModelType.SKIP_RNN, 'Must provide a Skip RNN'
+    seq_length = model.metadata[SEQ_LENGTH]
+
+    predictions: List[np.ndarray] = []
+    labels: List[np.ndarray] = []
+    sample_counts = np.zeros(shape=(seq_length, ), dtype=np.int64)
+
+    # Make the batch generator. Don't shuffle so we have consistent results.
+    data_generator = dataset.minibatch_generator(series=series,
+                                                 batch_size=64,
+                                                 metadata=model.metadata,
+                                                 should_shuffle=False)
+
+    for batch_num, batch in enumerate(data_generator):
+        # Compute the predicted log probabilities
+        feed_dict = model.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
+        model_results = model.execute(feed_dict, [LOGITS, SKIP_GATES])
+
+        # Compute the predictions for each level
+        pred = np.argmax(model_results[LOGITS], axis=-1)  # [B]
+        predictions.append(pred.reshape(-1, 1))
+
+        # Collect the number of samples processed for each batch element. We subtract 1
+        # because it is impossible for the models to consume zero samples.
+        num_samples = np.sum(model_results[SKIP_GATES], axis=-1).astype(int) - 1  # [B]
+        counts = np.bincount(num_samples, minlength=seq_length)
+        sample_counts += counts  # [T]
+
+        labels.append(np.array(batch[OUTPUT]).reshape(-1, 1))
+
+    # Save results as attributes
+    predictions = np.concatenate(predictions, axis=0)
+    labels = np.concatenate(labels, axis=0)  # [N, 1]
+    accuracy = np.average((predictions == labels).astype(float), axis=0)
+
+    # Normalize the sample counts
+    sample_counts = sample_counts.astype(float)
+    sample_fractions = sample_counts / np.sum(sample_counts)
+
+    return ModelResults(predictions=predictions, labels=labels, stop_probs=sample_fractions, accuracy=accuracy)

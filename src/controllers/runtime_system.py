@@ -6,6 +6,7 @@ from typing import List, Dict, Any
 
 from controllers.controller_utils import clip, get_budget_index, ModelResults
 from controllers.logistic_regression_controller import Controller, FixedController, RandomController, BudgetWrapper, CONTROLLER_PATH
+from controllers.logistic_regression_controller import SkipRNNController
 from controllers.runtime_controllers import PIDController, BudgetController, BudgetDistribution
 from dataset.dataset import DataSeries, Dataset
 from models.adaptive_model import AdaptiveModel
@@ -30,9 +31,13 @@ class SystemType(Enum):
     RANDOMIZED = auto()
     GREEDY = auto()
     FIXED = auto()
+    SKIP_RNN = auto()
 
 
 def estimate_label_counts(controller: Controller, budget: float, num_levels: int, num_classes: int) -> Dict[int, np.ndarray]:
+    # TODO: This operation is expensive because it executes the model on the validation set. Instead, we should give the validation stop outputs
+    # and use the controller on the already_computed results. This requires executing the adaptive models on the validation set AND the testing set
+    # before starting any simulations.
     levels, predictions = controller.predict_levels(series=DataSeries.VALID, budget=budget)
     batch_size = predictions.shape[0]
 
@@ -70,6 +75,9 @@ class RuntimeSystem:
         # If the system is adaptive, we can load the controller now. Otherwise, we wait until later
         if self._system_type == SystemType.ADAPTIVE:
             self._controller = Controller.load(os.path.join(save_folder, CONTROLLER_PATH.format(model_name)), dataset_folder=dataset_folder)
+        elif self._system_type == SystemType.SKIP_RNN:
+            self._controller = SkipRNNController(sample_counts=model_results.stop_probs,
+                                                 power=power_estimates)
         else:
             self._controller = None
 
@@ -156,7 +164,7 @@ class RuntimeSystem:
         self._target_budgets = []
 
     def step(self, budget: float, power_noise: float, time: int):
-        stop_probs = self._stop_probs[time] if self._stop_probs is not None else None
+        stop_probs = self._stop_probs[time] if self._stop_probs is not None and time < len(self._stop_probs) else None
 
         budget += self._budget_step
         pred, level = self._budget_controller.predict_sample(stop_probs=stop_probs,

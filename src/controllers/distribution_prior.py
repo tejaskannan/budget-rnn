@@ -35,7 +35,7 @@ class DistributionPrior:
         with self._sess.graph.as_default():
             self._sess.run(tf.global_variables_initializer())
 
-    def fit(self, n_iter: int = 5000, tol: float = 1e-5) -> np.ndarray:
+    def fit(self, n_iter: int = 1000, tol: float = 1e-5) -> np.ndarray:
         assert self._is_made, 'Must call make() first'
 
         with self._sess.graph.as_default():

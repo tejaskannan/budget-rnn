@@ -665,10 +665,10 @@ class Controller:
         # model_result = self._model.execute(ops=stop_output_ops, feed_dict=feed_dict)
         for level, stop_prob in enumerate(stop_probs):
             if thresholds[level] < stop_prob:
-                return level
+                return level, self._power[level]
 
         # By default, we return the top level
-        return self._num_levels - 1
+        return self._num_levels - 1, self._power[-1]
 
     def predict_levels(self, series: DataSeries, budget: float) -> Tuple[np.ndarray, np.ndarray]:
         assert self._is_fitted, 'Model is not fitted'
@@ -761,7 +761,7 @@ class FixedController(Controller):
         """
         Predicts the label for the given inputs. This strategy always uses the same index.
         """
-        return self._model_index
+        return self._model_index, None
 
 
 class RandomController(Controller):
@@ -803,7 +803,36 @@ class RandomController(Controller):
         # Get thresholds for this budget if needed to infer
         thresholds = self._threshold_dict[budget]
         levels = np.arange(thresholds.shape[0])  # [L]
-        return self._rand.choice(levels, p=thresholds)
+        chosen_level = self._rand.choice(levels, p=thresholds)
+        return chosen_level, self._power[chosen_level]
+
+
+class SkipRNNController(Controller):
+
+    def __init__(self, sample_counts: List[np.ndarray], power: np.ndarray):
+        self._power = power
+        self._model_power = np.array([np.sum(counts * power) for counts in sample_counts])
+        # print(self._model_power)
+
+    def fit(self, series: DataSeries):
+        pass
+
+    def predict_sample(self, stop_probs: np.ndarray, budget: float) -> int:
+        """
+        Predicts the number of levels given the list of hidden states. The states are assumed to be in order.
+
+        Args:
+            stop_probs: An [L] array of stop probabilities
+            budget: The budget to perform inference under. This controls the employed thresholds.
+        Returns:
+            The number of levels to execute.
+        """
+        budget_diff = np.abs(self._model_power - budget)
+        model_idx = np.argmin(budget_diff)
+
+        # print('Model Power: {0}, Budget Diff: {1}, Index: {2}'.format(self._model_power, budget_diff, model_idx))
+
+        return model_idx, self._model_power[model_idx]
 
 
 class BudgetWrapper:
@@ -848,11 +877,13 @@ class BudgetWrapper:
             self._power_results.append(0)
         else:
             # If not acting randomly, we use the neural network to perform the classification.
-            level = self._controller.predict_sample(stop_probs=stop_probs, budget=budget)
+            level, pwr = self._controller.predict_sample(stop_probs=stop_probs, budget=budget)
             pred = self._model_predictions[current_time, level]
 
-            # Add to power results
-            self._power_results.append(self._power_estimates[level] + noise)
+            # Add to power results. If no power is given, we default to using the known
+            # power estimates. This gives the controllers a chance to override the power readings.
+            pwr = pwr if pwr is not None else self._power_estimates[level]
+            self._power_results.append(pwr + noise)
 
         return pred, level
 
