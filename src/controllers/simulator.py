@@ -26,7 +26,6 @@ LOG_FILE_FMT = 'model-{0}-{1}.jsonl.gz'
 SimulationResult = namedtuple('SimulationResult', ['accuracy', 'power', 'target_budgets'])
 
 
-
 def make_dataset(model_name: str, save_folder: str, dataset_type: str, dataset_folder: Optional[str]) -> Dataset:
     metadata_file = os.path.join(save_folder, METADATA_PATH.format(model_name))
     metadata = read_by_file_suffix(metadata_file)
@@ -168,7 +167,9 @@ if __name__ == '__main__':
     parser.add_argument('--baseline-model-path', type=str, required=True)
     parser.add_argument('--skip-model-folder', type=str)
     parser.add_argument('--dataset-folder', type=str, required=True)
-    parser.add_argument('--budgets', type=float, nargs='+')
+    parser.add_argument('--budget-start', type=float, required=True)
+    parser.add_argument('--budget-end', type=float, required=True)
+    parser.add_argument('--budget-step', type=float, required=True)
     parser.add_argument('--output-folder', type=str)
     parser.add_argument('--noise-loc', type=float, default=0.0)
     parser.add_argument('--noise-scale', type=float, default=0.01)
@@ -177,9 +178,13 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # Validate arguments
-    budgets = args.budgets
-    assert all([b > 0 for b in budgets]), 'Must have a positive budgets'
+    budget_start, budget_end, budget_step = args.budget_start, args.budget_end, args.budget_step
+    assert budget_start > 0, 'Must have a positive budget'
+    assert budget_end >= budget_start, 'Must have budget_end >= budget_start'
+    assert budget_step > 0, 'Must have a positive budget step'
     assert args.noise_scale > 0, 'Must have a positive noise scale'
+
+    budgets = np.arange(start=budget_start, stop=budget_end + (budget_step / 2), step=budget_step)
 
     dataset_folder = args.dataset_folder
 
@@ -271,7 +276,7 @@ if __name__ == '__main__':
     max_time = dataset.dataset[DataSeries.TEST].length
 
     # Run the simulation on each budget
-    for budget in sorted(args.budgets):
+    for budget in sorted(budgets):
         print('Starting budget: {0}'.format(budget))
 
         start = time.time()
