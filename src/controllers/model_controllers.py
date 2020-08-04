@@ -586,7 +586,7 @@ class BudgetWrapper:
         # Create random state for reproducible results
         self._rand = np.random.RandomState(seed=seed)
 
-    def predict_sample(self, stop_probs: np.ndarray, current_time: int, budget: int, noise: float) -> Tuple[int, int, float]:
+    def predict_sample(self, stop_probs: np.ndarray, current_time: int, budget: int, noise: float) -> Tuple[Optional[int], int, float]:
         """
         Predicts the label for the given inputs.
 
@@ -605,7 +605,7 @@ class BudgetWrapper:
 
         # By acting randomly, we incur no energy (no need to collect input samples)
         if not should_use_controller:
-            pred = self._rand.randint(low=0, high=self._num_classes)
+            pred = None
             level = 0
             power = 0
         else:

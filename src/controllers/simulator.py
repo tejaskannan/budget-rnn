@@ -112,7 +112,7 @@ def plot_and_save(sim_results: Dict[str, SimulationResult],
 
         log_file_name = LOG_FILE_FMT.format(system.system_type.name.lower(), system.model_name)
         log_path = os.path.join(system.save_folder, log_file_name)
-        # save_test_log(sim_result.accuracy[-1], sim_result.power[-1], budget, noise_loc, log_path)
+        save_test_log(sim_result.accuracy[-1], sim_result.power[-1], budget, noise_loc, log_path)
 
         print('{0} Accuracy: {1:.5f}, {0} Power: {2:.5f}'.format(system.system_type.name.capitalize(), sim_result.accuracy[-1], sim_result.power[-1]))
 

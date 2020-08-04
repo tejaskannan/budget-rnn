@@ -170,13 +170,17 @@ class RuntimeSystem:
                                                                     noise=power_noise,
                                                                     current_time=time)
         label = self._labels[time]
-        is_correct = float(abs(label - pred) < SMALL_NUMBER)
+       
+        if pred is None:
+            is_correct = 0
+        else:
+            is_correct = float(abs(label - pred) < SMALL_NUMBER)
 
         self._num_correct.append(is_correct)
         self._target_budgets.append(budget)
 
         # Update the budget distribution for the adaptive system
-        if self._system_type == SystemType.ADAPTIVE:
+        if self._system_type == SystemType.ADAPTIVE and pred is not None:
             self._budget_distribution.update(label=pred, level=level, power=power)
 
         # Update the adaptive controller parameters
