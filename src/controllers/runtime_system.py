@@ -21,7 +21,8 @@ KP = 1.0
 KD = 1.0 / 32.0
 KI = 1.0 / 64.0
 WINDOW_SIZE = 20
-INTEGRAL_BOUNDS = (-100, 100)
+INTEGRAL_BOUNDS = (-16, 16)
+INTEGRAL_WINDOW = 100
 PANIC_FRAC = 0.95
 
 
@@ -131,14 +132,11 @@ class RuntimeSystem:
             self._controller = FixedController(model_index=level)
         elif self._system_type == SystemType.ADAPTIVE:
             # Make the budget distribution and PID controller
-            output_range = (0, self._num_levels - 1)
             self._pid_controller = BudgetController(kp=KP,
                                                     ki=KI,
                                                     kd=KD,
                                                     integral_bounds=INTEGRAL_BOUNDS,
-                                                    output_range=output_range,
-                                                    budget=budget,
-                                                    window=WINDOW_SIZE)
+                                                    integral_window=INTEGRAL_WINDOW)
             # Create the power distribution
             prior_counts = estimate_label_counts(self._controller, budget, self._num_levels, self._num_classes)
             self._budget_distribution = BudgetDistribution(prior_counts=prior_counts,
@@ -167,15 +165,19 @@ class RuntimeSystem:
         stop_probs = self._stop_probs[time] if self._stop_probs is not None and time < len(self._stop_probs) else None
 
         budget += self._budget_step
-        pred, level = self._budget_controller.predict_sample(stop_probs=stop_probs,
-                                                             budget=budget,
-                                                             noise=power_noise,
-                                                             current_time=time)
+        pred, level, power = self._budget_controller.predict_sample(stop_probs=stop_probs,
+                                                                    budget=budget,
+                                                                    noise=power_noise,
+                                                                    current_time=time)
         label = self._labels[time]
         is_correct = float(abs(label - pred) < SMALL_NUMBER)
 
         self._num_correct.append(is_correct)
         self._target_budgets.append(budget)
+
+        # Update the budget distribution for the adaptive system
+        if self._system_type == SystemType.ADAPTIVE:
+            self._budget_distribution.update(label=pred, level=level, power=power)
 
         # Update the adaptive controller parameters
         if time % WINDOW_SIZE == 0 and self._system_type == SystemType.ADAPTIVE:

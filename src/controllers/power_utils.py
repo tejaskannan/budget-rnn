@@ -40,12 +40,16 @@ def get_avg_power_multiple(num_samples: np.ndarray, seq_length: int, multiplier:
     max_num_samples = np.max(num_samples) * multiplier
     assert max_num_samples <= seq_length, 'Can have at most {0} samples'.format(seq_length)
 
-    sample_counts = np.bincount(num_samples * multiplier, minlength=seq_length + 1)  # [T]
-    sample_weights = sample_counts.astype(float) / np.sum(sample_counts)
+    sample_counts = np.bincount(num_samples * multiplier, minlength=seq_length + 1)  # [T + 1]
+    sample_weights = sample_counts.astype(float) / np.sum(sample_counts)  # [T + 1]
 
+    return get_weighted_avg_power(sample_weights[1:], seq_length=seq_length)
+
+
+def get_weighted_avg_power(sample_weights: np.ndarray, seq_length: int) -> float:
     avg_power = 0.0
-    for idx in range(1, seq_length + 1):
-        sample_power = get_avg_power(idx, seq_length)
+    for idx in range(seq_length):
+        sample_power = get_avg_power(idx + 1, seq_length)
         avg_power += sample_weights[idx] * sample_power
 
     return avg_power

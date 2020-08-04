@@ -11,7 +11,7 @@ from utils.np_utils import index_of, round_to_precision
 from utils.constants import OUTPUT, BIG_NUMBER, SMALL_NUMBER, INPUTS, SEQ_LENGTH, DROPOUT_KEEP_RATE, SEQ_LENGTH
 from utils.file_utils import save_pickle_gz, read_pickle_gz, extract_model_name
 from controllers.distribution_prior import DistributionPrior
-from controllers.power_utils import get_avg_power_multiple, get_avg_power
+from controllers.power_utils import get_avg_power_multiple, get_avg_power, get_weighted_avg_power
 from controllers.controller_utils import execute_adaptive_model
 
 
@@ -309,20 +309,6 @@ class Controller:
         print('Train Accuracy: {0}'.format(train_acc))
         print('Test Accuracy: {0}'.format(test_acc))
 
-        # Compute the avg power on the test set (for debugging purposes)
-        #test_levels = levels_to_execute(logistic_probs=test_results.stop_probs, thresholds=self._thresholds) + 1  # [S, B]
-        #power_mult = int(self._seq_length / self._num_levels)
-        #avg_test_power = np.array([get_avg_power_multiple(test_levels[i], self._seq_length, power_mult) for i in range(len(self._thresholds))])
-        #print('Testing Power: {0}'.format(avg_test_power))
-
-        #for i in range(len(self._thresholds)):
-        #    counts = np.bincount(test_levels[i], minlength=self._num_levels)  # [L]
-        #    print(counts.shape)
-
-
-        #level_counts = np.vstack([np.bincount(test_levels[i], minlength=self._num_levels) for i in range(len(self._thresholds))])
-        #print('Test Levels: {0}'.format(level_counts / np.sum(level_counts)))
-
         self._is_fitted = True
 
     def get_thresholds(self, budget: int) -> np.ndarray:
@@ -554,7 +540,13 @@ class RandomController(Controller):
 class SkipRNNController(Controller):
 
     def __init__(self, sample_counts: List[np.ndarray], seq_length: int):
-        self._model_power = np.array([get_avg_power_multiple(counts.astype(int), seq_length) for counts in sample_counts])
+        model_power: List[float] = []
+        for counts in sample_counts:
+            power = get_weighted_avg_power(counts, seq_length=seq_length)
+            model_power.append(power)
+
+        self._model_power = np.array(model_power)
+        print(self._model_power)
 
     def fit(self, series: DataSeries):
         pass
@@ -594,7 +586,7 @@ class BudgetWrapper:
         # Create random state for reproducible results
         self._rand = np.random.RandomState(seed=seed)
 
-    def predict_sample(self, stop_probs: np.ndarray, current_time: int, budget: int, noise: float) -> Tuple[int, int]:
+    def predict_sample(self, stop_probs: np.ndarray, current_time: int, budget: int, noise: float) -> Tuple[int, int, float]:
         """
         Predicts the label for the given inputs.
 
@@ -605,7 +597,7 @@ class BudgetWrapper:
             noise: The noise on the power reading
         Returns:
             A tuple of two element: (1) A classification for the t-th sample (given by current time)
-                (2) Whether the model is executed (True) or the system acted randomly (False)
+                (2) The average power consumed to produce this classification
         """
         # Calculate used energy to determine whether to use the model
         used_energy = self.get_consumed_energy()
@@ -615,7 +607,7 @@ class BudgetWrapper:
         if not should_use_controller:
             pred = self._rand.randint(low=0, high=self._num_classes)
             level = 0
-            self._power_results.append(0)
+            power = 0
         else:
             # If not acting randomly, we use the neural network to perform the classification.
             level, power = self._controller.predict_sample(stop_probs=stop_probs, budget=budget)
@@ -626,12 +618,14 @@ class BudgetWrapper:
             if power is None:
                 power = get_avg_power(level + 1, seq_length=self._seq_length, multiplier=int(self._seq_length / self._num_levels))
 
-            self._power_results.append(power + noise)
+            power = power + noise
 
-        return pred, level
+        self._power_results.append(power)
+
+        return pred, level, power
 
     @property
-    def power(self) -> float:
+    def power(self) -> List[float]:
         return self._power_results
 
     def get_consumed_energy(self) -> float:
