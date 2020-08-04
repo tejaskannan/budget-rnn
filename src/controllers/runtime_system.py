@@ -5,7 +5,8 @@ from enum import Enum, auto
 from typing import List, Dict, Any
 
 from controllers.controller_utils import clip, get_budget_index, ModelResults
-from controllers.logistic_regression_controller import Controller, FixedController, RandomController, BudgetWrapper, CONTROLLER_PATH
+from controllers.model_controllers import Controller, FixedController, RandomController, BudgetWrapper, CONTROLLER_PATH
+from controllers.model_controllers import SkipRNNController
 from controllers.runtime_controllers import PIDController, BudgetController, BudgetDistribution
 from dataset.dataset import DataSeries, Dataset
 from models.adaptive_model import AdaptiveModel
@@ -30,9 +31,13 @@ class SystemType(Enum):
     RANDOMIZED = auto()
     GREEDY = auto()
     FIXED = auto()
+    SKIP_RNN = auto()
 
 
 def estimate_label_counts(controller: Controller, budget: float, num_levels: int, num_classes: int) -> Dict[int, np.ndarray]:
+    # TODO: This operation is expensive because it executes the model on the validation set. Instead, we should give the validation stop outputs
+    # and use the controller on the already_computed results. This requires executing the adaptive models on the validation set AND the testing set
+    # before starting any simulations.
     levels, predictions = controller.predict_levels(series=DataSeries.VALID, budget=budget)
     batch_size = predictions.shape[0]
 
@@ -50,16 +55,16 @@ def estimate_label_counts(controller: Controller, budget: float, num_levels: int
 
 class RuntimeSystem:
 
-    def __init__(self, model_results: ModelResults, system_type: str, model_path: str, dataset_folder: str, power_estimates: np.ndarray, num_classes: int, num_levels: int):
+    def __init__(self, model_results: ModelResults, system_type: str, model_path: str, dataset_folder: str, num_classes: int, num_levels: int, seq_length: int):
         self._system_type = SystemType[system_type.upper()]
         self._model_results = model_results
-        self._power_estimates = power_estimates
 
         self._model_path = model_path
         self._dataset_folder = dataset_folder
 
         self._num_classes = num_classes
         self._num_levels = num_levels
+        self._seq_length = seq_length
 
         save_folder, model_file_name = os.path.split(model_path)
         model_name = extract_model_name(model_file_name)
@@ -70,6 +75,9 @@ class RuntimeSystem:
         # If the system is adaptive, we can load the controller now. Otherwise, we wait until later
         if self._system_type == SystemType.ADAPTIVE:
             self._controller = Controller.load(os.path.join(save_folder, CONTROLLER_PATH.format(model_name)), dataset_folder=dataset_folder)
+        elif self._system_type == SystemType.SKIP_RNN:
+            self._controller = SkipRNNController(sample_counts=model_results.stop_probs,
+                                                 seq_length=seq_length)
         else:
             self._controller = None
 
@@ -113,14 +121,13 @@ class RuntimeSystem:
     def init_for_budget(self, budget: float, max_time: int):
         # Make controller based on the model type
         if self._system_type == SystemType.RANDOMIZED:
-            self._controller = RandomController(budgets=[budget],
-                                                power=self._power_estimates)
+            self._controller = RandomController(budgets=[budget], seq_length=self._seq_length, num_levels=self._num_levels)
             self._controller.fit(series=None)
         elif self._system_type == SystemType.GREEDY:
             level = np.argmax(self._level_accuracy)
             self._controller = FixedController(model_index=level)
         elif self._system_type == SystemType.FIXED:
-            level = get_budget_index(self._power_estimates, budget=budget, level_accuracy=self._level_accuracy)
+            level = get_budget_index(budget=budget, level_accuracy=self._level_accuracy)
             self._controller = FixedController(model_index=level)
         elif self._system_type == SystemType.ADAPTIVE:
             # Make the budget distribution and PID controller
@@ -139,16 +146,17 @@ class RuntimeSystem:
                                                            max_time=max_time,
                                                            num_levels=self._num_levels,
                                                            num_classes=self._num_classes,
-                                                           panic_frac=PANIC_FRAC,
-                                                           power=self._power_estimates)
+                                                           seq_length=self._seq_length,
+                                                           panic_frac=PANIC_FRAC)
 
         # Apply budget wrapper to the controller
         assert self._controller is not None, 'Must have a valid controller'
         self._budget_controller = BudgetWrapper(controller=self._controller,
                                                 model_predictions=self._level_predictions,
                                                 max_time=max_time,
-                                                power_estimates=self._power_estimates,
                                                 num_classes=self._num_classes,
+                                                num_levels=self._num_levels,
+                                                seq_length=self._seq_length,
                                                 budget=budget,
                                                 seed=self._seed)
         self._budget_step = 0
@@ -156,7 +164,7 @@ class RuntimeSystem:
         self._target_budgets = []
 
     def step(self, budget: float, power_noise: float, time: int):
-        stop_probs = self._stop_probs[time] if self._stop_probs is not None else None
+        stop_probs = self._stop_probs[time] if self._stop_probs is not None and time < len(self._stop_probs) else None
 
         budget += self._budget_step
         pred, level = self._budget_controller.predict_sample(stop_probs=stop_probs,

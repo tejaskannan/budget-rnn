@@ -1,90 +1,28 @@
 import numpy as np
 import os.path
 from argparse import ArgumentParser
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import AdaBoostClassifier, RandomForestClassifier
-from sklearn.cluster import KMeans
 from typing import List, Optional, Tuple
 
 from dataset.dataset import Dataset, DataSeries
 from models.adaptive_model import AdaptiveModel
 from threshold_optimization.optimize_thresholds import get_serialized_info
-from utils.rnn_utils import get_logits_name, get_states_name, AdaptiveModelType, get_input_name, is_cascade, is_sample
+from utils.rnn_utils import get_logits_name, get_states_name, AdaptiveModelType, get_input_name, is_cascade, is_sample, get_stop_output_name
 from utils.np_utils import index_of, round_to_precision
-from utils.constants import OUTPUT, BIG_NUMBER, SMALL_NUMBER, INPUTS, SEQ_LENGTH, DROPOUT_KEEP_RATE
+from utils.constants import OUTPUT, BIG_NUMBER, SMALL_NUMBER, INPUTS, SEQ_LENGTH, DROPOUT_KEEP_RATE, SEQ_LENGTH
 from utils.file_utils import save_pickle_gz, read_pickle_gz, extract_model_name
 from controllers.distribution_prior import DistributionPrior
-from controllers.controller_utils import get_power_for_levels, POWER
+from controllers.power_utils import get_avg_power_multiple, get_avg_power
+from controllers.controller_utils import execute_adaptive_model
 
 
-VIOLATION_FACTOR = 0.01
-UNDERSHOOT_FACTOR = 0.01
-CONTROLLER_PATH = 'model-logistic-controller-{0}.pkl.gz'
+VIOLATION_FACTOR = 1.0
+UNDERSHOOT_FACTOR = 1.0
+CONTROLLER_PATH = 'model-controller-{0}.pkl.gz'
 MARGIN = 1000
 MIN_INIT = 0.8
 MAX_INIT = 1.0
-C = 0.01
-NOISE = 0.01
+FACTOR_START = 1e-4
 
-
-def fetch_model_states(model: AdaptiveModel, dataset: Dataset, series: DataSeries):
-    logit_ops = [get_logits_name(i) for i in range(model.num_outputs)]
-    state_ops = [get_states_name(i) for i in range(model.num_outputs)]
-    stop_output_ops = ['stop_output_{0}'.format(i) for i in range(model.num_outputs)]
-
-    data_generator = dataset.minibatch_generator(series=series,
-                                                 batch_size=model.hypers.batch_size,
-                                                 metadata=model.metadata,
-                                                 should_shuffle=False)
-    # Lists to keep track of model results
-    labels: List[np.ndarray] = []
-    states: List[np.ndarray] = []
-    stop_outputs: List[np.ndarray] = []
-    level_predictions: List[np.ndarray] = []
-    level_logits: List[np.ndarray] = []
-
-    # Index of state to use for stop/start prediction
-    states_index = 0
-    if is_cascade(model.model_type):
-        states_index = -1
-
-    seq_length = model.metadata[SEQ_LENGTH]
-    num_sequences = model.num_sequences
-
-    for batch_num, batch in enumerate(data_generator):
-        # Compute the predicted log probabilities
-        feed_dict = model.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
-        model_results = model.execute(feed_dict, logit_ops + state_ops + stop_output_ops)
-
-        first_states = np.concatenate([np.expand_dims(np.squeeze(model_results[op][states_index]), axis=1) for op in state_ops], axis=1)  # [B, D]
-
-        inputs = np.array(batch[INPUTS])
-        states.append(first_states)
-
-        # Concatenate logits into a [B, L, C] array (logit_ops is already ordered by level).
-        # For reference, L is the number of levels and C is the number of classes
-        logits_concat = np.concatenate([np.expand_dims(model_results[op], axis=1) for op in logit_ops], axis=1)
-        level_logits.append(logits_concat)
-
-        # Compute the predictions for each level
-        level_pred = np.argmax(logits_concat, axis=-1)  # [B, L]
-        level_predictions.append(level_pred)
-
-        true_values = np.squeeze(batch[OUTPUT])
-        labels.append(true_values)
-
-        batch_stop_outputs = np.concatenate([np.expand_dims(model_results[op], axis=1) for op in stop_output_ops], axis=1)  # [B, T]
-        stop_outputs.append(batch_stop_outputs)
-
-    states = np.concatenate(states, axis=0)
-    level_predictions = np.concatenate(level_predictions, axis=0)
-    labels = np.concatenate(labels, axis=0).reshape(-1, 1)
-    level_logits = np.concatenate(level_logits, axis=0)
-    stop_outputs = np.concatenate(stop_outputs, axis=0)
-
-    y = (level_predictions == labels).astype(float)
-
-    return states, y, level_logits, labels, stop_outputs
 
 
 def levels_to_execute(logistic_probs: np.ndarray, thresholds: np.ndarray) -> np.ndarray:
@@ -103,77 +41,6 @@ def levels_to_execute(logistic_probs: np.ndarray, thresholds: np.ndarray) -> np.
     return levels
 
 
-def adjust_thresholds(clf_predictions: np.ndarray, thresholds: np.ndarray, target_distribution: np.ndarray, precision: int) -> np.ndarray:
-    fp_one = 1 << precision
-    thresholds = np.copy(thresholds)
-    num_levels = thresholds.shape[1]
-    num_budgets = thresholds.shape[0]
-
-    clf_predictions = np.expand_dims(clf_predictions, axis=0)  # [1, B, L]
-
-    for level in range(num_levels):
-        levels = levels_to_execute(logistic_probs=clf_predictions, thresholds=thresholds)
-        level_counts = np.vstack([np.bincount(levels[i, :], minlength=num_levels) for i in range(num_budgets)])  # [S, L]
-        level_fractions = level_counts / np.sum(level_counts, axis=-1, keepdims=True)  # [S, L]
-
-        direction = 1 - 2 * (target_distribution[:, level] > level_fractions[:, level]).astype(float)
-
-        i = 0
-        while (direction * (target_distribution[:, level] - level_fractions[:, level]) <= 0).all() and i < fp_one:
-            thresholds[:, level] += (direction / fp_one)
-            thresholds = np.clip(thresholds, a_min=0, a_max=1)
-
-            levels = levels_to_execute(logistic_probs=clf_predictions, thresholds=thresholds)
-
-            # Compute the approximate power and accuracy
-            level_counts = np.vstack([np.bincount(levels[i, :], minlength=num_levels) for i in range(num_budgets)])  # [S, L]
-            level_fractions = level_counts / np.sum(level_counts, axis=-1, keepdims=True)  # [S, L]
-            i += 1
-
-    thresholds[:, level] -= (direction / fp_one)
-    final_levels = levels_to_execute(logistic_probs=clf_predictions, thresholds=thresholds)
-    level_counts = np.vstack([np.bincount(final_levels[i, :], minlength=num_levels) for i in range(num_budgets)])  # [S, L]
-    final_distribution = level_counts / np.sum(level_counts, axis=-1, keepdims=True)  # [S, L]
-
-    return thresholds
-
-
-def level_errors(logistic_probs: np.ndarray, thresholds: np.ndarray, network_predictions: np.ndarray) -> np.ndarray:
-    """
-    Calculates the distribution of threshold errors for each model level. This is used purely for debugging.
-
-    Args:
-        logistic_probs: A [1, B, L] array of logistic regression probabilities.
-        thresholds: A [S, L] array of learned thresholds
-        network_predictions: A [1, B, L] array of 0/1 classifications for each level.
-    """
-    expanded_thresholds = np.expand_dims(thresholds, axis=1)  # [S, 1, L]
-    level_diff = logistic_probs - expanded_thresholds  # [S, B, L]
-
-    levels = levels_to_execute(logistic_probs, thresholds)  # [S, B]
-
-    for budget_idx, budget_thresholds in enumerate(thresholds):  # [S]
-        print(budget_thresholds)
-        for level in range(thresholds.shape[1] - 1):  # [L]
-            is_incorrect = (1.0 - network_predictions[:, level])  # [B]
-            is_correct = network_predictions[:, level]  # [B]
-            prob_diff = level_diff[budget_idx, :, level]  # [B]
-            chosen_levels = (levels[budget_idx, :] == level).astype(float)  # [B]
-
-            logistic_variance = np.square(np.std(logistic_probs[:, level]))
-            logistic_avg = np.average(logistic_probs[:, level])
-
-            incorrect_mask = is_incorrect * chosen_levels
-            incorrect_diff = incorrect_mask * prob_diff
-            avg_inc_diff = np.sum(incorrect_diff) / np.maximum(np.sum(incorrect_mask), SMALL_NUMBER)
-
-            correct_mask = is_correct * chosen_levels
-            correct_diff = correct_mask * prob_diff
-            avg_cor_diff = np.sum(correct_diff) / np.maximum(np.sum(correct_mask), SMALL_NUMBER)
-
-            print('Average Gap on Level {0}: Incorrect -> {1:.5f}, Correct -> {2:.5f}, Prob Avg (Var): {3:.5f} ({4:.5f})'.format(level, avg_inc_diff, avg_cor_diff, logistic_avg, logistic_variance))
-
-
 def predictions_for_levels(model_predictions: np.ndarray, levels: np.ndarray, batch_idx: np.ndarray) -> np.ndarray:
     preds_per_sample: List[np.ndarray] = []
     for i in range(levels.shape[0]):
@@ -188,11 +55,11 @@ def fit_anneal_rate(start_value: float, end_value: float, steps: int):
     return np.exp((1.0 / steps) * np.log(max(end_value, SMALL_NUMBER) / max(start_value, SMALL_NUMBER)))
 
 
-### Budget optimizer classes ###
+### Budget optimizer class ###
 
 class BudgetOptimizer:
     
-    def __init__(self, num_levels: int, budgets: np.ndarray, precision: int, trials: int, max_iter: int, min_iter: int, patience: int, power: np.ndarray):
+    def __init__(self, num_levels: int, budgets: np.ndarray, seq_length: int, precision: int, trials: int, max_iter: int, min_iter: int, patience: int):
         self._num_levels = num_levels
         self._num_budgets = budgets.shape[0]
         self._budgets = budgets
@@ -203,118 +70,20 @@ class BudgetOptimizer:
         self._rand = np.random.RandomState(seed=42)
         self._thresholds = None
         self._min_iter = min_iter
-        self._power = power
-
-    def fit(self, network_predictions: np.ndarray, clf_predictions: np.ndarray) -> np.ndarray:
-        raise NotImplementedError()
+        self._seq_length = seq_length
 
     def evaluate(self, network_predictions: np.ndarray, clf_predictions: np.ndarray) -> np.ndarray:
         raise NotImplementedError()
 
-    def get_approx_power(self, levels: np.ndarray) -> np.ndarray:
-        """
-        Approximates the power consumption given profiled power results.
-
-        Args:
-            levels: A [S, B] array of the levels for each sample (B) and budget (S)
-        Returns:
-            An [S] array containing the average power consumption for each budget thresholds.
-        """
-        level_counts = np.vstack([np.bincount(levels[i, :], minlength=self._num_levels) for i in range(self._num_budgets)])  # [S, L]
-        normalized_level_counts = level_counts / np.sum(level_counts, axis=-1, keepdims=True)  # [S, L]
-        approx_power = np.sum(normalized_level_counts * self._power, axis=-1).astype(float)  # [S]
-        return approx_power, normalized_level_counts
-
-
-class SimulatedAnnealingOptimizer(BudgetOptimizer):
-
-    def __init__(self, num_levels: int, budgets: np.ndarray, precision: int, trials: int, max_iter: int, patience: int, temp: float, anneal_rate: float):
-        super().__init__(num_levels, budgets, precision, trials, max_iter, patience)
-        self._max_iter = max_iter
-        self._temp = temp
-        self._anneal_rate = anneal_rate
-
-    def fit(self, network_results: np.ndarray, clf_predictions: np.ndarray):
-        # Expand the clf predictions for later broadcasting
-        clf_predictions = np.expand_dims(clf_predictions, axis=0)  # [1, B, L]
-
-        # Initialize thresholds, [S, L] array
-        thresholds = round_to_precision(self._rand.uniform(low=0.2, high=0.8, size=(self._num_budgets, self._num_levels)), self._precision)
-        thresholds = np.flip(np.sort(thresholds, axis=-1), axis=-1)
-        thresholds[:, -1] = 0
-
-        # The number 1 in fixed point representation
-        fp_one = 1 << self._precision
-
-        # Array of level indices
-        level_idx = np.arange(start=0, stop=self._num_levels).reshape(1, 1, -1)  # [1, 1, L]
-        batch_idx = np.arange(start=0, stop=clf_predictions.shape[1])  # [B]
-
-        # Variable for convergence
-        early_stopping_counter = 0
-
-        best_fitness = np.zeros(shape=(self._num_budgets,), dtype=float)
-        best_power = np.zeros_like(best_fitness)
-        margin = 0.4
-        temp = self._temp
-
-        for i in range(self._max_iter):
-            prev_thresholds = np.copy(thresholds)
-    
-            # Generate a random move
-            random_move = round_to_precision(self._rand.uniform(low=-margin, high=margin, size=thresholds.shape), self._precision)
-            random_move[:, -1] = 0
-
-            candidate_thresholds = np.clip(thresholds + random_move, a_min=0, a_max=1)
-
-            levels = levels_to_execute(logistic_probs=clf_predictions, thresholds=candidate_thresholds)
-
-            # Compute the approximate power and accuracy
-            approx_power, _ = self.get_approx_power(levels=levels)
-            dual_term = approx_power - self._budgets  # [S]
-            dual_penalty = np.where(dual_term > 0, VIOLATION_FACTOR * dual_term, -UNDERSHOOT_FACTOR * dual_term)
-
-            correct_per_level = predictions_for_levels(model_predictions=network_results, levels=levels, batch_idx=batch_idx)
-            accuracy = np.average(correct_per_level, axis=-1)  # [S]
-
-            # Compute the fitness (we aim to maximize this objective)
-            fitness = accuracy - dual_penalty
-
-            # Determine when to set thresholds based on fitness and temperature
-            random_move_prob = self._rand.uniform(low=0.0, high=1.0, size=(self._num_budgets, ))
-            fitness_diff = fitness - best_fitness  # [S]
-            temperature_prob = np.exp(-1 * fitness_diff / temp)
-
-            selection = np.logical_or(fitness_diff > 0, temperature_prob > random_move_prob)
-            best_fitness = np.where(selection, fitness, best_fitness)
-            best_power = np.where(selection, approx_power, best_power)
-            thresholds = np.where(selection, candidate_thresholds, thresholds)
-
-            # Anneal the temperature
-            temp = temp * self._anneal_rate
-
-            print('Completed iteration {0}: Fitness -> {1}'.format(i+1, best_fitness))
-
-            if np.isclose(thresholds, prev_thresholds).all():
-                early_stopping_counter += 1
-            else:
-                early_stopping_counter = 0
-
-            if early_stopping_counter >= self._patience:
-                print('Converged.')
-                break
-
-        return thresholds
-
-
-class CoordinateOptimizer(BudgetOptimizer):
-
     def fitness_function(self, thresholds: np.ndarray, network_results: np.ndarray, clf_predictions: np.ndarray, batch_size: int, violation_factor: float, undershoot_factor: float):
         # Compute the number of levels to execute
-        levels = levels_to_execute(logistic_probs=clf_predictions, thresholds=thresholds)  # [B]
+        levels = levels_to_execute(logistic_probs=clf_predictions, thresholds=thresholds)  # [S, B]
 
         # Compute the approximate power
-        approx_power, normalized_level_counts = self.get_approx_power(levels=levels)
+        power_multiplier = int(self._seq_length / self._num_levels)
+        approx_power = np.vstack([get_avg_power_multiple(levels[idx] + 1, self._seq_length, power_multiplier) for idx in range(self._num_budgets)])  # [S, 1]
+        approx_power = np.squeeze(approx_power, axis=-1)  # [S]
+
         dual_term = approx_power - self._budgets  # [S]
         dual_penalty = np.where(dual_term > 0, violation_factor, undershoot_factor) * np.square(dual_term)
 
@@ -344,43 +113,26 @@ class CoordinateOptimizer(BudgetOptimizer):
                                          clf_predictions=clf_predictions,
                                          init_thresholds=init_thresholds)
 
-            # Compute the fitness
+            # Compute the fitness, [S]
             fitness, _ = self.fitness_function(thresholds=thresholds,
                                                network_results=network_results,
                                                clf_predictions=valid_clf_predictions,
                                                batch_size=valid_clf_predictions.shape[1],
                                                violation_factor=VIOLATION_FACTOR,
                                                undershoot_factor=UNDERSHOOT_FACTOR)
-            fitness = np.expand_dims(fitness, axis=1)
+            fitness = np.expand_dims(fitness, axis=-1)  # [S, 1]
 
+            # Set the thresholds using the best seen fitness so far
             best_thresholds = np.where(fitness < best_fitness, thresholds, best_thresholds)
             best_fitness = np.where(fitness < best_fitness, fitness, best_fitness)
             print('Completed Trial {0}. Best Fitness: {1}'.format(t, best_fitness))
 
-        levels = levels_to_execute(logistic_probs=clf_predictions, thresholds=thresholds)
-        level_counts = np.vstack([np.bincount(levels[i, :], minlength=self._num_levels) for i in range(self._num_budgets)])  # [S, L]
+        levels = levels_to_execute(logistic_probs=clf_predictions, thresholds=best_thresholds)
+        level_counts = np.vstack([np.bincount(levels[i], minlength=self._num_levels) for i in range(self._num_budgets)])  # [S, L]
         avg_level_counts = level_counts / np.sum(level_counts, axis=-1, keepdims=True)
 
         self._thresholds = best_thresholds
         return best_thresholds, avg_level_counts
-
-    def print_accuracy_for_levels(self, clf_predictions: np.ndarray, network_results: np.ndarray, thresholds: np.ndarray):
-        levels = levels_to_execute(logistic_probs=clf_predictions, thresholds=thresholds)
-        level_counts = np.vstack([np.bincount(levels[i, :], minlength=self._num_levels) for i in range(self._num_budgets)])  # [S, L]
-        avg_level_counts = level_counts / np.sum(level_counts, axis=-1, keepdims=True)
-
-        batch_idx = np.arange(levels.shape[1])  # [B]
-        correct_per_level = predictions_for_levels(model_predictions=network_results, levels=levels, batch_idx=batch_idx)
-
-        print('Level Counts: {0}'.format(avg_level_counts))
-
-        # Calculate the accuracy for each level
-        for i in range(self._num_levels):
-            level_mask = (levels == i).astype(float)  # [S, B]
-            level_correct = np.sum(correct_per_level * level_mask, axis=-1)  # [S]
-            level_accuracy = level_correct / (np.sum(level_mask, axis=-1) + SMALL_NUMBER)  # [S]
-
-            print('Accuracy when stopping at level {0}: {1}'.format(i, level_accuracy))
 
     def evaluate(self, network_results: np.ndarray, clf_predictions: np.ndarray) -> np.ndarray:
         """
@@ -424,13 +176,10 @@ class CoordinateOptimizer(BudgetOptimizer):
         early_stopping_counter = 0
         prev_thresholds = np.copy(thresholds)
 
-        # best_fitness = np.ones(shape=(self._num_budgets,), dtype=float)
-        # best_power = np.zeros_like(best_fitness)
-
         # Initialize penalty parameters
-        violation_factor = 1e-4
-        entropy_factor = 1e-4
-        undershoot_factor = 1e-4
+        violation_factor = FACTOR_START
+        entropy_factor = FACTOR_START
+        undershoot_factor = FACTOR_START
 
         violation_anneal_rate = fit_anneal_rate(start_value=violation_factor, end_value=VIOLATION_FACTOR, steps=self._min_iter)
         undershoot_anneal_rate = fit_anneal_rate(start_value=undershoot_factor, end_value=UNDERSHOOT_FACTOR, steps=self._min_iter)
@@ -450,8 +199,6 @@ class CoordinateOptimizer(BudgetOptimizer):
             end_values = np.minimum(fp_init + int((MARGIN + 1) / 2), fp_one)
             start_values = np.maximum(end_values - MARGIN, 0)
 
-            # start_values = np.maximum((best_t * fp_one).astype(int) - int(MARGIN / 2), 0)
-
             # Variables for tie-breaking
             steps = np.zeros_like(best_fitness)
             prev_level_fitness = np.ones_like(best_fitness)
@@ -465,15 +212,15 @@ class CoordinateOptimizer(BudgetOptimizer):
                 thresholds[:, level] = candidate_values
 
                 # Compute the fitness
-                fitness, approx_power = self.fitness_function(thresholds=thresholds,
-                                                              network_results=network_results,
-                                                              clf_predictions=clf_predictions,
-                                                              batch_size=clf_predictions.shape[1],
-                                                              violation_factor=violation_factor,
-                                                              undershoot_factor=undershoot_factor)
+                fitness, avg_power = self.fitness_function(thresholds=thresholds,
+                                                           network_results=network_results,
+                                                           clf_predictions=clf_predictions,
+                                                           batch_size=clf_predictions.shape[1],
+                                                           violation_factor=violation_factor,
+                                                           undershoot_factor=undershoot_factor)
 
                 best_t = np.where(fitness < best_fitness, candidate_values, best_t)
-                best_power = np.where(fitness < best_fitness, approx_power, best_power)
+                best_power = np.where(fitness < best_fitness, avg_power, best_power)
                 best_fitness = np.where(fitness < best_fitness, fitness, best_fitness)
 
             thresholds[:, level] = best_t  # Set the best thresholds
@@ -509,8 +256,6 @@ class Controller:
                  precision: int,
                  budgets: List[float],
                  trials: int,
-                 power: np.ndarray,
-                 budget_optimizer_type: str,
                  patience: int,
                  max_iter: int,
                  min_iter: int):
@@ -525,6 +270,7 @@ class Controller:
         self._is_fitted = False
         self._share_model = share_model
         self._num_levels = model.num_outputs
+        self._seq_length = model.metadata[SEQ_LENGTH]
 
         self._budgets = np.array(list(sorted(budgets)))
         self._num_budgets = len(self._budgets)
@@ -534,58 +280,56 @@ class Controller:
         self._patience = patience
         self._max_iter = max_iter
         self._min_iter = min_iter
-
-        self._power = get_power_for_levels(power, self._num_levels)
+        self._levels_per_label = None
 
         # Create the budget optimizer
-        self._budget_optimizer_type = budget_optimizer_type.lower()
-        if self._budget_optimizer_type == 'coordinate':
-            self._budget_optimizer = CoordinateOptimizer(num_levels=self._num_levels,
-                                                         budgets=self._budgets,
-                                                         precision=self._precision,
-                                                         trials=self._trials,
-                                                         patience=patience,
-                                                         max_iter=max_iter,
-                                                         min_iter=min_iter,
-                                                         power=self._power)
-        elif self._budget_optimizer_type == 'sim-anneal':
-            self._budget_optimizer = SimulatedAnnealingOptimizer(num_levels=self._num_levels,
-                                                                 budgets=self._budgets,
-                                                                 precision=self._precision,
-                                                                 trials=self._trials,
-                                                                 temp=0.1,
-                                                                 anneal_rate=0.95,
-                                                                 patience=patience,
-                                                                 max_iter=max_iter,
-                                                                 min_iter=min_iter,
-                                                                 power=self._power)
-        else:
-            raise ValueError('Unknown budget optimizer: {0}'.format(budget_optimizer_type))
+        self._budget_optimizer = BudgetOptimizer(num_levels=self._num_levels,
+                                                 seq_length=self._seq_length,
+                                                 budgets=self._budgets,
+                                                 precision=self._precision,
+                                                 trials=self._trials,
+                                                 patience=patience,
+                                                 max_iter=max_iter,
+                                                 min_iter=min_iter)
 
     def fit(self, series: DataSeries):
-        X_train, y_train, train_logits, train_labels, clf_predictions = fetch_model_states(self._model, self._dataset, series=series)
-        X_test, y_test, test_logits, test_labels, test_clf_predictions = fetch_model_states(self._model, self._dataset, series=DataSeries.TEST)
+        train_results = execute_adaptive_model(self._model, self._dataset, series=series)
+        test_results = execute_adaptive_model(self._model, self._dataset, series=DataSeries.TEST)
+
+        train_correct = train_results.predictions == train_results.labels  # [N, L]
+        test_correct = test_results.predictions == test_results.labels  # [M, L]
 
         # Fit the thresholds
-        self._thresholds, self._avg_level_counts = self._budget_optimizer.fit(network_results=y_train, clf_predictions=clf_predictions)
+        self._thresholds, self._avg_level_counts = self._budget_optimizer.fit(network_results=train_correct, clf_predictions=train_results.stop_probs)
     
         # Evaluate the model optimizer
-        print('======')
-        train_acc = self._budget_optimizer.evaluate(network_results=y_train, clf_predictions=clf_predictions)
-        test_acc = self._budget_optimizer.evaluate(network_results=y_test, clf_predictions=test_clf_predictions)
+        train_acc = self._budget_optimizer.evaluate(network_results=train_correct, clf_predictions=train_results.stop_probs)
+        test_acc = self._budget_optimizer.evaluate(network_results=test_correct, clf_predictions=test_results.stop_probs)
 
         print('Train Accuracy: {0}'.format(train_acc))
-        self._budget_optimizer.print_accuracy_for_levels(network_results=y_train, clf_predictions=clf_predictions, thresholds=self._thresholds)
-
         print('Test Accuracy: {0}'.format(test_acc))
-        self._budget_optimizer.print_accuracy_for_levels(network_results=y_test, clf_predictions=test_clf_predictions, thresholds=self._thresholds)
 
-        print('=====')
+        # Compute the avg power on the test set (for debugging purposes)
+        #test_levels = levels_to_execute(logistic_probs=test_results.stop_probs, thresholds=self._thresholds) + 1  # [S, B]
+        #power_mult = int(self._seq_length / self._num_levels)
+        #avg_test_power = np.array([get_avg_power_multiple(test_levels[i], self._seq_length, power_mult) for i in range(len(self._thresholds))])
+        #print('Testing Power: {0}'.format(avg_test_power))
+
+        #for i in range(len(self._thresholds)):
+        #    counts = np.bincount(test_levels[i], minlength=self._num_levels)  # [L]
+        #    print(counts.shape)
+
+
+        #level_counts = np.vstack([np.bincount(test_levels[i], minlength=self._num_levels) for i in range(len(self._thresholds))])
+        #print('Test Levels: {0}'.format(level_counts / np.sum(level_counts)))
 
         self._is_fitted = True
 
     def get_thresholds(self, budget: int) -> np.ndarray:
         budget_idx = index_of(self._budgets, value=budget)
+
+        min_power = get_avg_power(num_samples=1, seq_length=self._seq_length, multiplier=int(self._seq_length / self._num_levels))
+        max_power = get_avg_power(num_samples=self._seq_length, seq_length=self._seq_length)
 
         # If we already have the budget, then use the corresponding thresholds
         if budget_idx >= 0:
@@ -605,10 +349,10 @@ class Controller:
                 # The budget is below the lowest learned budget. If it is below the lowest power amount,
                 # then we use a fixed policy on the lowest level. Otherwise, we interpolate as usual.
                 fixed_thresholds = np.zeros_like(self._thresholds[0])
-                if budget < self._power[0]:
+                if budget < min_power:
                     return fixed_thresholds
 
-                lower_budget = self._power[0]
+                lower_budget = min_power
                 upper_budget = self._budgets[0]
 
                 lower_thresh = fixed_thresholds
@@ -618,11 +362,11 @@ class Controller:
                 # or interpolate given the position of the budget w.r.t. the highest power level.
                 fixed_thresholds = np.ones_like(self._thresholds[0])
                 fixed_thresholds[-1] = 0
-                if budget > self._power[-1]:
+                if budget > max_power:
                     return fixed_thresholds
 
                 lower_budget = self._budgets[-1]
-                upper_budget  = self._power[-1]
+                upper_budget  = max_power
 
                 lower_thresh = self._thresholds[-1]
                 upper_thresh = fixed_thresholds
@@ -661,29 +405,28 @@ class Controller:
 
         # Infer the thresholds for this budget
         thresholds = self.get_thresholds(budget)
+        
+        power_mult = int(self._seq_length / self._num_levels)
 
-        # model_result = self._model.execute(ops=stop_output_ops, feed_dict=feed_dict)
         for level, stop_prob in enumerate(stop_probs):
             if thresholds[level] < stop_prob:
-                return level
+                power = get_avg_power(level + 1, self._seq_length, power_mult)
+                return level, power
 
         # By default, we return the top level
-        return self._num_levels - 1
+        return self._num_levels - 1, get_avg_power(self._seq_length, self._seq_length)
 
     def predict_levels(self, series: DataSeries, budget: float) -> Tuple[np.ndarray, np.ndarray]:
         assert self._is_fitted, 'Model is not fitted'
 
-        # budget_idx = index_of(self._budgets, value=budget)
-        # assert budget_idx >= 0, 'Could not find values for budget {0}'.format(budget)
         thresholds = self.get_thresholds(budget)
 
-        X, ypred, logits, _, clf_predictions = fetch_model_states(self._model, self._dataset, series=series)
-        level_predictions = np.argmax(logits, axis=-1)  # [B, L]
+        results = execute_adaptive_model(self._model, self._dataset, series=series)
 
-        levels = levels_to_execute(logistic_probs=clf_predictions, thresholds=np.expand_dims(thresholds, axis=0))
+        levels = levels_to_execute(logistic_probs=results.stop_probs, thresholds=np.expand_dims(thresholds, axis=0))
 
-        batch_idx = np.arange(level_predictions.shape[0])
-        predictions = predictions_for_levels(model_predictions=level_predictions,
+        batch_idx = np.arange(results.predictions.shape[0])
+        predictions = predictions_for_levels(model_predictions=results.predictions,
                                              levels=levels,
                                              batch_idx=batch_idx)
 
@@ -702,7 +445,6 @@ class Controller:
             'patience': self._patience,
             'max_iter': self._max_iter,
             'min_iter': self._min_iter,
-            'budget_optimizer_type': self._budget_optimizer_type,
             'avg_level_counts': self._avg_level_counts
         }
 
@@ -730,16 +472,14 @@ class Controller:
 
         # Initialize the new controller
         controller = Controller(model_path=serialized_info['model_path'],
-                                dataset_folder=serialized_info['dataset_folder'],
+                                dataset_folder=dataset_folder,
                                 share_model=serialized_info['share_model'],
                                 precision=serialized_info['precision'],
                                 budgets=serialized_info['budgets'],
                                 trials=serialized_info['trials'],
-                                budget_optimizer_type=serialized_info['budget_optimizer_type'],
                                 patience=serialized_info.get('patience', 10),
                                 max_iter=serialized_info.get('max_iter', 100),
-                                min_iter=serialized_info.get('min_iter', 20),
-                                power=POWER)
+                                min_iter=serialized_info.get('min_iter', 20))
 
         # Set remaining fields
         controller._thresholds = serialized_info['thresholds']
@@ -761,14 +501,16 @@ class FixedController(Controller):
         """
         Predicts the label for the given inputs. This strategy always uses the same index.
         """
-        return self._model_index
+        return self._model_index, None
 
 
 class RandomController(Controller):
 
-    def __init__(self, budgets: List[float], power: np.ndarray):
+    def __init__(self, budgets: List[float], seq_length: int, num_levels: int):
         self._budgets = np.array(budgets)
-        self._power = power
+        self._seq_length = seq_length
+        self._num_levels = num_levels
+        self._power_multiplier = int(seq_length / num_levels)
 
         self._threshold_dict: Dict[float, np.ndarray] = dict()
 
@@ -779,8 +521,10 @@ class RandomController(Controller):
     def fit(self, series: DataSeries):
         # Fit a weighted average for each budget
         thresholds: List[np.ndarray] = []
+        power_array = np.array([get_avg_power(i+1, self._seq_length, self._power_multiplier) for i in range(self._num_levels)])
+
         for budget in self._budgets:
-            distribution = DistributionPrior(self._power, target=budget)
+            distribution = DistributionPrior(power_array, target=budget)
             distribution.make()
             distribution.init()
             
@@ -803,23 +547,49 @@ class RandomController(Controller):
         # Get thresholds for this budget if needed to infer
         thresholds = self._threshold_dict[budget]
         levels = np.arange(thresholds.shape[0])  # [L]
-        return self._rand.choice(levels, p=thresholds)
+        chosen_level = self._rand.choice(levels, p=thresholds)
+        return chosen_level, get_avg_power(chosen_level + 1, seq_length=self._seq_length, multiplier=self._power_multiplier)
+
+
+class SkipRNNController(Controller):
+
+    def __init__(self, sample_counts: List[np.ndarray], seq_length: int):
+        self._model_power = np.array([get_avg_power_multiple(counts.astype(int), seq_length) for counts in sample_counts])
+
+    def fit(self, series: DataSeries):
+        pass
+
+    def predict_sample(self, stop_probs: np.ndarray, budget: float) -> int:
+        """
+        Predicts the number of levels given the list of hidden states. The states are assumed to be in order.
+
+        Args:
+            stop_probs: An [L] array of stop probabilities
+            budget: The budget to perform inference under. This controls the employed thresholds.
+        Returns:
+            The number of levels to execute.
+        """
+        budget_diff = np.abs(self._model_power - budget)
+        model_idx = np.argmin(budget_diff)
+
+        return model_idx, self._model_power[model_idx]
 
 
 class BudgetWrapper:
 
-    def __init__(self, model_predictions: np.ndarray, controller: Controller, max_time: int, power_estimates: np.ndarray, num_classes: int, budget: float, seed: int = 72):
+    def __init__(self, model_predictions: np.ndarray, controller: Controller, max_time: int, seq_length: int, num_classes: int, num_levels: int, budget: float, seed: int = 72):
         self._controller = controller
         self._num_classes = num_classes
+        self._seq_length = seq_length
+        self._num_levels = num_levels
         self._model_predictions = model_predictions
         self._power_budget = budget
         self._energy_budget = budget * max_time
 
         # Save variables corresponding to the budget
         self._max_time = max_time
-        self._power_estimates = power_estimates
         self._power_results: List[float] = []
-        self._energy_margin = 0.02  # Small margin to prevent going over the budget unknowingly
+        self._energy_margin = 0.05  # Small margin to prevent going over the budget unknowingly
 
         # Create random state for reproducible results
         self._rand = np.random.RandomState(seed=seed)
@@ -848,11 +618,15 @@ class BudgetWrapper:
             self._power_results.append(0)
         else:
             # If not acting randomly, we use the neural network to perform the classification.
-            level = self._controller.predict_sample(stop_probs=stop_probs, budget=budget)
+            level, power = self._controller.predict_sample(stop_probs=stop_probs, budget=budget)
             pred = self._model_predictions[current_time, level]
 
-            # Add to power results
-            self._power_results.append(self._power_estimates[level] + noise)
+            # Add to power results. If no power is given, we default to using the known
+            # power estimates. This gives the controllers a chance to override the power readings.
+            if power is None:
+                power = get_avg_power(level + 1, seq_length=self._seq_length, multiplier=int(self._seq_length / self._num_levels))
+
+            self._power_results.append(power + noise)
 
         return pred, level
 
@@ -866,15 +640,14 @@ class BudgetWrapper:
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--model-paths', type=str, nargs='+')
-    parser.add_argument('--dataset-folder', type=str)
-    parser.add_argument('--budgets', type=float, nargs='+')
+    parser.add_argument('--model-paths', type=str, nargs='+', required=True)
+    parser.add_argument('--dataset-folder', type=str, required=True)
+    parser.add_argument('--budgets', type=float, nargs='+', required=True)
     parser.add_argument('--precision', type=int, required=True)
-    parser.add_argument('--trials', type=int, default=3)
+    parser.add_argument('--trials', type=int, default=1)
     parser.add_argument('--patience', type=int, default=15)
     parser.add_argument('--max-iter', type=int, default=100)
     parser.add_argument('--min-iter', type=int, default=20)
-    parser.add_argument('--budget-optimizer', type=str, choices=['coordinate', 'sim-anneal'], required=True)
     args = parser.parse_args()
 
     for model_path in args.model_paths:
@@ -887,12 +660,10 @@ if __name__ == '__main__':
                                 precision=args.precision,
                                 budgets=args.budgets,
                                 trials=args.trials,
-                                power=POWER,
-                                budget_optimizer_type=args.budget_optimizer,
                                 patience=args.patience,
                                 max_iter=args.max_iter,
                                 min_iter=args.min_iter)
-        
+
         # Fit the model on the validation set
         controller.fit(series=DataSeries.VALID)
         controller.save()

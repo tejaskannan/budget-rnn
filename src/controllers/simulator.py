@@ -9,8 +9,8 @@ from scipy import integrate
 from typing import Tuple, List, Union, Optional, Dict
 
 from controllers.runtime_system import RuntimeSystem
-from controllers.controller_utils import interpolate_power, get_power_for_levels, POWER, execute_adaptive_model, execute_standard_model
-from controllers.controller_utils import save_test_log
+from controllers.controller_utils import execute_adaptive_model, execute_standard_model
+from controllers.controller_utils import save_test_log, execute_skip_rnn_model, ModelResults
 from models.base_model import Model
 from models.model_factory import get_model
 from models.adaptive_model import AdaptiveModel
@@ -18,7 +18,7 @@ from models.standard_model import StandardModel
 from dataset.dataset import DataSeries, Dataset
 from dataset.dataset_factory import get_dataset
 from utils.hyperparameters import HyperParameters
-from utils.file_utils import extract_model_name, read_by_file_suffix, save_by_file_suffix, make_dir
+from utils.file_utils import extract_model_name, read_by_file_suffix, save_by_file_suffix, make_dir, iterate_files
 from utils.constants import SMALL_NUMBER, METADATA_PATH, HYPERS_PATH, SEQ_LENGTH, NUM_CLASSES
 
 
@@ -67,16 +67,23 @@ def run_simulation(runtime_systems: List[RuntimeSystem], budget: float, noise: T
 
     # Initialize the systems for this budget
     for system in runtime_systems:
+        start = time.time()
         system.init_for_budget(budget=budget, max_time=max_time)
+        end = time.time()
+        print('Time to init {0}: {1}'.format(system.name, end - start))
 
-    # Set random state for reproducible results
+    # Set random state for reproducible results and generate noise terms
     rand = np.random.RandomState(seed=42)
     power_noise = rand.normal(loc=noise[0], scale=noise[1], size=(max_time, ))
 
     # Sequentially execute each system
+    start = time.time()
     for t in range(max_time):
         for system in runtime_systems:
             system.step(budget=budget, power_noise=power_noise[t], time=t)
+
+    end = time.time()
+    print('Time to run all steps: {0}'.format(end - start))
 
     # Create the final result
     times = np.arange(max_time) + 1
@@ -159,11 +166,12 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--adaptive-model-paths', type=str, nargs='+', required=True)
     parser.add_argument('--baseline-model-path', type=str, required=True)
+    parser.add_argument('--skip-model-folder', type=str)
     parser.add_argument('--dataset-folder', type=str, required=True)
     parser.add_argument('--budgets', type=float, nargs='+')
     parser.add_argument('--output-folder', type=str)
     parser.add_argument('--noise-loc', type=float, default=0.0)
-    parser.add_argument('--noise-scale', type=float, default=1.0)
+    parser.add_argument('--noise-scale', type=float, default=0.01)
     parser.add_argument('--shuffle', action='store_true')
     parser.add_argument('--skip-plotting', action='store_true')
     args = parser.parse_args()
@@ -179,8 +187,10 @@ if __name__ == '__main__':
     runtime_systems: List[RuntimeSystem] = []
     for adaptive_model_path in args.adaptive_model_paths:
         model, dataset = get_serialized_info(adaptive_model_path, dataset_folder=dataset_folder)
+
         num_levels = model.num_outputs
-        power_estimates = get_power_for_levels(POWER, num_levels=num_levels)
+        seq_length = model.metadata[SEQ_LENGTH]
+        num_classes = model.metadata[NUM_CLASSES]
 
         model_results = execute_adaptive_model(model, dataset, series=DataSeries.TEST)
 
@@ -188,18 +198,18 @@ if __name__ == '__main__':
                                         system_type='adaptive',
                                         model_path=adaptive_model_path,
                                         dataset_folder=dataset_folder,
-                                        power_estimates=power_estimates,
+                                        seq_length=seq_length,
                                         num_levels=num_levels,
-                                        num_classes=model.metadata[NUM_CLASSES])
+                                        num_classes=num_classes)
         runtime_systems.append(adaptive_system)
 
         randomized_system = RuntimeSystem(model_results=model_results,
                                           system_type='randomized',
                                           model_path=adaptive_model_path,
                                           dataset_folder=dataset_folder,
-                                          power_estimates=power_estimates,
+                                          seq_length=seq_length,
                                           num_levels=num_levels,
-                                          num_classes=model.metadata[NUM_CLASSES])
+                                          num_classes=num_classes)
         runtime_systems.append(randomized_system)
 
     # Make the baseline systems
@@ -209,26 +219,53 @@ if __name__ == '__main__':
     model_results = execute_standard_model(model, dataset, series=DataSeries.TEST)
 
     seq_length = model.metadata[SEQ_LENGTH]
-    power_estimates = get_power_for_levels(POWER, num_levels=num_levels)
-    power_estimates = interpolate_power(power_estimates, seq_length)
+    num_classes = model.metadata[NUM_CLASSES]
 
     greedy_system = RuntimeSystem(model_results=model_results,
                                   system_type='greedy',
                                   model_path=baseline_model_path,
                                   dataset_folder=dataset_folder,
-                                  power_estimates=power_estimates,
+                                  seq_length=seq_length,
                                   num_levels=seq_length,
-                                  num_classes=model.metadata[NUM_CLASSES])
+                                  num_classes=num_classes)
     runtime_systems.append(greedy_system)
 
     fixed_system = RuntimeSystem(model_results=model_results,
                                  system_type='fixed',
                                  model_path=baseline_model_path,
                                  dataset_folder=dataset_folder,
-                                 power_estimates=power_estimates,
+                                 seq_length=seq_length,
                                  num_levels=seq_length,
-                                 num_classes=model.metadata[NUM_CLASSES])
+                                 num_classes=num_classes)
     runtime_systems.append(fixed_system)
+
+    # Add the Skip RNN models if provided
+    skip_rnn_folder = args.skip_model_folder
+    if skip_rnn_folder is not None:
+        model_results: List[ModelResults] = []
+        model_paths: List[str] = []
+        for model_path in iterate_files(skip_rnn_folder, pattern='model-SKIP_RNN-.*model_best\.pkl\.gz'):
+            model, dataset = get_serialized_info(model_path, dataset_folder=dataset_folder)
+            
+            model_result = execute_skip_rnn_model(model, dataset, series=DataSeries.TEST)
+            model_results.append(model_result)
+            model_paths.append(model_path)
+
+        # Concatenate the results from each model
+        predictions = np.concatenate([r.predictions for r in model_results], axis=1)  # [N, L]
+        labels = model_results[0].labels  # [N, 1]
+        stop_probs = [r.stop_probs for r in model_results]
+        accuracy = [r.accuracy for r in model_results]
+
+        skip_rnn_results = ModelResults(predictions=predictions, labels=labels, stop_probs=stop_probs, accuracy=accuracy)
+        skip_rnn_system = RuntimeSystem(model_results=skip_rnn_results,
+                                        system_type='skip_rnn',
+                                        model_path=model_paths[0],   # Design decision: Pick the first model path to save results under
+                                        dataset_folder=dataset_folder,
+                                        seq_length=seq_length,
+                                        num_levels=len(model_results),
+                                        num_classes=num_classes)
+        runtime_systems.append(skip_rnn_system)
 
     # Max time equals the number of test samples
     max_time = dataset.dataset[DataSeries.TEST].length
@@ -237,10 +274,13 @@ if __name__ == '__main__':
     for budget in sorted(args.budgets):
         print('Starting budget: {0}'.format(budget))
 
+        start = time.time()
         result = run_simulation(runtime_systems=runtime_systems, 
                                 noise=(args.noise_loc, args.noise_scale),
                                 max_time=max_time,
                                 budget=budget)
+        end = time.time()
+        print('Time to Run Simulation: {0}'.format(end - start))
 
         plot_and_save(sim_results=result,
                       runtime_systems=runtime_systems,
