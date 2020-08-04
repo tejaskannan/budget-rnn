@@ -7,13 +7,13 @@ from controllers.power_utils import get_avg_power
 from utils.constants import SMALL_NUMBER
 
 
-SMOOTHING_FACTOR = 100
+SMOOTHING_FACTOR = 10
 POWER_PRIOR_COUNT = 100
 
 
 class PIDController:
 
-    def __init__(self, kp: float, ki: float, kd: float, integral_bounds: Tuple[float, float]):
+    def __init__(self, kp: float, ki: float, kd: float, integral_bounds: Tuple[float, float], integral_window: int):
         self._kp = kp
         self._ki = ki
         self._kd = kd
@@ -21,6 +21,7 @@ class PIDController:
         self._errors: List[float] = []
         self._times: List[float] = []
         self._integral_bounds = integral_bounds
+        self._integral_window = integral_window
 
     def errors(self) -> List[float]:
         return self._errors
@@ -58,8 +59,10 @@ class PIDController:
 
         # Approximate the integral term using a trapezoid rule approximation
         integral = 0
-        if len(self._errors) > 1:
-            integral = integrate.trapz(self._errors, self._times)
+        if len(self._errors) > self._integral_window:
+            integral_errors = self._errors[-self._integral_window:]
+
+            integral = integrate.trapz(integral_errors, dx=1)
             integral = clip(integral, bounds=self._integral_bounds)
 
         derivative_error = self._kd * derivative
@@ -83,16 +86,9 @@ class PIDController:
 
 class BudgetController(PIDController):
 
-    def __init__(self, kp: float, ki: float, kd: float, output_range: Tuple[int, int], integral_bounds: Tuple[float, float], budget: float, window: int):
-        super().__init__(kp, ki, kd, integral_bounds)
-        self._output_range = output_range
-        self._budget = budget
-        self._window = window
-        self._rand = np.random.RandomState(seed=92)
-
     def plant_function(self, y_true: Tuple[float, float], y_pred: Tuple[float, float], control_error: float) -> float:
         # If within bounds, we don't apply and adjustments
-        if y_pred >= y_true[0] and y_pred < y_true[1]:
+        if y_pred >= y_true[0] and y_pred <= y_true[1]:
             return 0
 
         # Otherwise, we apply an offset proportional to the error
@@ -176,8 +172,8 @@ class BudgetDistribution:
         # Upper and lower bounds as determined by one std from the mean
         return expected_power - estimator_std, expected_power + estimator_std
 
-    def update(self, label: int, levels: int, power: float):
+    def update(self, label: int, level: int, power: float):
         self._observed_label_counts[label] += 1
-        self._prior_counts[label][levels] += 1
-        self._level_counts[levels] += 1
-        self._observed_power[levels] += power
+        self._prior_counts[label][level] += 1
+        self._level_counts[level] += 1
+        self._observed_power[level] += power
