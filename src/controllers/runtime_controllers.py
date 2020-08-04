@@ -1,8 +1,9 @@
 import numpy as np
 from scipy import integrate
 from typing import Tuple, Union, List, Dict
-from controllers.controller_utils import clip
 
+from controllers.controller_utils import clip
+from controllers.power_utils import get_avg_power
 from utils.constants import SMALL_NUMBER
 
 
@@ -105,18 +106,23 @@ class BudgetDistribution:
                  budget: float,
                  max_time: int,
                  num_levels: int,
+                 seq_length: int,
                  num_classes: int,
-                 panic_frac: float,
-                 power: np.ndarray):
+                 panic_frac: float):
         self._prior_counts = prior_counts  # key: class index, value: array [L] counts for each level
         self._max_time = max_time
         self._budget = budget
         self._num_levels = num_levels
         self._num_classes = num_classes
         self._panic_time = int(panic_frac * max_time)
-        self._prior_power = np.copy(power)  # [L] array of power readings
-        self._level_counts = np.zeros_like(self._prior_power)
-        self._observed_power = np.zeros_like(self._prior_power)
+        self._level_counts = np.zeros(shape=(num_levels, ))
+        self._observed_power = np.zeros(shape=(num_levels, ))
+        self._seq_length = seq_length
+        self._power_multiplier = int(seq_length / num_levels)
+
+        # Estimate the power prior based on profiling
+        self._prior_power = [get_avg_power(num_samples=level + 1, seq_length=seq_length, multiplier=self._power_multiplier) for level in range(num_levels)]
+        self._prior_power = np.array(self._prior_power)
 
         # Estimated count of each label over the time window
         self._estimated_label_counts = np.zeros(shape=(num_classes, ))

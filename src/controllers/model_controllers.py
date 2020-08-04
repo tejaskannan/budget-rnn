@@ -11,13 +11,13 @@ from utils.np_utils import index_of, round_to_precision
 from utils.constants import OUTPUT, BIG_NUMBER, SMALL_NUMBER, INPUTS, SEQ_LENGTH, DROPOUT_KEEP_RATE, SEQ_LENGTH
 from utils.file_utils import save_pickle_gz, read_pickle_gz, extract_model_name
 from controllers.distribution_prior import DistributionPrior
-from controllers.power_utils import get_avg_power_multiple
+from controllers.power_utils import get_avg_power_multiple, get_avg_power
 from controllers.controller_utils import execute_adaptive_model
 
 
 VIOLATION_FACTOR = 1.0
 UNDERSHOOT_FACTOR = 1.0
-CONTROLLER_PATH = 'model-logistic-controller-{0}.pkl.gz'
+CONTROLLER_PATH = 'model-controller-{0}.pkl.gz'
 MARGIN = 1000
 MIN_INIT = 0.8
 MAX_INIT = 1.0
@@ -75,27 +75,15 @@ class BudgetOptimizer:
     def evaluate(self, network_predictions: np.ndarray, clf_predictions: np.ndarray) -> np.ndarray:
         raise NotImplementedError()
 
-    def get_approx_power(self, levels: np.ndarray) -> np.ndarray:
-        """
-        Approximates the power consumption given profiled power results.
-
-        Args:
-            levels: A [S, B] array of the levels for each sample (B) and budget (S)
-        Returns:
-            An [S] array containing the average power consumption for each budget thresholds.
-        """
-        level_counts = np.vstack([np.bincount(levels[i, :], minlength=self._num_levels) for i in range(self._num_budgets)])  # [S, L]
-        normalized_level_counts = level_counts / np.sum(level_counts, axis=-1, keepdims=True)  # [S, L]
-        approx_power = np.sum(normalized_level_counts * self._power, axis=-1).astype(float)  # [S]
-        return approx_power, normalized_level_counts
-
     def fitness_function(self, thresholds: np.ndarray, network_results: np.ndarray, clf_predictions: np.ndarray, batch_size: int, violation_factor: float, undershoot_factor: float):
         # Compute the number of levels to execute
         levels = levels_to_execute(logistic_probs=clf_predictions, thresholds=thresholds)  # [S, B]
 
         # Compute the approximate power
         power_multiplier = int(self._seq_length / self._num_levels)
-        approx_power = np.vstack([get_avg_power_multiple(levels[idx], self._seq_length, power_multiplier) for idx in range(self._num_budgets)])  # [S]
+        approx_power = np.vstack([get_avg_power_multiple(levels[idx] + 1, self._seq_length, power_multiplier) for idx in range(self._num_budgets)])  # [S, 1]
+        approx_power = np.squeeze(approx_power, axis=-1)  # [S]
+
         dual_term = approx_power - self._budgets  # [S]
         dual_penalty = np.where(dual_term > 0, violation_factor, undershoot_factor) * np.square(dual_term)
 
@@ -125,21 +113,22 @@ class BudgetOptimizer:
                                          clf_predictions=clf_predictions,
                                          init_thresholds=init_thresholds)
 
-            # Compute the fitness
+            # Compute the fitness, [S]
             fitness, _ = self.fitness_function(thresholds=thresholds,
                                                network_results=network_results,
                                                clf_predictions=valid_clf_predictions,
                                                batch_size=valid_clf_predictions.shape[1],
                                                violation_factor=VIOLATION_FACTOR,
                                                undershoot_factor=UNDERSHOOT_FACTOR)
-            fitness = np.expand_dims(fitness, axis=1)
+            fitness = np.expand_dims(fitness, axis=-1)  # [S, 1]
 
+            # Set the thresholds using the best seen fitness so far
             best_thresholds = np.where(fitness < best_fitness, thresholds, best_thresholds)
             best_fitness = np.where(fitness < best_fitness, fitness, best_fitness)
             print('Completed Trial {0}. Best Fitness: {1}'.format(t, best_fitness))
 
-        levels = levels_to_execute(logistic_probs=clf_predictions, thresholds=thresholds)
-        level_counts = np.vstack([np.bincount(levels[i, :], minlength=self._num_levels) for i in range(self._num_budgets)])  # [S, L]
+        levels = levels_to_execute(logistic_probs=clf_predictions, thresholds=best_thresholds)
+        level_counts = np.vstack([np.bincount(levels[i], minlength=self._num_levels) for i in range(self._num_budgets)])  # [S, L]
         avg_level_counts = level_counts / np.sum(level_counts, axis=-1, keepdims=True)
 
         self._thresholds = best_thresholds
@@ -314,14 +303,25 @@ class Controller:
         self._thresholds, self._avg_level_counts = self._budget_optimizer.fit(network_results=train_correct, clf_predictions=train_results.stop_probs)
     
         # Evaluate the model optimizer
-        print('======')
         train_acc = self._budget_optimizer.evaluate(network_results=train_correct, clf_predictions=train_results.stop_probs)
         test_acc = self._budget_optimizer.evaluate(network_results=test_correct, clf_predictions=test_results.stop_probs)
 
         print('Train Accuracy: {0}'.format(train_acc))
         print('Test Accuracy: {0}'.format(test_acc))
 
-        print('=====')
+        # Compute the avg power on the test set (for debugging purposes)
+        #test_levels = levels_to_execute(logistic_probs=test_results.stop_probs, thresholds=self._thresholds) + 1  # [S, B]
+        #power_mult = int(self._seq_length / self._num_levels)
+        #avg_test_power = np.array([get_avg_power_multiple(test_levels[i], self._seq_length, power_mult) for i in range(len(self._thresholds))])
+        #print('Testing Power: {0}'.format(avg_test_power))
+
+        #for i in range(len(self._thresholds)):
+        #    counts = np.bincount(test_levels[i], minlength=self._num_levels)  # [L]
+        #    print(counts.shape)
+
+
+        #level_counts = np.vstack([np.bincount(test_levels[i], minlength=self._num_levels) for i in range(len(self._thresholds))])
+        #print('Test Levels: {0}'.format(level_counts / np.sum(level_counts)))
 
         self._is_fitted = True
 
@@ -329,7 +329,7 @@ class Controller:
         budget_idx = index_of(self._budgets, value=budget)
 
         min_power = get_avg_power(num_samples=1, seq_length=self._seq_length, multiplier=int(self._seq_length / self._num_levels))
-        max_power = get_avg_power(num_samples=self._seq_length, seq_lengt=self._seq_length)
+        max_power = get_avg_power(num_samples=self._seq_length, seq_length=self._seq_length)
 
         # If we already have the budget, then use the corresponding thresholds
         if budget_idx >= 0:
@@ -405,25 +405,27 @@ class Controller:
 
         # Infer the thresholds for this budget
         thresholds = self.get_thresholds(budget)
+        
+        power_mult = int(self._seq_length / self._num_levels)
 
-        # model_result = self._model.execute(ops=stop_output_ops, feed_dict=feed_dict)
         for level, stop_prob in enumerate(stop_probs):
             if thresholds[level] < stop_prob:
-                return level, self._power[level]
+                power = get_avg_power(level + 1, self._seq_length, power_mult)
+                return level, power
 
         # By default, we return the top level
-        return self._num_levels - 1, self._power[-1]
+        return self._num_levels - 1, get_avg_power(self._seq_length, self._seq_length)
 
     def predict_levels(self, series: DataSeries, budget: float) -> Tuple[np.ndarray, np.ndarray]:
         assert self._is_fitted, 'Model is not fitted'
 
         thresholds = self.get_thresholds(budget)
 
-        results = evaluate_adaptive_model(self._model, self._dataset, series=series)
+        results = execute_adaptive_model(self._model, self._dataset, series=series)
 
-        levels = levels_to_execute(logistic_probs=results.stop_outputs, thresholds=np.expand_dims(thresholds, axis=0))
+        levels = levels_to_execute(logistic_probs=results.stop_probs, thresholds=np.expand_dims(thresholds, axis=0))
 
-        batch_idx = np.arange(level_predictions.shape[0])
+        batch_idx = np.arange(results.predictions.shape[0])
         predictions = predictions_for_levels(model_predictions=results.predictions,
                                              levels=levels,
                                              batch_idx=batch_idx)
@@ -519,7 +521,7 @@ class RandomController(Controller):
     def fit(self, series: DataSeries):
         # Fit a weighted average for each budget
         thresholds: List[np.ndarray] = []
-        power_array = np.array([get_avg_power(i, self._seq_length, self._power_multiplier) for i in range(self._num_levels)])
+        power_array = np.array([get_avg_power(i+1, self._seq_length, self._power_multiplier) for i in range(self._num_levels)])
 
         for budget in self._budgets:
             distribution = DistributionPrior(power_array, target=budget)
@@ -546,13 +548,13 @@ class RandomController(Controller):
         thresholds = self._threshold_dict[budget]
         levels = np.arange(thresholds.shape[0])  # [L]
         chosen_level = self._rand.choice(levels, p=thresholds)
-        return chosen_level, get_avg_power(chosen_level, seq_length=self._seq_length)
+        return chosen_level, get_avg_power(chosen_level + 1, seq_length=self._seq_length, multiplier=self._power_multiplier)
 
 
 class SkipRNNController(Controller):
 
     def __init__(self, sample_counts: List[np.ndarray], seq_length: int):
-        self._model_power = np.array([get_avg_power_multiple(counts, seq_length) for counts in sample_counts])
+        self._model_power = np.array([get_avg_power_multiple(counts.astype(int), seq_length) for counts in sample_counts])
 
     def fit(self, series: DataSeries):
         pass
@@ -616,13 +618,15 @@ class BudgetWrapper:
             self._power_results.append(0)
         else:
             # If not acting randomly, we use the neural network to perform the classification.
-            level, pwr = self._controller.predict_sample(stop_probs=stop_probs, budget=budget)
+            level, power = self._controller.predict_sample(stop_probs=stop_probs, budget=budget)
             pred = self._model_predictions[current_time, level]
 
             # Add to power results. If no power is given, we default to using the known
             # power estimates. This gives the controllers a chance to override the power readings.
-            pwr = pwr if pwr is not None else get_avg_power(level, seq_length=self._seq_length, multiplier=int(self._seq_length / self._num_levvels))
-            self._power_results.append(pwr + noise)
+            if power is None:
+                power = get_avg_power(level + 1, seq_length=self._seq_length, multiplier=int(self._seq_length / self._num_levels))
+
+            self._power_results.append(power + noise)
 
         return pred, level
 

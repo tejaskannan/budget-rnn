@@ -9,7 +9,7 @@ from scipy import integrate
 from typing import Tuple, List, Union, Optional, Dict
 
 from controllers.runtime_system import RuntimeSystem
-from controllers.controller_utils import interpolate_power, get_power_for_levels, POWER, execute_adaptive_model, execute_standard_model
+from controllers.controller_utils import execute_adaptive_model, execute_standard_model
 from controllers.controller_utils import save_test_log, execute_skip_rnn_model, ModelResults
 from models.base_model import Model
 from models.model_factory import get_model
@@ -171,7 +171,7 @@ if __name__ == '__main__':
     parser.add_argument('--budgets', type=float, nargs='+')
     parser.add_argument('--output-folder', type=str)
     parser.add_argument('--noise-loc', type=float, default=0.0)
-    parser.add_argument('--noise-scale', type=float, default=1.0)
+    parser.add_argument('--noise-scale', type=float, default=0.01)
     parser.add_argument('--shuffle', action='store_true')
     parser.add_argument('--skip-plotting', action='store_true')
     args = parser.parse_args()
@@ -183,18 +183,14 @@ if __name__ == '__main__':
 
     dataset_folder = args.dataset_folder
 
-    # TODO: Add in the Skip RNN baseline models (make this optional for now)
-    # This system should use multiple models, compute the power profile, and then select
-    # which model to use based on the current budget. I think the fairest way is to
-    # select the power level which is closest and then random guess if needed. This strategy
-    # eliminates any power `inefficiency'
-
     # Make systems based on adaptive models
     runtime_systems: List[RuntimeSystem] = []
     for adaptive_model_path in args.adaptive_model_paths:
         model, dataset = get_serialized_info(adaptive_model_path, dataset_folder=dataset_folder)
+
         num_levels = model.num_outputs
-        power_estimates = get_power_for_levels(POWER, num_levels=num_levels)
+        seq_length = model.metadata[SEQ_LENGTH]
+        num_classes = model.metadata[NUM_CLASSES]
 
         model_results = execute_adaptive_model(model, dataset, series=DataSeries.TEST)
 
@@ -202,18 +198,18 @@ if __name__ == '__main__':
                                         system_type='adaptive',
                                         model_path=adaptive_model_path,
                                         dataset_folder=dataset_folder,
-                                        power_estimates=power_estimates,
+                                        seq_length=seq_length,
                                         num_levels=num_levels,
-                                        num_classes=model.metadata[NUM_CLASSES])
+                                        num_classes=num_classes)
         runtime_systems.append(adaptive_system)
 
         randomized_system = RuntimeSystem(model_results=model_results,
                                           system_type='randomized',
                                           model_path=adaptive_model_path,
                                           dataset_folder=dataset_folder,
-                                          power_estimates=power_estimates,
+                                          seq_length=seq_length,
                                           num_levels=num_levels,
-                                          num_classes=model.metadata[NUM_CLASSES])
+                                          num_classes=num_classes)
         runtime_systems.append(randomized_system)
 
     # Make the baseline systems
@@ -223,15 +219,13 @@ if __name__ == '__main__':
     model_results = execute_standard_model(model, dataset, series=DataSeries.TEST)
 
     seq_length = model.metadata[SEQ_LENGTH]
-    power_estimates = get_power_for_levels(POWER, num_levels=num_levels)
-    power_estimates = interpolate_power(power_estimates, seq_length)
     num_classes = model.metadata[NUM_CLASSES]
 
     greedy_system = RuntimeSystem(model_results=model_results,
                                   system_type='greedy',
                                   model_path=baseline_model_path,
                                   dataset_folder=dataset_folder,
-                                  power_estimates=power_estimates,
+                                  seq_length=seq_length,
                                   num_levels=seq_length,
                                   num_classes=num_classes)
     runtime_systems.append(greedy_system)
@@ -240,7 +234,7 @@ if __name__ == '__main__':
                                  system_type='fixed',
                                  model_path=baseline_model_path,
                                  dataset_folder=dataset_folder,
-                                 power_estimates=power_estimates,
+                                 seq_length=seq_length,
                                  num_levels=seq_length,
                                  num_classes=num_classes)
     runtime_systems.append(fixed_system)
@@ -266,9 +260,9 @@ if __name__ == '__main__':
         skip_rnn_results = ModelResults(predictions=predictions, labels=labels, stop_probs=stop_probs, accuracy=accuracy)
         skip_rnn_system = RuntimeSystem(model_results=skip_rnn_results,
                                         system_type='skip_rnn',
-                                        model_path=model_paths[0],
+                                        model_path=model_paths[0],   # Design decision: Pick the first model path to save results under
                                         dataset_folder=dataset_folder,
-                                        power_estimates=power_estimates,
+                                        seq_length=seq_length,
                                         num_levels=len(model_results),
                                         num_classes=num_classes)
         runtime_systems.append(skip_rnn_system)

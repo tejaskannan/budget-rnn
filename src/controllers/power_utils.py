@@ -14,9 +14,10 @@ def get_energy(num_samples: int, seq_length: int) -> float:
     return VCC * sample_time * (current_on + current_off)
 
 
-def get_avg_power(num_samples: int, seq_length: int) -> float:
+def get_avg_power(num_samples: int, seq_length: int, multiplier: int = 1) -> float:
+    assert num_samples > 0, 'Must have a positive number of samples'
     sample_time = 1.0 / FREQ
-    return get_energy(num_samples, seq_length) / (sample_time * seq_length)
+    return get_energy(num_samples * multiplier, seq_length) / (sample_time * seq_length)
 
 
 def get_avg_power_multiple(num_samples: np.ndarray, seq_length: int, multiplier: int = 1) -> float:
@@ -26,10 +27,18 @@ def get_avg_power_multiple(num_samples: np.ndarray, seq_length: int, multiplier:
     Args:
         num_samples: An [B] array of the number of samples for each element
         seq_length: The total sequence length
+        multiplier: A factor to multiply the number of sample by. This argument is helpful when
+            then number of samples refer to a group of samples (i.e. subsample fraction).
     Returns:
         The weighted average power.
     """
-    assert multiplier >= 1.0, 'Multiplier must be >= 1'
+    assert multiplier >= 1, 'Multiplier must be >= 1'
+    
+    min_num_samples = np.min(num_samples)
+    assert min_num_samples > 0, 'Cannot have zero samples'
+
+    max_num_samples = np.max(num_samples) * multiplier
+    assert max_num_samples <= seq_length, 'Can have at most {0} samples'.format(seq_length)
 
     sample_counts = np.bincount(num_samples * multiplier, minlength=seq_length + 1)  # [T]
     sample_weights = sample_counts.astype(float) / np.sum(sample_counts)
