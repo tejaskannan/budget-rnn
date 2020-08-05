@@ -546,7 +546,6 @@ class SkipRNNController(Controller):
             model_power.append(power)
 
         self._model_power = np.array(model_power)
-        print(self._model_power)
 
     def fit(self, series: DataSeries):
         pass
@@ -562,7 +561,9 @@ class SkipRNNController(Controller):
             The number of levels to execute.
         """
         budget_diff = np.abs(self._model_power - budget)
-        model_idx = np.argmin(budget_diff)
+        greater_mask = (self._model_power > budget).astype(float) * BIG_NUMBER
+
+        model_idx = np.argmin(budget_diff + greater_mask)
 
         return model_idx, self._model_power[model_idx]
 
