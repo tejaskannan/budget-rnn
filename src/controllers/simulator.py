@@ -265,7 +265,7 @@ if __name__ == '__main__':
         model_paths: List[str] = []
         for model_path in iterate_files(skip_rnn_folder, pattern='model-SKIP_RNN-.*model_best\.pkl\.gz'):
             model, dataset = get_serialized_info(model_path, dataset_folder=dataset_folder)
-           
+
             valid_result = execute_skip_rnn_model(model, dataset, series=DataSeries.VALID)
             test_result = execute_skip_rnn_model(model, dataset, series=DataSeries.TEST)
 
@@ -280,13 +280,13 @@ if __name__ == '__main__':
         valid_stop_probs = [r.stop_probs for r in valid_results]
         valid_accuracy = [r.accuracy for r in valid_results]
         valid_skip_results = ModelResults(predictions=valid_predictions, labels=valid_labels, stop_probs=valid_stop_probs, accuracy=valid_accuracy)
-        
+
         test_predictions = np.concatenate([r.predictions for r in test_results], axis=1)  # [N, L]
         test_labels = test_results[0].labels  # [N, 1]
         test_stop_probs = [r.stop_probs for r in test_results]
         test_accuracy = [r.accuracy for r in test_results]
         test_skip_results = ModelResults(predictions=test_predictions, labels=test_labels, stop_probs=test_stop_probs, accuracy=test_accuracy)
-        
+
         skip_rnn_system = RuntimeSystem(test_results=test_skip_results,
                                         valid_results=valid_skip_results,
                                         system_type=SystemType.SKIP_RNN,
@@ -304,13 +304,10 @@ if __name__ == '__main__':
     for budget in sorted(budgets):
         print('Starting budget: {0}'.format(budget))
 
-        start = time.time()
-        result = run_simulation(runtime_systems=runtime_systems, 
+        result = run_simulation(runtime_systems=runtime_systems,
                                 noise=(args.noise_loc, args.noise_scale),
                                 max_time=max_time,
                                 budget=budget)
-        end = time.time()
-        print('Time to Run Simulation: {0}'.format(end - start))
 
         plot_and_save(sim_results=result,
                       runtime_systems=runtime_systems,
