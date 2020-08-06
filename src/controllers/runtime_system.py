@@ -5,7 +5,7 @@ from enum import Enum, auto
 from typing import List, Dict, Any
 
 from controllers.controller_utils import clip, get_budget_index, ModelResults
-from controllers.model_controllers import Controller, FixedController, RandomController, BudgetWrapper, CONTROLLER_PATH
+from controllers.model_controllers import Controller, FixedController, RandomController, BudgetWrapper, CONTROLLER_PATH, levels_to_execute, predictions_for_levels
 from controllers.model_controllers import SkipRNNController
 from controllers.runtime_controllers import PIDController, BudgetController, BudgetDistribution
 from dataset.dataset import DataSeries, Dataset
@@ -35,18 +35,41 @@ class SystemType(Enum):
     SKIP_RNN = auto()
 
 
-def estimate_label_counts(controller: Controller, budget: float, num_levels: int, num_classes: int) -> Dict[int, np.ndarray]:
+def estimate_label_counts(predictions: np.ndarray, stop_probs: np.ndarray, thresholds: np.ndarray, num_classes: int) -> Dict[int, np.ndarray]:
+    """
+    Counts the number of levels for each class predicted by the adaptive model. This count is based on the validation set
+    and used as an estimate for the behavior on the testing set.
+
+    Args:
+        predictions: A [N, L] array of predictions for each sample (N) and level (L) of the model
+        stop_probs: A [N, L] array of stop probabilities for each sample (N) and level (L) of the model
+        thresholds: A [L] array of thresholds for the current budget. These are derived from the controller.
+        num_classes: The number of classes.
+    Returns:
+        A dictionary mapping the class index to an [L] array of inference counts per level
+    """
+    # Compute the number of levels to execute using the thresholds and stop probabilities
+    levels = levels_to_execute(np.expand_dims(stop_probs, axis=0), np.expand_dims(thresholds, axis=0))  # [1, N]
+
+    batch_idx = np.arange(start=0, stop=predictions.shape[0])
+    pred = predictions_for_levels(predictions, levels, batch_idx)  # [1, N]
+    
+    # Reshape arrays to size [N]
+    pred = pred[0]
+    levels = levels[0]
+
     # TODO: This operation is expensive because it executes the model on the validation set. Instead, we should give the validation stop outputs
     # and use the controller on the already_computed results. This requires executing the adaptive models on the validation set AND the testing set
     # before starting any simulations.
-    levels, predictions = controller.predict_levels(series=DataSeries.VALID, budget=budget)
-    batch_size = predictions.shape[0]
+    # levels, predictions = controller.predict_levels(series=DataSeries.VALID, budget=budget)
+    # batch_size = predictions.shape[0]
 
     result: Dict[int, np.ndarray] = dict()
 
-    # Estimate power for each class
+    # Collect the counts for each class
+    num_levels = predictions.shape[1]
     for class_idx in range(num_classes):
-        class_mask = (predictions == class_idx).astype(int)
+        class_mask = (pred == class_idx).astype(int)
 
         class_level_counts = np.bincount(levels, minlength=num_levels, weights=class_mask)
         result[class_idx] = class_level_counts
@@ -56,9 +79,18 @@ def estimate_label_counts(controller: Controller, budget: float, num_levels: int
 
 class RuntimeSystem:
 
-    def __init__(self, model_results: ModelResults, system_type: str, model_path: str, dataset_folder: str, num_classes: int, num_levels: int, seq_length: int):
-        self._system_type = SystemType[system_type.upper()]
-        self._model_results = model_results
+    def __init__(self,
+                 valid_results: ModelResults,
+                 test_results: ModelResults,
+                 system_type: SystemType,
+                 model_path: str,
+                 dataset_folder: str,
+                 num_classes: int,
+                 num_levels: int,
+                 seq_length: int):
+        self._system_type = system_type
+        self._test_results = test_results
+        self._valid_results = valid_results
 
         self._model_path = model_path
         self._dataset_folder = dataset_folder
@@ -73,23 +105,31 @@ class RuntimeSystem:
         self._model_name = model_name
         self._save_folder = save_folder
             
-        # If the system is adaptive, we can load the controller now. Otherwise, we wait until later
+        # Results from the testing set. These are precomputed for efficiency.
+        self._level_predictions = test_results.predictions
+        self._stop_probs = test_results.stop_probs
+        self._labels = test_results.labels
+
+        # Results from the validation set. These are used by a few controllers
+        # to select the model or model level
+        self._valid_accuracy = valid_results.accuracy  # [L]
+        self._valid_predictions = valid_results.predictions  # [N, L]
+        self._valid_stop_probs = valid_results.stop_probs  # [N, L]
+
+        self._budget_controller = None
+
+        self._name = '{0} {1}'.format(model_name.split('-')[0], system_type.name)
+        self._seed = hash(self._name) % 1000
+
+        # For some systems, we can load the controller now. Otherwise, we wait until later
         if self._system_type == SystemType.ADAPTIVE:
             self._controller = Controller.load(os.path.join(save_folder, CONTROLLER_PATH.format(model_name)), dataset_folder=dataset_folder)
         elif self._system_type == SystemType.SKIP_RNN:
-            self._controller = SkipRNNController(sample_counts=model_results.stop_probs,
+            self._controller = SkipRNNController(sample_counts=valid_results.stop_probs,
+                                                 model_accuracy=valid_results.accuracy,
                                                  seq_length=seq_length)
         else:
             self._controller = None
-
-        self._level_predictions = model_results.predictions
-        self._stop_probs = model_results.stop_probs
-        self._level_accuracy = model_results.accuracy
-        self._labels = model_results.labels
-        self._budget_controller = None
-
-        self._name = '{0} {1}'.format(model_name.split('-')[0], system_type.upper())
-        self._seed = hash(self._name) % 1000
 
     @property
     def name(self) -> str:
@@ -125,10 +165,10 @@ class RuntimeSystem:
             self._controller = RandomController(budgets=[budget], seq_length=self._seq_length, num_levels=self._num_levels)
             self._controller.fit(series=None)
         elif self._system_type == SystemType.GREEDY:
-            level = np.argmax(self._level_accuracy)
+            level = np.argmax(self._valid_accuracy)
             self._controller = FixedController(model_index=level)
         elif self._system_type == SystemType.FIXED:
-            level = get_budget_index(budget=budget, level_accuracy=self._level_accuracy)
+            level = get_budget_index(budget=budget, level_accuracy=self._valid_accuracy)
             self._controller = FixedController(model_index=level)
         elif self._system_type == SystemType.ADAPTIVE:
             # Make the budget distribution and PID controller
@@ -138,7 +178,11 @@ class RuntimeSystem:
                                                     integral_bounds=INTEGRAL_BOUNDS,
                                                     integral_window=INTEGRAL_WINDOW)
             # Create the power distribution
-            prior_counts = estimate_label_counts(self._controller, budget, self._num_levels, self._num_classes)
+            thresholds = self._controller.get_thresholds(budget=budget)
+            prior_counts = estimate_label_counts(predictions=self._valid_predictions,
+                                                 stop_probs=self._valid_stop_probs,
+                                                 thresholds=thresholds,
+                                                 num_classes=self._num_classes)
             self._budget_distribution = BudgetDistribution(prior_counts=prior_counts,
                                                            budget=budget,
                                                            max_time=max_time,
