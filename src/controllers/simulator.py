@@ -2,13 +2,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 import os.path
-import time
 from argparse import ArgumentParser
 from collections import defaultdict, namedtuple
 from scipy import integrate
 from typing import Tuple, List, Union, Optional, Dict
 
-from controllers.runtime_system import RuntimeSystem
+from controllers.runtime_system import RuntimeSystem, SystemType
 from controllers.controller_utils import execute_adaptive_model, execute_standard_model
 from controllers.controller_utils import save_test_log, execute_skip_rnn_model, ModelResults
 from models.base_model import Model
@@ -66,23 +65,16 @@ def run_simulation(runtime_systems: List[RuntimeSystem], budget: float, noise: T
 
     # Initialize the systems for this budget
     for system in runtime_systems:
-        start = time.time()
         system.init_for_budget(budget=budget, max_time=max_time)
-        end = time.time()
-        print('Time to init {0}: {1}'.format(system.name, end - start))
 
     # Set random state for reproducible results and generate noise terms
     rand = np.random.RandomState(seed=42)
     power_noise = rand.normal(loc=noise[0], scale=noise[1], size=(max_time, ))
 
     # Sequentially execute each system
-    start = time.time()
     for t in range(max_time):
         for system in runtime_systems:
             system.step(budget=budget, power_noise=power_noise[t], time=t)
-
-    end = time.time()
-    print('Time to run all steps: {0}'.format(end - start))
 
     # Create the final result
     times = np.arange(max_time) + 1
@@ -99,11 +91,15 @@ def run_simulation(runtime_systems: List[RuntimeSystem], budget: float, noise: T
 
 def plot_and_save(sim_results: Dict[str, SimulationResult],
                   runtime_systems: List[RuntimeSystem],
-                  output_folder: Optional[str],
+                  output_folder: str,
                   budget: int,
                   max_time: int,
                   noise_loc: float,
-                  should_plot: bool):
+                  should_plot: bool,
+                  save_plots: bool):
+    # Make the output folder if necessary
+    make_dir(output_folder)
+
     # Log the test results for each adaptive system
     system_dict = {system.name: system for system in runtime_systems}
     for system_name in sim_results.keys():
@@ -111,7 +107,7 @@ def plot_and_save(sim_results: Dict[str, SimulationResult],
         sim_result = sim_results[system_name]
 
         log_file_name = LOG_FILE_FMT.format(system.system_type.name.lower(), system.model_name)
-        log_path = os.path.join(system.save_folder, log_file_name)
+        log_path = os.path.join(output_folder, log_file_name)
         save_test_log(sim_result.accuracy[-1], sim_result.power[-1], budget, noise_loc, log_path)
 
         print('{0} Accuracy: {1:.5f}, {0} Power: {2:.5f}'.format(system.system_type.name.capitalize(), sim_result.accuracy[-1], sim_result.power[-1]))
@@ -153,8 +149,7 @@ def plot_and_save(sim_results: Dict[str, SimulationResult],
 
         plt.tight_layout()
 
-        if output_folder is not None:
-            make_dir(output_folder)
+        if save_plots:
             output_file = os.path.join(output_folder, 'results_{0}.pdf'.format(budget))
             plt.savefig(output_file)
         else:
@@ -170,11 +165,11 @@ if __name__ == '__main__':
     parser.add_argument('--budget-start', type=float, required=True)
     parser.add_argument('--budget-end', type=float, required=True)
     parser.add_argument('--budget-step', type=float, required=True)
-    parser.add_argument('--output-folder', type=str)
+    parser.add_argument('--output-folder', type=str, required=True)
     parser.add_argument('--noise-loc', type=float, default=0.0)
     parser.add_argument('--noise-scale', type=float, default=0.01)
-    parser.add_argument('--shuffle', action='store_true')
     parser.add_argument('--skip-plotting', action='store_true')
+    parser.add_argument('--save-plots', action='store_true')
     args = parser.parse_args()
 
     # Validate arguments
@@ -197,10 +192,14 @@ if __name__ == '__main__':
         seq_length = model.metadata[SEQ_LENGTH]
         num_classes = model.metadata[NUM_CLASSES]
 
-        model_results = execute_adaptive_model(model, dataset, series=DataSeries.TEST)
+        valid_results = execute_adaptive_model(model, dataset, series=DataSeries.VALID)
+        test_results = execute_adaptive_model(model, dataset, series=DataSeries.TEST)
 
-        adaptive_system = RuntimeSystem(model_results=model_results,
-                                        system_type='adaptive',
+        print(valid_results.accuracy)
+
+        adaptive_system = RuntimeSystem(valid_results=valid_results,
+                                        test_results=test_results,
+                                        system_type=SystemType.ADAPTIVE,
                                         model_path=adaptive_model_path,
                                         dataset_folder=dataset_folder,
                                         seq_length=seq_length,
@@ -208,8 +207,19 @@ if __name__ == '__main__':
                                         num_classes=num_classes)
         runtime_systems.append(adaptive_system)
 
-        randomized_system = RuntimeSystem(model_results=model_results,
-                                          system_type='randomized',
+        fixed_adaptive_system = RuntimeSystem(valid_results=valid_results,
+                                              test_results=test_results,
+                                              system_type=SystemType.FIXED,
+                                              model_path=adaptive_model_path,
+                                              dataset_folder=dataset_folder,
+                                              seq_length=seq_length,
+                                              num_levels=num_levels,
+                                              num_classes=num_classes)
+        runtime_systems.append(fixed_adaptive_system)
+
+        randomized_system = RuntimeSystem(valid_results=valid_results,
+                                          test_results=test_results,
+                                          system_type=SystemType.RANDOMIZED,
                                           model_path=adaptive_model_path,
                                           dataset_folder=dataset_folder,
                                           seq_length=seq_length,
@@ -221,13 +231,15 @@ if __name__ == '__main__':
     baseline_model_path = args.baseline_model_path
     model, dataset = get_serialized_info(baseline_model_path, dataset_folder=dataset_folder)
 
-    model_results = execute_standard_model(model, dataset, series=DataSeries.TEST)
+    valid_results = execute_standard_model(model, dataset, series=DataSeries.VALID)
+    test_results = execute_standard_model(model, dataset, series=DataSeries.TEST)
 
     seq_length = model.metadata[SEQ_LENGTH]
     num_classes = model.metadata[NUM_CLASSES]
 
-    greedy_system = RuntimeSystem(model_results=model_results,
-                                  system_type='greedy',
+    greedy_system = RuntimeSystem(test_results=test_results,
+                                  valid_results=valid_results,
+                                  system_type=SystemType.GREEDY,
                                   model_path=baseline_model_path,
                                   dataset_folder=dataset_folder,
                                   seq_length=seq_length,
@@ -235,8 +247,9 @@ if __name__ == '__main__':
                                   num_classes=num_classes)
     runtime_systems.append(greedy_system)
 
-    fixed_system = RuntimeSystem(model_results=model_results,
-                                 system_type='fixed',
+    fixed_system = RuntimeSystem(test_results=test_results,
+                                 valid_results=valid_results,
+                                 system_type=SystemType.FIXED,
                                  model_path=baseline_model_path,
                                  dataset_folder=dataset_folder,
                                  seq_length=seq_length,
@@ -247,28 +260,40 @@ if __name__ == '__main__':
     # Add the Skip RNN models if provided
     skip_rnn_folder = args.skip_model_folder
     if skip_rnn_folder is not None:
-        model_results: List[ModelResults] = []
+        valid_results: List[ModelResults] = []
+        test_results: List[ModelResults] = []
         model_paths: List[str] = []
         for model_path in iterate_files(skip_rnn_folder, pattern='model-SKIP_RNN-.*model_best\.pkl\.gz'):
             model, dataset = get_serialized_info(model_path, dataset_folder=dataset_folder)
-            
-            model_result = execute_skip_rnn_model(model, dataset, series=DataSeries.TEST)
-            model_results.append(model_result)
+           
+            valid_result = execute_skip_rnn_model(model, dataset, series=DataSeries.VALID)
+            test_result = execute_skip_rnn_model(model, dataset, series=DataSeries.TEST)
+
+            valid_results.append(valid_result)
+            test_results.append(test_result)
+
             model_paths.append(model_path)
 
         # Concatenate the results from each model
-        predictions = np.concatenate([r.predictions for r in model_results], axis=1)  # [N, L]
-        labels = model_results[0].labels  # [N, 1]
-        stop_probs = [r.stop_probs for r in model_results]
-        accuracy = [r.accuracy for r in model_results]
-
-        skip_rnn_results = ModelResults(predictions=predictions, labels=labels, stop_probs=stop_probs, accuracy=accuracy)
-        skip_rnn_system = RuntimeSystem(model_results=skip_rnn_results,
-                                        system_type='skip_rnn',
-                                        model_path=model_paths[0],   # Design decision: Pick the first model path to save results under
+        valid_predictions = np.concatenate([r.predictions for r in valid_results], axis=1)  # [N, L]
+        valid_labels = valid_results[0].labels  # [N, 1]
+        valid_stop_probs = [r.stop_probs for r in valid_results]
+        valid_accuracy = [r.accuracy for r in valid_results]
+        valid_skip_results = ModelResults(predictions=valid_predictions, labels=valid_labels, stop_probs=valid_stop_probs, accuracy=valid_accuracy)
+        
+        test_predictions = np.concatenate([r.predictions for r in test_results], axis=1)  # [N, L]
+        test_labels = test_results[0].labels  # [N, 1]
+        test_stop_probs = [r.stop_probs for r in test_results]
+        test_accuracy = [r.accuracy for r in test_results]
+        test_skip_results = ModelResults(predictions=test_predictions, labels=test_labels, stop_probs=test_stop_probs, accuracy=test_accuracy)
+        
+        skip_rnn_system = RuntimeSystem(test_results=test_skip_results,
+                                        valid_results=valid_skip_results,
+                                        system_type=SystemType.SKIP_RNN,
+                                        model_path=model_paths[0],  # Design decision: Pick the first model path to save results under
                                         dataset_folder=dataset_folder,
                                         seq_length=seq_length,
-                                        num_levels=len(model_results),
+                                        num_levels=len(model_paths),
                                         num_classes=num_classes)
         runtime_systems.append(skip_rnn_system)
 
@@ -293,4 +318,5 @@ if __name__ == '__main__':
                       max_time=max_time,
                       noise_loc=args.noise_loc,
                       output_folder=args.output_folder,
-                      should_plot=not args.skip_plotting)
+                      should_plot=not args.skip_plotting,
+                      save_plots=args.save_plots)

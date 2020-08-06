@@ -107,9 +107,9 @@ def execute_adaptive_model(model: AdaptiveModel, dataset: Dataset, series: DataS
 
     # Save results as attributes
     level_predictions = np.concatenate(level_predictions, axis=0)
-    labels = np.concatenate(labels, axis=0)  # [N, L]
+    labels = np.concatenate(labels, axis=0)  # [N, 1]
     stop_probs = np.concatenate(stop_probs, axis=0)
-    level_accuracy = np.average((level_predictions == labels.astype).astype(float), axis=0)
+    level_accuracy = np.average((level_predictions == labels).astype(float), axis=0)
 
     return ModelResults(predictions=level_predictions, labels=labels, stop_probs=stop_probs, accuracy=level_accuracy)
 
@@ -148,7 +148,8 @@ def execute_standard_model(model: StandardModel, dataset: Dataset, series: DataS
 
     # Save results as attributes
     level_predictions = np.concatenate(level_predictions, axis=0)
-    labels = np.concatenate(labels, axis=0)  # [N, L]
+    labels = np.concatenate(labels, axis=0)  # [N, 1]
+
     level_accuracy = np.average((level_predictions == labels).astype(float), axis=0)
 
     return ModelResults(predictions=level_predictions, labels=labels, stop_probs=None, accuracy=level_accuracy)

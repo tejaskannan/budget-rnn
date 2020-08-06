@@ -10,7 +10,7 @@ from utils.rnn_utils import get_logits_name, get_states_name, AdaptiveModelType,
 from utils.np_utils import index_of, round_to_precision
 from utils.constants import OUTPUT, BIG_NUMBER, SMALL_NUMBER, INPUTS, SEQ_LENGTH, DROPOUT_KEEP_RATE, SEQ_LENGTH
 from utils.file_utils import save_pickle_gz, read_pickle_gz, extract_model_name
-from controllers.distribution_prior import DistributionPrior
+from controllers.power_distribution import PowerDistribution
 from controllers.power_utils import get_avg_power_multiple, get_avg_power, get_weighted_avg_power
 from controllers.controller_utils import execute_adaptive_model
 
@@ -510,10 +510,7 @@ class RandomController(Controller):
         power_array = np.array([get_avg_power(i+1, self._seq_length, self._power_multiplier) for i in range(self._num_levels)])
 
         for budget in self._budgets:
-            distribution = DistributionPrior(power_array, target=budget)
-            distribution.make()
-            distribution.init()
-            
+            distribution = PowerDistribution(power_array, target=budget)
             self._threshold_dict[budget] = distribution.fit()
 
         self._is_fitted = True
@@ -539,13 +536,14 @@ class RandomController(Controller):
 
 class SkipRNNController(Controller):
 
-    def __init__(self, sample_counts: List[np.ndarray], seq_length: int):
+    def __init__(self, sample_counts: List[np.ndarray], model_accuracy: List[float], seq_length: int):
         model_power: List[float] = []
         for counts in sample_counts:
             power = get_weighted_avg_power(counts, seq_length=seq_length)
             model_power.append(power)
 
-        self._model_power = np.array(model_power)
+        self._model_power = np.array(model_power).reshape(-1)
+        self._model_accuracy = np.array(model_accuracy).reshape(-1)
 
     def fit(self, series: DataSeries):
         pass
@@ -560,10 +558,13 @@ class SkipRNNController(Controller):
         Returns:
             The number of levels to execute.
         """
-        budget_diff = np.abs(self._model_power - budget)
-        greater_mask = (self._model_power > budget).astype(float) * BIG_NUMBER
+        # budget_diff = np.abs(self._model_power - budget)
+        # greater_mask = (self._model_power > budget).astype(float) * BIG_NUMBER
+        # model_idx = np.argmin(budget_diff + greater_mask)
 
-        model_idx = np.argmin(budget_diff + greater_mask)
+        # Select model with the greatest accuracy under the budget
+        greater_mask = (self._model_power <= budget).astype(float)
+        model_idx = np.argmax(greater_mask * self._model_accuracy)
 
         return model_idx, self._model_power[model_idx]
 

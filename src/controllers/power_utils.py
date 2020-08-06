@@ -53,3 +53,8 @@ def get_weighted_avg_power(sample_weights: np.ndarray, seq_length: int) -> float
         avg_power += sample_weights[idx] * sample_power
 
     return avg_power
+
+
+def print_all_power(seq_length: int):
+    for i in range(1, seq_length + 1):
+        print('{0}: {1:.4f}'.format(i, get_avg_power(i, seq_length)))
