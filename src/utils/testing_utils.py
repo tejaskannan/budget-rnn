@@ -11,11 +11,8 @@ class ClassificationMetric(Enum):
     ACCURACY = auto()
     PRECISION = auto()
     RECALL = auto()
-    LATENCY = auto()
     MICRO_F1_SCORE = auto()
     MACRO_F1_SCORE = auto()
-    LEVEL = auto()
-    FLOPS = auto()
 
 
 class RegressionMetric(Enum):
@@ -37,21 +34,15 @@ HIGH_SATURATION = 0.9
 LOW_SATURATION = 0.1
 
 
-def get_binary_classification_metric(metric_name: ClassificationMetric, model_output: np.ndarray, expected_output: np.ndarray, latency: float, level: int, flops: Union[int, float]) -> float:
+def get_binary_classification_metric(metric_name: ClassificationMetric, model_output: np.ndarray, expected_output: np.ndarray) -> float:
     if metric_name == ClassificationMetric.ACCURACY:
-        return float(np.average(np.equal(model_output, expected_output).astype(float)))
+        return float(np.average((model_output == expected_output).astype(float)))
     elif metric_name == ClassificationMetric.RECALL:
         return float(recall_score(expected_output, model_output, average='binary'))
     elif metric_name == ClassificationMetric.PRECISION:
         return float(precision_score(expected_output, model_output, average='binary'))
     elif metric_name in (ClassificationMetric.MICRO_F1_SCORE, ClassificationMetric.MACRO_F1_SCORE):
         return float(f1_score(expected_output, model_output, average='binary'))
-    elif metric_name == ClassificationMetric.LATENCY:
-        return float(latency)
-    elif metric_name == ClassificationMetric.LEVEL:
-        return float(level)
-    elif metric_name == ClassificationMetric.FLOPS:
-        return float(flops)
     else:
         raise ValueError(f'Unknown metric name {metric_name}')
 
@@ -59,12 +50,9 @@ def get_binary_classification_metric(metric_name: ClassificationMetric, model_ou
 def get_multi_classification_metric(metric_name: ClassificationMetric,
                                     model_output: np.ndarray,
                                     expected_output: np.ndarray,
-                                    latency: float,
-                                    level: int,
-                                    flops: Union[int, float],
                                     num_classes: int) -> float:
     if metric_name == ClassificationMetric.ACCURACY:
-        return float(np.average(np.equal(model_output, expected_output).astype(float)))
+        return float(np.average((model_output == expected_output).astype(float)))
     elif metric_name == ClassificationMetric.RECALL:
         return float(recall_score(expected_output, model_output, average='macro'))
     elif metric_name == ClassificationMetric.PRECISION:
@@ -73,12 +61,6 @@ def get_multi_classification_metric(metric_name: ClassificationMetric,
         return float(f1_score(expected_output, model_output, average='micro'))
     elif metric_name == ClassificationMetric.MACRO_F1_SCORE:
         return float(f1_score(expected_output, model_output, average='macro'))
-    elif metric_name == ClassificationMetric.LATENCY:
-        return float(latency)
-    elif metric_name == ClassificationMetric.LEVEL:
-        return float(level)
-    elif metric_name == ClassificationMetric.FLOPS:
-        return float(flops)
     else:
         raise ValueError(f'Unknown metric name {metric_name}')
 
