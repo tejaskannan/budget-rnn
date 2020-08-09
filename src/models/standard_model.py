@@ -8,7 +8,7 @@ from typing import Optional, Dict, List, Any, DefaultDict, Iterable
 from models.tf_model import TFModel
 from layers.rnn import dynamic_rnn
 from layers.cells.cells import make_rnn_cell
-from layers.cells.skip_rnn_cells import SkipUGRNNCell, SoftSkipUGRNNCell
+from layers.cells.skip_rnn_cells import SkipUGRNNCell, SoftSkipUGRNNCell, InputSkipUGRNNCell
 from layers.basic import mlp, pool_sequence, dense
 from layers.output_layers import OutputType, compute_binary_classification_output, compute_multi_classification_output
 from dataset.dataset import Dataset, DataSeries
@@ -40,7 +40,9 @@ class StandardModelType(Enum):
     RNN = auto()
     BIRNN = auto()
     SKIP_RNN = auto()
+    RANDOM_SKIP_RNN = auto()
     SOFT_SKIP_RNN = auto()
+    INPUT_SKIP_RNN = auto()
 
 
 class StandardModel(TFModel):
@@ -139,6 +141,8 @@ class StandardModel(TFModel):
                                   use_bias=True,
                                   name=EMBEDDING_LAYER_NAME)
 
+        self._ops['embedding'] = input_sequence
+
         # Apply the transformation layer. The output is a [B, T, D] tensor of transformed inputs for each model type.
         if self.model_type == StandardModelType.NBOW:
             # Apply the MLP transformation. Result is a [B, T, D] tensor
@@ -207,12 +211,42 @@ class StandardModel(TFModel):
                                                    dtype=tf.float32)
             # Apply RNN
             rnn_outputs, states = tf.nn.dynamic_rnn(cell=cell,
-                                                           inputs=input_sequence,
-                                                           dtype=tf.float32,
-                                                           scope=RNN_NAME)
+                                                    inputs=input_sequence,
+                                                    dtype=tf.float32,
+                                                    scope=RNN_NAME)
             transformed = rnn_outputs.output  # [B, T, D]
             self._ops[SKIP_GATES] = tf.squeeze(rnn_outputs.state_update_gate, axis=-1)  # [B, T]
             self._ops['transformed'] = transformed
+        elif self.model_type == StandardModelType.RANDOM_SKIP_RNN:
+            cell = RandomSkipUGRNNCell(units=state_size,
+                                       activation=self.hypers.model_params['rnn_activation'],
+                                       state_keep_prob=self.hypers.model_params['target_updates'] / self.metadata[SEQ_LENGTH],
+                                       name=TRANSFORM_LAYER_NAME)
+
+            initial_state = cell.get_initial_state(inputs=input_sequence,
+                                                   batch_size=batch_size,
+                                                   dtype=tf.float32)
+            # Apply RNN
+            rnn_outputs, states = tf.nn.dynamic_rnn(cell=cell,
+                                                    inputs=input_sequence,
+                                                    dtype=tf.float32,
+                                                    scope=RNN_NAME)
+            transformed = rnn_outputs
+        elif self.model_type == StandardModelType.INPUT_SKIP_RNN:
+            cell = InputSkipUGRNNCell(units=state_size,
+                                      activation=self.hypers.model_params['rnn_activation'],
+                                      name=TRANSFORM_LAYER_NAME)
+
+            initial_state = cell.get_initial_state(inputs=input_sequence,
+                                                   batch_size=batch_size,
+                                                   dtype=tf.float32)
+            # Apply RNN
+            rnn_outputs, states = tf.nn.dynamic_rnn(cell=cell,
+                                                    inputs=input_sequence,
+                                                    dtype=tf.float32,
+                                                    scope=RNN_NAME)
+            transformed = rnn_outputs.output
+            self._ops['input_weight'] = rnn_outputs.input_weight
 
         # Reshape the output to match the sequence length. The output is tiled along the sequence length
         # automatically via broadcasting rules.
@@ -362,21 +396,19 @@ class StandardModel(TFModel):
 
     def predict_classification(self, test_batch_generator: Iterable[Any],
                                batch_size: int,
-                               max_num_batches: Optional[int],
-                               flops_dict: Dict[str, int]) -> DefaultDict[str, Dict[str, Any]]:
+                               max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, Any]]:
         predictions_list: List[np.ndarray] = []
         labels_list: List[np.ndarray] = []
-        latencies: List[float] = []
         skip_gates_list: List[np.ndarray] = []  # Only used for Skip RNN models
 
         ops_to_run = [PREDICTION, SKIP_GATES]
 
         for batch_num, batch in enumerate(test_batch_generator):
-            feed_dict = self.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
+            if max_num_batches is not None and batch_num >= max_num_batches:
+                break
 
-            start = time.time()
+            feed_dict = self.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
             result = self.execute(ops=ops_to_run, feed_dict=feed_dict)
-            elapsed = time.time() - start
 
             prediction = result[PREDICTION]
             
@@ -385,13 +417,9 @@ class StandardModel(TFModel):
 
             labels_list.append(np.vstack(batch[OUTPUT]))
             predictions_list.append(np.vstack(prediction))
-            latencies.append(elapsed)
 
         predictions = np.vstack(predictions_list)  # [B, T] or [B] depending on the output type
         labels = np.squeeze(np.vstack(labels_list), axis=-1)  # [B]
-
-        avg_latency = np.average(latencies[1:])  # Skip first due to outliers in caching
-        flops = flops_dict[self.output_ops[0]]
 
         result: DefaultDict[str, Dict[str, float]] = defaultdict(dict)
 
@@ -400,9 +428,9 @@ class StandardModel(TFModel):
 
             for metric_name in ClassificationMetric:
                 if self.output_type == OutputType.BINARY_CLASSIFICATION:
-                    metric_value = get_binary_classification_metric(metric_name, predictions, labels, avg_latency, 1, flops)
+                    metric_value = get_binary_classification_metric(metric_name, predictions, labels)
                 else:
-                    metric_value = get_multi_classification_metric(metric_name, predictions, labels, avg_latency, 1, flops, self.metadata[NUM_CLASSES])
+                    metric_value = get_multi_classification_metric(metric_name, predictions, labels, self.metadata[NUM_CLASSES])
 
                 result[PREDICTION][metric_name.name] = metric_value
 
@@ -414,20 +442,16 @@ class StandardModel(TFModel):
 
                 result['AVG_UPDATES'] = float(np.average(num_updates))
                 result['STD_UPDATES'] = float(np.std(num_updates))
-
-            result[PREDICTION][ALL_LATENCY] = latencies[1:]
         else:
             for i in range(self.metadata[SEQ_LENGTH]):
                 level_name = '{0}_{1}'.format(PREDICTION, i)
 
                 for metric_name in ClassificationMetric:
                     if self.output_type == OutputType.BINARY_CLASSIFICATION:
-                        metric_value = get_binary_classification_metric(metric_name, predictions[:, i], labels, avg_latency, 1, flops)
+                        metric_value = get_binary_classification_metric(metric_name, predictions[:, i], labels)
                     else:
-                        metric_value = get_multi_classification_metric(metric_name, predictions[:, i], labels, avg_latency, 1, flops, self.metadata[NUM_CLASSES])
+                        metric_value = get_multi_classification_metric(metric_name, predictions[:, i], labels, self.metadata[NUM_CLASSES])
 
                     result[level_name][metric_name.name] = metric_value
-
-                result[level_name][ALL_LATENCY] = latencies[1:]
 
         return result

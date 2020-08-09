@@ -45,17 +45,6 @@ def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperPa
     # Create the dataset
     dataset = get_dataset(hypers.dataset_type, dataset_folder)
 
-    # Build model and compute flops
-    model = get_model(hypers, save_folder, is_train=False)
-    model.restore(name=model_name, is_train=False, is_frozen=True)
-    
-    flops_dict: Dict[str, int] = dict()
-    for level, output_op in enumerate(model.output_ops):
-        prev_level_flops = flops_dict[model.output_ops[level - 1]] if level > 0 else 0
-        flops_dict[output_op] = model.compute_flops(level) + prev_level_flops
-
-    print(flops_dict)
-
     # Build model and restore trainable parameters
     model = get_model(hypers, save_folder=save_folder, is_train=False)
     model.restore(name=model_name, is_train=False, is_frozen=False)
@@ -65,7 +54,6 @@ def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperPa
     test_results = model.predict(dataset=dataset,
                                  test_batch_size=batch_size,
                                  max_num_batches=max_num_batches,
-                                 flops_dict=flops_dict,
                                  series=series)
     # Close the dataset
     dataset.close()

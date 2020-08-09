@@ -171,16 +171,9 @@ class TFModel(Model):
         """
         pass
 
-    def compute_flops(self, level: int) -> int:
-        """
-        Computes the number of FLOPS required for the given output level.
-        """
-        pass
-
     def predict(self, dataset: Dataset,
                 test_batch_size: Optional[int],
                 max_num_batches: Optional[int],
-                flops_dict: Optional[Dict[str, int]],
                 series: DataSeries = DataSeries.TEST) -> DefaultDict[str, Dict[str, Any]]:
         """
         Execute the model to produce a prediction for the given input sample.
@@ -202,20 +195,18 @@ class TFModel(Model):
                                                            drop_incomplete_batches=True)
 
         if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
-            return self.predict_classification(test_batch_generator, test_batch_size, max_num_batches, flops_dict)
+            return self.predict_classification(test_batch_generator, test_batch_size, max_num_batches)
         else:  # Regression
-            return self.predict_regression(test_batch_generator, test_batch_size, max_num_batches, flops_dict)
+            return self.predict_regression(test_batch_generator, test_batch_size, max_num_batches)
 
     def predict_classification(self, test_batch_generator: Iterable[Any],
                                batch_size: int,
-                               max_num_batches: Optional[int],
-                               flops_dict: Optional[Dict[str, int]]) -> DefaultDict[str, Dict[str, float]]:
+                               max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, float]]:
         raise NotImplementedError()
 
     def predict_regression(self, test_batch_generator: Iterable[Any],
                            batch_size: int,
-                           max_num_batches: Optional[int],
-                           flops_dict: Optional[Dict[str, int]]) -> DefaultDict[str, Dict[str, float]]:
+                           max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, float]]:
         raise NotImplementedError()
 
     def batch_to_feed_dict(self, batch: Dict[str, np.ndarray], is_train: bool, epoch_num: int) -> Dict[tf.Tensor, np.ndarray]:
