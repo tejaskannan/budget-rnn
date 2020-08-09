@@ -102,7 +102,7 @@ def plot_and_save(sim_results: Dict[str, SimulationResult],
 
     # Log the test results for each adaptive system
     system_dict = {system.name: system for system in runtime_systems}
-    for system_name in sim_results.keys():
+    for system_name in sorted(sim_results.keys()):
         system = system_dict[system_name]
         sim_result = sim_results[system_name]
 
@@ -110,7 +110,7 @@ def plot_and_save(sim_results: Dict[str, SimulationResult],
         log_path = os.path.join(output_folder, log_file_name)
         save_test_log(sim_result.accuracy[-1], sim_result.power[-1], budget, noise_loc, log_path)
 
-        print('{0} Accuracy: {1:.5f}, {0} Power: {2:.5f}'.format(system.system_type.name.capitalize(), sim_result.accuracy[-1], sim_result.power[-1]))
+        print('{0} Accuracy: {1:.5f}, {0} Power: {2:.5f}'.format(system_name, sim_result.accuracy[-1], sim_result.power[-1]))
 
     if not should_plot:
         return
@@ -194,8 +194,6 @@ if __name__ == '__main__':
 
         valid_results = execute_adaptive_model(model, dataset, series=DataSeries.VALID)
         test_results = execute_adaptive_model(model, dataset, series=DataSeries.TEST)
-
-        print(valid_results.accuracy)
 
         adaptive_system = RuntimeSystem(valid_results=valid_results,
                                         test_results=test_results,
@@ -302,7 +300,7 @@ if __name__ == '__main__':
 
     # Run the simulation on each budget
     for budget in sorted(budgets):
-        print('Starting budget: {0}'.format(budget))
+        print('===== Starting budget: {0} ====='.format(budget))
 
         result = run_simulation(runtime_systems=runtime_systems,
                                 noise=(args.noise_loc, args.noise_scale),

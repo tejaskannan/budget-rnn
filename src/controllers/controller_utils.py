@@ -41,20 +41,52 @@ def save_test_log(accuracy: float, power: float, budget: float, noise_loc: float
     save_by_file_suffix([test_log], output_file)
 
 
-def get_budget_index(budget: int, level_accuracy: np.ndarray) -> int:
-    seq_length = level_accuracy.shape[0]
+def get_budget_index(budget: float, valid_accuracy: np.ndarray, max_time: int, power_estimates: np.ndarray) -> int:
+    """
+    Selects the single model level which should yield the best overall accuracy. This decision
+    is based on the validation accuracy for each level.
 
-    fixed_index = 0
+    Args:
+        budget: The current avg power budget
+        valid_accuracy: A [L] array containing the validation accuracy for each model level
+        max_time: The number of timesteps
+        power_estimates: A [L] array of power estimates for each level
+    Returns:
+        The "optimal" model level.
+    """
+    num_levels = valid_accuracy.shape[0]
+    energy_budget = budget * max_time
+
     best_index = 0
     best_acc = 0.0
-    while fixed_index < seq_length and get_avg_power(fixed_index + 1, seq_length) < budget:
-        if best_acc < level_accuracy[fixed_index]:
-            best_acc = level_accuracy[fixed_index]
-            best_index = fixed_index
 
-        fixed_index += 1
+    for level_idx in range(num_levels):
+        # Estimate the number of timesteps on which we can perform inference with this level
+        avg_power = power_estimates[level_idx]
+        projected_timesteps = min(energy_budget / avg_power, max_time)
+
+        projected_correct = valid_accuracy[level_idx] * projected_timesteps
+        estimated_accuracy = projected_correct / max_time
+
+        if estimated_accuracy > best_acc:
+            best_acc = estimated_accuracy
+            best_index = level_idx
 
     return best_index
+
+
+
+   # fixed_index = 0
+   # best_index = 0
+   # best_acc = 0.0
+   # while fixed_index < seq_length and get_avg_power(fixed_index + 1, seq_length) < budget:
+   #     if best_acc < level_accuracy[fixed_index]:
+   #         best_acc = level_accuracy[fixed_index]
+   #         best_index = fixed_index
+
+   #     fixed_index += 1
+
+   # return best_index
 
 
 def execute_adaptive_model(model: AdaptiveModel, dataset: Dataset, series: DataSeries) -> ModelResults:

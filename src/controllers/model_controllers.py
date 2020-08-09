@@ -12,7 +12,7 @@ from utils.constants import OUTPUT, BIG_NUMBER, SMALL_NUMBER, INPUTS, SEQ_LENGTH
 from utils.file_utils import save_pickle_gz, read_pickle_gz, extract_model_name
 from controllers.power_distribution import PowerDistribution
 from controllers.power_utils import get_avg_power_multiple, get_avg_power, get_weighted_avg_power
-from controllers.controller_utils import execute_adaptive_model
+from controllers.controller_utils import execute_adaptive_model, get_budget_index
 
 
 VIOLATION_FACTOR = 1.0
@@ -536,7 +536,7 @@ class RandomController(Controller):
 
 class SkipRNNController(Controller):
 
-    def __init__(self, sample_counts: List[np.ndarray], model_accuracy: List[float], seq_length: int):
+    def __init__(self, sample_counts: List[np.ndarray], model_accuracy: List[float], seq_length: int, max_time: int):
         model_power: List[float] = []
         for counts in sample_counts:
             power = get_weighted_avg_power(counts, seq_length=seq_length)
@@ -544,6 +544,7 @@ class SkipRNNController(Controller):
 
         self._model_power = np.array(model_power).reshape(-1)
         self._model_accuracy = np.array(model_accuracy).reshape(-1)
+        self._max_time = max_time
 
     def fit(self, series: DataSeries):
         pass
@@ -563,8 +564,13 @@ class SkipRNNController(Controller):
         # model_idx = np.argmin(budget_diff + greater_mask)
 
         # Select model with the greatest accuracy under the budget
-        greater_mask = (self._model_power <= budget).astype(float)
-        model_idx = np.argmax(greater_mask * self._model_accuracy)
+        #greater_mask = (self._model_power <= budget).astype(float)
+        #model_idx = np.argmax(greater_mask * self._model_accuracy)
+
+        model_idx = get_budget_index(budget=budget,
+                                     valid_accuracy=self._model_accuracy,
+                                     max_time=self._max_time,
+                                     power_estimates=self._model_power)
 
         return model_idx, self._model_power[model_idx]
 

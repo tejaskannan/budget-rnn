@@ -5,6 +5,7 @@ from enum import Enum, auto
 from typing import List, Dict, Any
 
 from controllers.controller_utils import clip, get_budget_index, ModelResults
+from controllers.power_utils import get_power_estimates
 from controllers.model_controllers import Controller, FixedController, RandomController, BudgetWrapper, CONTROLLER_PATH, levels_to_execute, predictions_for_levels
 from controllers.model_controllers import SkipRNNController
 from controllers.runtime_controllers import PIDController, BudgetController, BudgetDistribution
@@ -124,10 +125,6 @@ class RuntimeSystem:
         # For some systems, we can load the controller now. Otherwise, we wait until later
         if self._system_type == SystemType.ADAPTIVE:
             self._controller = Controller.load(os.path.join(save_folder, CONTROLLER_PATH.format(model_name)), dataset_folder=dataset_folder)
-        elif self._system_type == SystemType.SKIP_RNN:
-            self._controller = SkipRNNController(sample_counts=valid_results.stop_probs,
-                                                 model_accuracy=valid_results.accuracy,
-                                                 seq_length=seq_length)
         else:
             self._controller = None
 
@@ -168,8 +165,14 @@ class RuntimeSystem:
             level = np.argmax(self._valid_accuracy)
             self._controller = FixedController(model_index=level)
         elif self._system_type == SystemType.FIXED:
-            level = get_budget_index(budget=budget, level_accuracy=self._valid_accuracy)
+            power_estimates = get_power_estimates(num_levels=self._num_levels, seq_length=self._seq_length)
+            level = get_budget_index(budget=budget, valid_accuracy=self._valid_accuracy, max_time=max_time, power_estimates=power_estimates)
             self._controller = FixedController(model_index=level)
+        elif self._system_type == SystemType.SKIP_RNN:
+            self._controller = SkipRNNController(sample_counts=self._valid_stop_probs,
+                                                 model_accuracy=self._valid_accuracy,
+                                                 seq_length=self._seq_length,
+                                                 max_time=max_time)
         elif self._system_type == SystemType.ADAPTIVE:
             # Make the budget distribution and PID controller
             self._pid_controller = BudgetController(kp=KP,
