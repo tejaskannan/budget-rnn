@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 import os.path
+import time
 from argparse import ArgumentParser
 from collections import defaultdict, namedtuple
 from scipy import integrate
@@ -72,9 +73,16 @@ def run_simulation(runtime_systems: List[RuntimeSystem], budget: float, noise: T
     power_noise = rand.normal(loc=noise[0], scale=noise[1], size=(max_time, ))
 
     # Sequentially execute each system
+    runtime = []
     for t in range(max_time):
+        start = time.time()
         for system in runtime_systems:
             system.step(budget=budget, power_noise=power_noise[t], time=t)
+
+        end = time.time()
+        runtime.append(end - start)
+
+    print('Average Time per Iteration: {0:.5f}'.format(np.average(runtime)))
 
     # Create the final result
     times = np.arange(max_time) + 1

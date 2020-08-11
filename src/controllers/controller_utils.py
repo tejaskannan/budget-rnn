@@ -41,7 +41,7 @@ def save_test_log(accuracy: float, power: float, budget: float, noise_loc: float
     save_by_file_suffix([test_log], output_file)
 
 
-def get_budget_index(budget: float, valid_accuracy: np.ndarray, max_time: int, power_estimates: np.ndarray) -> int:
+def get_budget_index(budget: float, valid_accuracy: np.ndarray, max_time: int, power_estimates: np.ndarray, allow_violations: bool) -> int:
     """
     Selects the single model level which should yield the best overall accuracy. This decision
     is based on the validation accuracy for each level.
@@ -51,26 +51,37 @@ def get_budget_index(budget: float, valid_accuracy: np.ndarray, max_time: int, p
         valid_accuracy: A [L] array containing the validation accuracy for each model level
         max_time: The number of timesteps
         power_estimates: A [L] array of power estimates for each level
+        allow_violations: Index selected in a manner which allows for budget violations if such violations
+            will lead to better end-to-end accuracy.
     Returns:
         The "optimal" model level.
     """
-    num_levels = valid_accuracy.shape[0]
-    energy_budget = budget * max_time
-
     best_index = 0
     best_acc = 0.0
 
-    for level_idx in range(num_levels):
-        # Estimate the number of timesteps on which we can perform inference with this level
-        avg_power = power_estimates[level_idx]
-        projected_timesteps = min(energy_budget / avg_power, max_time)
+    if allow_violations:
+        num_levels = valid_accuracy.shape[0]
+        energy_budget = budget * max_time
 
-        projected_correct = valid_accuracy[level_idx] * projected_timesteps
-        estimated_accuracy = projected_correct / max_time
+        for level_idx in range(num_levels):
+            # Estimate the number of timesteps on which we can perform inference with this level
+            avg_power = power_estimates[level_idx]
+            projected_timesteps = min(energy_budget / avg_power, max_time)
 
-        if estimated_accuracy > best_acc:
-            best_acc = estimated_accuracy
-            best_index = level_idx
+            projected_correct = valid_accuracy[level_idx] * projected_timesteps
+            estimated_accuracy = projected_correct / max_time
+
+            if estimated_accuracy > best_acc:
+                best_acc = estimated_accuracy
+                best_index = level_idx
+    else:
+        budget_comparison = power_estimates <= budget
+        if np.any(budget_comparison):
+            budget_mask = budget_comparison.astype(float)
+            masked_accuracy = valid_accuracy * budget_mask
+            best_index = np.argmax(masked_accuracy)
+        else:
+            best_index = np.argmin(power_estimates)
 
     return best_index
 

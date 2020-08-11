@@ -20,11 +20,12 @@ from utils.constants import INPUTS, OUTPUT, SEQ_LENGTH, NUM_CLASSES, SEQ_LENGTH,
 # Constants
 KP = 1.0
 KD = 1.0 / 32.0
-KI = 1.0 / 64.0
+KI = 1.0 / 8.0
 WINDOW_SIZE = 20
-INTEGRAL_BOUNDS = (-16, 16)
-INTEGRAL_WINDOW = 100
-PANIC_FRAC = 0.95
+INTEGRAL_BOUNDS = (-4, 4)
+INTEGRAL_WINDOW = 3 * WINDOW_SIZE
+PANIC_FRAC = 1.0
+ALLOW_BUDGET_VIOLATIONS = True
 
 
 # Defines the type of runtime system
@@ -58,12 +59,6 @@ def estimate_label_counts(predictions: np.ndarray, stop_probs: np.ndarray, thres
     # Reshape arrays to size [N]
     pred = pred[0]
     levels = levels[0]
-
-    # TODO: This operation is expensive because it executes the model on the validation set. Instead, we should give the validation stop outputs
-    # and use the controller on the already_computed results. This requires executing the adaptive models on the validation set AND the testing set
-    # before starting any simulations.
-    # levels, predictions = controller.predict_levels(series=DataSeries.VALID, budget=budget)
-    # batch_size = predictions.shape[0]
 
     result: Dict[int, np.ndarray] = dict()
 
@@ -108,6 +103,7 @@ class RuntimeSystem:
             
         # Results from the testing set. These are precomputed for efficiency.
         self._level_predictions = test_results.predictions
+        self._test_accuracy = test_results.accuracy  # [L]
         self._stop_probs = test_results.stop_probs
         self._labels = test_results.labels
 
@@ -166,13 +162,18 @@ class RuntimeSystem:
             self._controller = FixedController(model_index=level)
         elif self._system_type == SystemType.FIXED:
             power_estimates = get_power_estimates(num_levels=self._num_levels, seq_length=self._seq_length)
-            level = get_budget_index(budget=budget, valid_accuracy=self._valid_accuracy, max_time=max_time, power_estimates=power_estimates)
+            level = get_budget_index(budget=budget,
+                                     valid_accuracy=self._valid_accuracy,
+                                     max_time=max_time,
+                                     power_estimates=power_estimates,
+                                     allow_violations=ALLOW_BUDGET_VIOLATIONS)
             self._controller = FixedController(model_index=level)
         elif self._system_type == SystemType.SKIP_RNN:
             self._controller = SkipRNNController(sample_counts=self._valid_stop_probs,
                                                  model_accuracy=self._valid_accuracy,
                                                  seq_length=self._seq_length,
-                                                 max_time=max_time)
+                                                 max_time=max_time,
+                                                 allow_violations=ALLOW_BUDGET_VIOLATIONS)
         elif self._system_type == SystemType.ADAPTIVE:
             # Make the budget distribution and PID controller
             self._pid_controller = BudgetController(kp=KP,
@@ -205,6 +206,7 @@ class RuntimeSystem:
                                                 budget=budget,
                                                 seed=self._seed)
         self._budget_step = 0
+        self._current_budget = (budget, budget)
         self._num_correct = []
         self._target_budgets = []
 
@@ -226,12 +228,21 @@ class RuntimeSystem:
         self._num_correct.append(is_correct)
         self._target_budgets.append(budget)
 
-        # Update the budget distribution for the adaptive system
-        if self._system_type == SystemType.ADAPTIVE and pred is not None:
-            self._budget_distribution.update(label=pred, level=level, power=power)
-
         # Update the adaptive controller parameters
-        if time % WINDOW_SIZE == 0 and self._system_type == SystemType.ADAPTIVE:
-            current_budget = self._budget_distribution.get_budget(time + 1)
-            power_so_far = np.average(self._budget_controller.power)
-            self._budget_step = self._pid_controller.step(y_true=current_budget, y_pred=power_so_far, time=time)
+        if self._system_type == SystemType.ADAPTIVE:
+            if pred is not None:
+                self._budget_distribution.update(label=pred, level=level, power=power)
+   
+            is_end_of_window = (time + 1) % WINDOW_SIZE == 0
+            if is_end_of_window:
+                self._current_budget = self._budget_distribution.get_budget(time + 1)
+
+            # We only apply the PID controller after the first budget is set. At the beginning, there is little knowledge
+            # about the correct budget
+            if time >= WINDOW_SIZE - 1:
+                power_so_far = np.average(self._budget_controller.power)
+                budget_step = self._pid_controller.step(y_true=self._current_budget, y_pred=power_so_far, time=time)
+
+            if is_end_of_window:
+                self._budget_step = budget_step
+                # print('Power so Far: {0:.5f}, Budget Step: {1}, Current Budget Range: ({2:.5f}, {3:.5f})'.format(power_so_far, self._budget_step, self._current_budget[0], self._current_budget[1]))

@@ -24,7 +24,6 @@ MAX_INIT = 1.0
 FACTOR_START = 1e-4
 
 
-
 def levels_to_execute(logistic_probs: np.ndarray, thresholds: np.ndarray) -> np.ndarray:
     # Compute the predictions based on this threshold setting. The level predictions are a 0/1
     # array which is 0 when we should NOT use this level and 1 when we should
@@ -84,8 +83,8 @@ class BudgetOptimizer:
         approx_power = np.vstack([get_avg_power_multiple(levels[idx] + 1, self._seq_length, power_multiplier) for idx in range(self._num_budgets)])  # [S, 1]
         approx_power = np.squeeze(approx_power, axis=-1)  # [S]
 
-        dual_term = approx_power - self._budgets  # [S]
-        dual_penalty = np.where(dual_term > 0, violation_factor, undershoot_factor) * np.abs(dual_term)
+        # dual_term = approx_power - self._budgets  # [S]
+        # dual_penalty = np.where(dual_term > 0, violation_factor, undershoot_factor) * np.abs(dual_term)
 
         # Compute the accuracy
         batch_idx = np.arange(start=0, stop=batch_size)  # [B]
@@ -93,7 +92,12 @@ class BudgetOptimizer:
 
         accuracy = np.average(correct_per_level, axis=-1)  # [S]
 
-        return -accuracy + dual_penalty, approx_power
+        # Compute the accuracy accounting for the budget
+        max_time = batch_idx.shape[0]
+        time_steps = np.minimum(((self._budgets * max_time) / approx_power).astype(int), max_time)  # [S]
+        adjusted_accuracy = (accuracy * time_steps) / max_time  # [S]
+
+        return -adjusted_accuracy, approx_power
 
     def fit(self, network_results: np.ndarray, clf_predictions: np.ndarray):
         best_thresholds = np.ones(shape=(self._num_budgets, self._num_levels))
@@ -536,7 +540,7 @@ class RandomController(Controller):
 
 class SkipRNNController(Controller):
 
-    def __init__(self, sample_counts: List[np.ndarray], model_accuracy: List[float], seq_length: int, max_time: int):
+    def __init__(self, sample_counts: List[np.ndarray], model_accuracy: List[float], seq_length: int, max_time: int, allow_violations: bool):
         model_power: List[float] = []
         for counts in sample_counts:
             power = get_weighted_avg_power(counts, seq_length=seq_length)
@@ -545,6 +549,7 @@ class SkipRNNController(Controller):
         self._model_power = np.array(model_power).reshape(-1)
         self._model_accuracy = np.array(model_accuracy).reshape(-1)
         self._max_time = max_time
+        self._allow_violations = allow_violations
 
     def fit(self, series: DataSeries):
         pass
@@ -559,18 +564,11 @@ class SkipRNNController(Controller):
         Returns:
             The number of levels to execute.
         """
-        # budget_diff = np.abs(self._model_power - budget)
-        # greater_mask = (self._model_power > budget).astype(float) * BIG_NUMBER
-        # model_idx = np.argmin(budget_diff + greater_mask)
-
-        # Select model with the greatest accuracy under the budget
-        #greater_mask = (self._model_power <= budget).astype(float)
-        #model_idx = np.argmax(greater_mask * self._model_accuracy)
-
         model_idx = get_budget_index(budget=budget,
                                      valid_accuracy=self._model_accuracy,
                                      max_time=self._max_time,
-                                     power_estimates=self._model_power)
+                                     power_estimates=self._model_power,
+                                     allow_violations=self._allow_violations)
 
         return model_idx, self._model_power[model_idx]
 
@@ -610,6 +608,7 @@ class BudgetWrapper:
         # Calculate used energy to determine whether to use the model
         used_energy = self.get_consumed_energy()
         should_use_controller = bool(used_energy < self._energy_budget - self._energy_margin)
+        # should_use_controller = True
 
         # By acting randomly, we incur no energy (no need to collect input samples)
         if not should_use_controller:

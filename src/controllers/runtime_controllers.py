@@ -7,7 +7,7 @@ from controllers.power_utils import get_avg_power
 from utils.constants import SMALL_NUMBER
 
 
-SMOOTHING_FACTOR = 10
+SMOOTHING_FACTOR = 1
 POWER_PRIOR_COUNT = 100
 
 
@@ -49,11 +49,6 @@ class PIDController:
         elif y_pred > y_true[1]:
             error = y_true[1] - y_pred
 
-        # Approximate the derivative term
-        derivative = 0
-        if len(self._errors) > 0:
-            derivative = (error - self._errors[-1]) / (time - self._times[-1])
-
         self._errors.append(error)
         self._times.append(time)
 
@@ -65,13 +60,24 @@ class PIDController:
             integral = integrate.trapz(integral_errors, dx=1)
             integral = clip(integral, bounds=self._integral_bounds)
 
+        # Approximate the derivative term using the average over the window
+        derivative = 0
+        if len(self._errors) > self._integral_window:
+            derivative_terms: List[float] = []
+            for idx in range(self._integral_window - 1):
+                start = len(self._errors) - idx - 1
+                end = start - 1
+
+                d_error = self._errors[start] - self._errors[end]
+                d_time = self._times[start] - self._times[end]
+                derivative_terms.append(d_error / d_time)
+
+            derivative = np.average(derivative_terms)
+
         derivative_error = self._kd * derivative
         integral_error = self._ki * integral
         proportional_error = self._kp * error
         control_error = proportional_error + integral_error + derivative_error
-
-        self._errors.append(error)
-        self._times.append(time)
 
         return self.plant_function(y_true, y_pred, control_error)
 
@@ -129,6 +135,9 @@ class BudgetDistribution:
 
         self._observed_label_counts = np.zeros_like(self._estimated_label_counts)
 
+        # print(self._prior_counts)
+        # print(self._prior_power)
+
     def get_budget(self, time: int) -> Tuple[float, float]:
         # Force the budget after the panic time is reached
         if time > self._panic_time:
@@ -152,19 +161,25 @@ class BudgetDistribution:
             n_class = max(np.sum(class_level_counts), SMALL_NUMBER)
 
             # MLE estimate of the mean power
-            power_mean = np.sum((class_level_counts * power_estimates) / (n_class))
+            power_mean = np.sum((class_level_counts * power_estimates) / n_class)
 
+            # MLE estimate of the power variance
             squared_diff = np.square(power_estimates - power_mean)
             power_var = np.sum((class_level_counts * squared_diff) / n_class)
+    
+            # Estimate the fraction of remaining samples which should belong to this class
+            remaining_fraction = class_count_diff[class_idx] / estimated_remaining
 
-            count_diff = max(self._estimated_label_counts[class_idx] - self._observed_label_counts[class_idx], 0)
-            remaining_fraction = count_diff / estimated_remaining
+            # print('Class {0} -> Power Mean: {1:.4f}, Remaining Fraction: {2:.4f}'.format(class_idx, power_mean, remaining_fraction))
 
             expected_rest += power_mean * remaining_fraction
-            variance_rest += np.square(count_diff / time) * power_var
+            variance_rest += np.square(class_count_diff[class_idx] / time) * power_var
 
         expected_power = (1.0 / time) * (self._max_time * self._budget - time_delta * expected_rest)
         expected_power = max(expected_power, power_estimates[0])  # We clip the power to the lowest level
+
+        # print('Energy Budget: {0:.5f}, Energy Rest: {1:.5f}'.format(self._max_time * self._budget, time_delta * expected_rest))
+        # print('Expected Rest: {0:.5f}, Expected Power: {1:.5f}, Time: {2:.5f}'.format(expected_rest, expected_power, time))
 
         estimator_variance = 2 * (1.0 / time) * variance_rest
         estimator_std = np.sqrt(estimator_variance)
