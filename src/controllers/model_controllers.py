@@ -85,7 +85,7 @@ class BudgetOptimizer:
         approx_power = np.squeeze(approx_power, axis=-1)  # [S]
 
         dual_term = approx_power - self._budgets  # [S]
-        dual_penalty = np.where(dual_term > 0, violation_factor, undershoot_factor) * np.square(dual_term)
+        dual_penalty = np.where(dual_term > 0, violation_factor, undershoot_factor) * np.abs(dual_term)
 
         # Compute the accuracy
         batch_idx = np.arange(start=0, stop=batch_size)  # [B]
