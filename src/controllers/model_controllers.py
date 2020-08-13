@@ -171,7 +171,7 @@ class BudgetOptimizer:
 
         # Arrays to keep track of the best thresholds per budget
         best_thresholds = np.ones(shape=(self._num_budgets, self._num_levels))  # [S, L]
-        best_loss = np.ones(shape=(self._num_budgets,), dtype=float)  # [S]
+        best_loss = np.ones(shape=(self._num_budgets, 1), dtype=float)  # [S, 1]
 
         for t in range(self._trials):
             print('===== Starting Trial {0} ====='.format(t))
@@ -182,7 +182,7 @@ class BudgetOptimizer:
             init_thresholds = round_to_precision(init_thresholds, self._precision)
             init_thresholds = np.flip(np.sort(init_thresholds, axis=-1), axis=-1)  # [S, L]
 
-            # Fit the thresholds ([S, L]) and get the corresponding fitness ([S, 1])
+            # Fit the thresholds ([S, L]) and get the corresponding loss ([S, 1])
             thresholds, loss = self.fit_single(model_correct=model_correct,
                                                stop_probs=stop_probs,
                                                init_thresholds=init_thresholds)
@@ -229,6 +229,10 @@ class BudgetOptimizer:
                 are 0/1 values indicating if this sample was classified correctly (1) or incorrectly (0)
             stop_probs: A [B, L] array of stop probabilities for each sample (B) and level (L)
             init_thresholds: An [S, L] of initial thresholds for each budget (S) and level (L)
+        Returns:
+            A tuple of two elements:
+            (1) A [S, L] array of thresholds for each budget
+            (2) A [S, 1] array of loss values for the returned thresholds
         """
         # Copy the initial thresholds, [S, L] array. We set the last threshold to zero because
         # there is no decision to make once inference reaches the top level.
@@ -250,7 +254,7 @@ class BudgetOptimizer:
 
             # [S] array of threshold values for the select values
             best_t = np.copy(thresholds[:, level])  # The 'best' are the current thresholds at this level
-            best_loss = np.ones(shape=(self._num_budgets,), dtype=float)
+            best_loss = np.ones(shape=(self._num_budgets, ), dtype=float)  # [S]
             best_power = np.zeros_like(best_loss)
 
             # Create the start values to enable a interval of size [MARGIN] within [0, 1]
@@ -262,10 +266,10 @@ class BudgetOptimizer:
             for offset in range(MARGIN):
 
                 # Compute the predictions using the threshold on the logistic regression model
-                candidate_values = np.minimum((start_values + offset) / fp_one, 1)
+                candidate_values = np.minimum((start_values + offset) / fp_one, 1)  # [S]
                 thresholds[:, level] = candidate_values
 
-                # Compute the fitness
+                # Compute the fitness, both return values are [S] arrays
                 loss, avg_power = self.loss_function(thresholds=thresholds,
                                                      model_correct=model_correct,
                                                      stop_probs=stop_probs)
@@ -295,7 +299,7 @@ class BudgetOptimizer:
         final_loss, _ = self.loss_function(thresholds=thresholds,
                                            model_correct=model_correct,
                                            stop_probs=stop_probs)
-        return thresholds, final_loss
+        return thresholds, np.expand_dims(final_loss, axis=-1)
 
 
 # Model Controllers
