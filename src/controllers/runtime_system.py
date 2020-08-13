@@ -1,14 +1,15 @@
 import numpy as np
 import os.path
+import time
 from collections import namedtuple
 from enum import Enum, auto
 from typing import List, Dict, Any
 
 from controllers.controller_utils import clip, get_budget_index, ModelResults
 from controllers.power_utils import get_power_estimates
-from controllers.model_controllers import Controller, FixedController, RandomController, BudgetWrapper, CONTROLLER_PATH, levels_to_execute, predictions_for_levels
-from controllers.model_controllers import SkipRNNController
-from controllers.runtime_controllers import PIDController, BudgetController, BudgetDistribution
+from controllers.model_controllers import AdaptiveController, FixedController, RandomController, BudgetWrapper
+from controllers.model_controllers import CONTROLLER_PATH, levels_to_execute, classification_for_levels, SkipRNNController
+from controllers.runtime_controllers import PIDController, BudgetController, BudgetDistribution, PowerSetpoint
 from dataset.dataset import DataSeries, Dataset
 from models.adaptive_model import AdaptiveModel
 from models.tf_model import TFModel
@@ -52,9 +53,9 @@ def estimate_label_counts(predictions: np.ndarray, stop_probs: np.ndarray, thres
     """
     # Compute the number of levels to execute using the thresholds and stop probabilities
     levels = levels_to_execute(np.expand_dims(stop_probs, axis=0), np.expand_dims(thresholds, axis=0))  # [1, N]
-
-    batch_idx = np.arange(start=0, stop=predictions.shape[0])
-    pred = predictions_for_levels(predictions, levels, batch_idx)  # [1, N]
+    
+    # Use the number of levels to fetch the predictions
+    pred = classification_for_levels(predictions, levels)  # [1, N]
     
     # Reshape arrays to size [N]
     pred = pred[0]
@@ -116,11 +117,10 @@ class RuntimeSystem:
         self._budget_controller = None
 
         self._name = '{0} {1}'.format(model_name.split('-')[0], system_type.name)
-        self._seed = hash(self._name) % 1000
 
         # For some systems, we can load the controller now. Otherwise, we wait until later
         if self._system_type == SystemType.ADAPTIVE:
-            self._controller = Controller.load(os.path.join(save_folder, CONTROLLER_PATH.format(model_name)), dataset_folder=dataset_folder)
+            self._controller = AdaptiveController.load(os.path.join(save_folder, CONTROLLER_PATH.format(model_name)), dataset_folder=dataset_folder)
         else:
             self._controller = None
 
@@ -192,8 +192,7 @@ class RuntimeSystem:
                                                            max_time=max_time,
                                                            num_levels=self._num_levels,
                                                            num_classes=self._num_classes,
-                                                           seq_length=self._seq_length,
-                                                           panic_frac=PANIC_FRAC)
+                                                           seq_length=self._seq_length)
 
         # Apply budget wrapper to the controller
         assert self._controller is not None, 'Must have a valid controller'
@@ -203,22 +202,21 @@ class RuntimeSystem:
                                                 num_classes=self._num_classes,
                                                 num_levels=self._num_levels,
                                                 seq_length=self._seq_length,
-                                                budget=budget,
-                                                seed=self._seed)
+                                                budget=budget)
         self._budget_step = 0
         self._current_budget = (budget, budget)
         self._num_correct = []
         self._target_budgets = []
 
-    def step(self, budget: float, power_noise: float, time: int):
-        stop_probs = self._stop_probs[time] if self._stop_probs is not None and time < len(self._stop_probs) else None
+    def step(self, budget: float, power_noise: float, t: int):
+        stop_probs = self._stop_probs[t] if self._stop_probs is not None and t < len(self._stop_probs) else None
 
         budget += self._budget_step
         pred, level, power = self._budget_controller.predict_sample(stop_probs=stop_probs,
                                                                     budget=budget,
                                                                     noise=power_noise,
-                                                                    current_time=time)
-        label = self._labels[time]
+                                                                    current_time=t)
+        label = self._labels[t]
        
         if pred is None:
             is_correct = 0
@@ -233,15 +231,18 @@ class RuntimeSystem:
             if pred is not None:
                 self._budget_distribution.update(label=pred, level=level, power=power)
    
-            is_end_of_window = (time + 1) % WINDOW_SIZE == 0
+            is_end_of_window = (t + 1) % WINDOW_SIZE == 0
             if is_end_of_window:
-                self._current_budget = self._budget_distribution.get_budget(time + 1)
+                self._current_budget = self._budget_distribution.get_budget(t + 1)
 
             # We only apply the PID controller after the first budget is set. At the beginning, there is little knowledge
             # about the correct budget
-            if time >= WINDOW_SIZE - 1:
-                power_so_far = np.average(self._budget_controller.power)
-                budget_step = self._pid_controller.step(y_true=self._current_budget, y_pred=power_so_far, time=time)
+            if t >= WINDOW_SIZE - 1:
+                # start = time.time()
+                power_so_far = self._budget_controller.get_consumed_energy() / (t + 1)
+                budget_step = self._pid_controller.step(y_true=self._current_budget, y_pred=power_so_far, time=t)
+                # end = time.time()
+                # print('Time to make controller step: {0:.4f}'.format(end - start))
 
             if is_end_of_window:
                 self._budget_step = budget_step

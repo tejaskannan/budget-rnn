@@ -25,18 +25,20 @@ def clip(x: int, bounds: Tuple[int, int]) -> int:
     return x
 
 
-def save_test_log(accuracy: float, power: float, budget: float, noise_loc: float, output_file: str):
+def save_test_log(accuracy: float, power: float, budget: float, key: str, output_file: str):
     test_log: Dict[float, Dict[str, Any]] = dict()
     if os.path.exists(output_file):
         test_log = list(read_by_file_suffix(output_file))[0]
 
+    if key not in test_log:
+        test_log[key] = dict()
+
     log_value = {
-        'SHIFT': noise_loc,
         'ACCURACY': accuracy,
         'AVG_POWER': power,
         'BUDGET': budget
     }
-    test_log['{0} {1}'.format(budget, noise_loc)] = log_value
+    test_log[key][str(budget)] = log_value
 
     save_by_file_suffix([test_log], output_file)
 
@@ -84,20 +86,6 @@ def get_budget_index(budget: float, valid_accuracy: np.ndarray, max_time: int, p
             best_index = np.argmin(power_estimates)
 
     return best_index
-
-
-
-   # fixed_index = 0
-   # best_index = 0
-   # best_acc = 0.0
-   # while fixed_index < seq_length and get_avg_power(fixed_index + 1, seq_length) < budget:
-   #     if best_acc < level_accuracy[fixed_index]:
-   #         best_acc = level_accuracy[fixed_index]
-   #         best_index = fixed_index
-
-   #     fixed_index += 1
-
-   # return best_index
 
 
 def execute_adaptive_model(model: AdaptiveModel, dataset: Dataset, series: DataSeries) -> ModelResults:
