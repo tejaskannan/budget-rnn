@@ -47,20 +47,10 @@ def get_activation(fn_name: Optional[str]) -> Optional[Callable[[tf.Tensor], tf.
         return tf.nn.elu
     elif fn_name == 'crelu':
         return tf.nn.crelu
-    elif fn_name == 'linear_sigmoid':
-        return partial(bounded_leaky_relu, factor=0.25, size=1, shift=2, alpha=0)
-    elif fn_name == 'linear_tanh':
-        return partial(bounded_leaky_relu, factor=0.5, size=2, shift=1, alpha=0.0625)
     elif fn_name == 'linear':
         return None
     else:
         raise ValueError(f'Unknown activation name {fn_name}.')
-
-
-def bounded_leaky_relu(x: tf.Tensor, factor: float, size: float, shift: float, alpha: float) -> tf.Tensor:
-    w = tf.nn.relu(-1 * factor * x + 0.5)
-    z = size * tf.nn.relu(-1 * tf.nn.relu(factor * x - 0.5) + w - 1)
-    return z - size * (w - shift) - 1 + alpha * x
 
 
 def get_regularizer(name: Optional[str], scale: float) -> Optional[Callable[[tf.Tensor], tf.Tensor]]:
@@ -79,6 +69,21 @@ def get_regularizer(name: Optional[str], scale: float) -> Optional[Callable[[tf.
         return None
     else:
         raise ValueError(f'Unknown regularization name: {name}')
+
+
+def mask_last_element(values: tf.Tensor) -> tf.Tensor:
+    """
+    Sets the final element of each sequence to zero.
+
+    Args:
+        values: A [B, T] tensor of scalar values for each batch element (B) and sequence (T)
+    Returns:
+        A [B, T] tensor in which the final element of each sequence (T - 1) is set to zero
+    """
+    seq_length = tf.shape(values)[1]
+    indices = tf.range(start=0, limit=seq_length)  # [T]
+    mask = tf.expand_dims(tf.cast(indices < seq_length - 1, dtype=tf.float32), axis=0)  # [1, T]
+    return values * mask
 
 
 def pool_rnn_outputs(outputs: tf.Tensor, final_state: tf.Tensor, pool_mode: str, name: str = 'pool-layer'):

@@ -418,21 +418,12 @@ class TFModel(Model):
             if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
                 train_ops_to_run += self.accuracy_op_names
 
-            # train_ops_to_run.extend(['skip-gates', 'update_penalty', 'transformed'])
-
             train_batch_counter = 1
             for batch in train_generator:
                 feed_dict = self.batch_to_feed_dict(batch, is_train=True, epoch_num=epoch)
 
                 # Run the training operations
                 train_results = self.execute(feed_dict, train_ops_to_run)
-
-                ## skip_gates = train_results['skip-gates'][0]
-                # if any([abs(x) < SMALL_NUMBER for x in skip_gates]):
-                # print('Skip Gates: {0}'.format(train_results['skip-gates']))
-                # print('Update Penalty: {0}'.format(train_results['update_penalty']))
-                ## print('Transformed: {0}'.format(train_results['transformed']))
-                # print('==========')
 
                 batch_loss = 0.0
                 for loss_op_name in self.loss_op_names:

@@ -19,43 +19,30 @@ AGGREGATION_NAME = 'aggregation'
 COMBINE_STATES_NAME = 'combine-states'
 WHILE_LOOP_NAME = 'while-loop'
 STOP_OUTPUT_NAME = 'stop_output'
+STOP_OUTPUT_LOGITS = 'stop_output_logits'
 STOP_PREDICTION = 'stop-prediction'
 OUTPUT_ATTENTION = 'output-attention'
 
 
-class AdaptiveModelType(Enum):
-    INDEPENDENT_RNN = auto()
-    INDEPENDENT_NBOW = auto()
-    INDEPENDENT_BIRNN = auto()
+class SequenceModelType(Enum):
+    RNN = auto()
+    SKIP_RNN = auto()
+    NBOW = auto()
     SAMPLE_RNN = auto()
-    CASCADE_RNN = auto()
-    BIDIR_SAMPLE = auto()
     SAMPLE_NBOW = auto()
-    CASCADE_NBOW = auto()
 
 
-def is_cascade(model_type: AdaptiveModelType) -> bool:
-    return model_type in (AdaptiveModelType.CASCADE_RNN, AdaptiveModelType.CASCADE_NBOW)
+
+def is_sample(model_type: SequenceModelType) -> bool:
+    return model_type in (SequenceModelType.SAMPLE_RNN, SequenceModelType.SAMPLE_NBOW)
 
 
-def is_sample(model_type: AdaptiveModelType) -> bool:
-    return model_type in (AdaptiveModelType.SAMPLE_RNN, AdaptiveModelType.SAMPLE_NBOW)
+def is_rnn(model_type: SequenceModelType) -> bool:
+    return model_type in (SequenceModelType.RNN, SequenceModelType.SKIP_RNN, SequenceModelType.SAMPLE_RNN)
 
 
-def is_rnn(model_type: AdaptiveModelType) -> bool:
-    return model_type in (AdaptiveModelType.INDEPENDENT_RNN, AdaptiveModelType.INDEPENDENT_BIRNN, AdaptiveModelType.SAMPLE_RNN, AdpativeModelType.CASCADE_RNN)
-
-
-def is_nbow(model_type: AdaptiveModelType) -> bool:
-    return model_type in (AdaptiveModelType.INDEPENDENT_NBOW, AdaptiveModelType.SAMPLE_NBOW, AdaptiveModelType.CASCADE_NBOW)
-
-
-def is_independent(model_type: AdaptiveModelType) -> bool:
-    return model_type in (AdaptiveModelType.INDEPENDENT_NBOW, AdaptiveModelType.INDEPENDENT_RNN, AdaptiveModelType.INDEPENDENT_BIRNN)
-
-
-def is_bidirectional(model_type: AdaptiveModelType) -> bool:
-    return model_type in (AdaptiveModelType.BIDIR_SAMPLE, AdaptiveModelType.INDEPENDENT_BIRNN)
+def is_nbow(model_type: SequenceModelType) -> bool:
+    return model_type in (SequenceModelType.NBOW, SequenceModelType.SAMPLE_NBOW)
 
 
 def get_cell_level_name(level_index: int, should_share_weights: bool) -> str:
