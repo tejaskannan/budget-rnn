@@ -180,15 +180,25 @@ if __name__ == '__main__':
                                         num_classes=num_classes)
         runtime_systems.append(adaptive_system)
 
-        fixed_adaptive_system = RuntimeSystem(valid_results=valid_results,
-                                              test_results=test_results,
-                                              system_type=SystemType.FIXED,
-                                              model_path=adaptive_model_path,
-                                              dataset_folder=dataset_folder,
-                                              seq_length=seq_length,
-                                              num_levels=num_levels,
-                                              num_classes=num_classes)
-        runtime_systems.append(fixed_adaptive_system)
+        adaptive_fixed_under_budget = RuntimeSystem(valid_results=valid_results,
+                                                    test_results=test_results,
+                                                    system_type=SystemType.FIXED_UNDER_BUDGET,
+                                                    model_path=adaptive_model_path,
+                                                    dataset_folder=dataset_folder,
+                                                    seq_length=seq_length,
+                                                    num_levels=num_levels,
+                                                    num_classes=num_classes)
+        runtime_systems.append(adaptive_fixed_under_budget)
+
+        adaptive_fixed_max_accuracy = RuntimeSystem(valid_results=valid_results,
+                                                    test_results=test_results,
+                                                    system_type=SystemType.FIXED_MAX_ACCURACY,
+                                                    model_path=adaptive_model_path,
+                                                    dataset_folder=dataset_folder,
+                                                    seq_length=seq_length,
+                                                    num_levels=num_levels,
+                                                    num_classes=num_classes)
+        runtime_systems.append(adaptive_fixed_max_accuracy)
 
         randomized_system = RuntimeSystem(valid_results=valid_results,
                                           test_results=test_results,
@@ -220,15 +230,25 @@ if __name__ == '__main__':
                                   num_classes=num_classes)
     runtime_systems.append(greedy_system)
 
-    fixed_system = RuntimeSystem(test_results=test_results,
-                                 valid_results=valid_results,
-                                 system_type=SystemType.FIXED,
-                                 model_path=baseline_model_path,
-                                 dataset_folder=dataset_folder,
-                                 seq_length=seq_length,
-                                 num_levels=seq_length,
-                                 num_classes=num_classes)
-    runtime_systems.append(fixed_system)
+    fixed_under_budget = RuntimeSystem(test_results=test_results,
+                                       valid_results=valid_results,
+                                       system_type=SystemType.FIXED_UNDER_BUDGET,
+                                       model_path=baseline_model_path,
+                                       dataset_folder=dataset_folder,
+                                       seq_length=seq_length,
+                                       num_levels=seq_length,
+                                       num_classes=num_classes)
+    runtime_systems.append(fixed_under_budget)
+
+    fixed_max_accuracy = RuntimeSystem(test_results=test_results,
+                                       valid_results=valid_results,
+                                       system_type=SystemType.FIXED_MAX_ACCURACY,
+                                       model_path=baseline_model_path,
+                                       dataset_folder=dataset_folder,
+                                       seq_length=seq_length,
+                                       num_levels=seq_length,
+                                       num_classes=num_classes)
+    runtime_systems.append(fixed_max_accuracy)
 
     # Add the Skip RNN models if provided
     skip_rnn_folder = args.skip_model_folder
@@ -260,15 +280,25 @@ if __name__ == '__main__':
         test_accuracy = [r.accuracy for r in test_results]
         test_skip_results = ModelResults(predictions=test_predictions, labels=test_labels, stop_probs=test_stop_probs, accuracy=test_accuracy)
 
-        skip_rnn_system = RuntimeSystem(test_results=test_skip_results,
-                                        valid_results=valid_skip_results,
-                                        system_type=SystemType.SKIP_RNN,
-                                        model_path=model_paths[0],  # Design decision: Pick the first model path to save results under
-                                        dataset_folder=dataset_folder,
-                                        seq_length=seq_length,
-                                        num_levels=len(model_paths),
-                                        num_classes=num_classes)
-        runtime_systems.append(skip_rnn_system)
+        skip_under_budget = RuntimeSystem(test_results=test_skip_results,
+                                          valid_results=valid_skip_results,
+                                          system_type=SystemType.FIXED_UNDER_BUDGET,
+                                          model_path=model_paths[0],  # Design decision: Pick the first model path to save results under
+                                          dataset_folder=dataset_folder,
+                                          seq_length=seq_length,
+                                          num_levels=len(model_paths),
+                                          num_classes=num_classes)
+        runtime_systems.append(skip_under_budget)
+
+        skip_max_accuracy = RuntimeSystem(test_results=test_skip_results,
+                                          valid_results=valid_skip_results,
+                                          system_type=SystemType.FIXED_MAX_ACCURACY,
+                                          model_path=model_paths[0],  # Design decision: Pick the first model path to save results under
+                                          dataset_folder=dataset_folder,
+                                          seq_length=seq_length,
+                                          num_levels=len(model_paths),
+                                          num_classes=num_classes)
+        runtime_systems.append(skip_max_accuracy)
 
     # Max time equals the number of test samples
     max_time = dataset.dataset[DataSeries.TEST].length

@@ -25,8 +25,6 @@ KI = 1.0 / 8.0
 WINDOW_SIZE = 20
 INTEGRAL_BOUNDS = (-4, 4)
 INTEGRAL_WINDOW = 3 * WINDOW_SIZE
-PANIC_FRAC = 1.0
-ALLOW_BUDGET_VIOLATIONS = True
 
 
 # Defines the type of runtime system
@@ -34,8 +32,8 @@ class SystemType(Enum):
     ADAPTIVE = auto()
     RANDOMIZED = auto()
     GREEDY = auto()
-    FIXED = auto()
-    SKIP_RNN = auto()
+    FIXED_MAX_ACCURACY = auto()
+    FIXED_UNDER_BUDGET = auto()
 
 
 def estimate_label_counts(predictions: np.ndarray, stop_probs: np.ndarray, thresholds: np.ndarray, num_classes: int) -> Dict[int, np.ndarray]:
@@ -160,20 +158,26 @@ class RuntimeSystem:
         elif self._system_type == SystemType.GREEDY:
             level = np.argmax(self._valid_accuracy)
             self._controller = FixedController(model_index=level)
-        elif self._system_type == SystemType.FIXED:
+        elif self._system_type in (SystemType.FIXED_UNDER_BUDGET, SystemType.FIXED_MAX_ACCURACY):
+            allow_violations = self._system_type == SystemType.FIXED_MAX_ACCURACY
             power_estimates = get_power_estimates(num_levels=self._num_levels, seq_length=self._seq_length)
-            level = get_budget_index(budget=budget,
-                                     valid_accuracy=self._valid_accuracy,
-                                     max_time=max_time,
-                                     power_estimates=power_estimates,
-                                     allow_violations=ALLOW_BUDGET_VIOLATIONS)
-            self._controller = FixedController(model_index=level)
-        elif self._system_type == SystemType.SKIP_RNN:
-            self._controller = SkipRNNController(sample_counts=self._valid_stop_probs,
-                                                 model_accuracy=self._valid_accuracy,
-                                                 seq_length=self._seq_length,
-                                                 max_time=max_time,
-                                                 allow_violations=ALLOW_BUDGET_VIOLATIONS)
+
+            # Create the fixed policy based on the model type. Skip RNNs use a similar strategy as those seen in
+            # other model types. For Skip RNNs, however, the policy applies to model selection as opposed to
+            # sample size selection.
+            if 'skip_rnn' in self._model_name.lower():
+                self._controller = SkipRNNController(sample_counts=self._valid_stop_probs,
+                                                     model_accuracy=self._valid_accuracy,
+                                                     seq_length=self._seq_length,
+                                                     max_time=max_time,
+                                                     allow_violations=allow_violations)
+            else:
+                level = get_budget_index(budget=budget,
+                                        valid_accuracy=self._valid_accuracy,
+                                        max_time=max_time,
+                                        power_estimates=power_estimates,
+                                        allow_violations=allow_violations)
+                self._controller = FixedController(model_index=level)
         elif self._system_type == SystemType.ADAPTIVE:
             # Make the budget distribution and PID controller
             self._pid_controller = BudgetController(kp=KP,
