@@ -211,14 +211,12 @@ class StandardModel(TFModel):
             self._ops[LOGITS] = classification_output.logits
             self._ops[PREDICTION] = classification_output.predictions
             self._ops[ACCURACY] = classification_output.accuracy
-            self._ops[F1_SCORE] = classification_output.f1_score
         elif self.output_type == OutputType.MULTI_CLASSIFICATION:
             classification_output = compute_multi_classification_output(model_output=output,
                                                                         labels=expected_output)
             self._ops[LOGITS] = classification_output.logits
             self._ops[PREDICTION] = classification_output.predictions
             self._ops[ACCURACY] = classification_output.accuracy
-            self._ops[F1_SCORE] = classification_output.f1_score
         else:
             self._ops[PREDICTION] = output
 

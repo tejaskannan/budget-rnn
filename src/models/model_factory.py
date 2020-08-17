@@ -12,8 +12,6 @@ def get_model(hypers: HyperParameters, save_folder: str, is_train: bool) -> Mode
         return AdaptiveModel(hypers, save_folder, is_train)
     elif model_type == 'standard':
         return StandardModel(hypers, save_folder, is_train)
-    elif model_type == 'majority':
-        return MajorityModel(hypers, save_folder, is_train)
     elif model_type == 'decision_tree':
         return DecisionTreeModel(hypers, save_folder, is_train)
     else:
