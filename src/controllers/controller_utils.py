@@ -2,7 +2,7 @@ import os.path
 import numpy as np
 import math
 from collections import namedtuple
-from typing import Dict, Any, Tuple, List
+from typing import Dict, Any, Tuple, List, Optional
 
 from models.adaptive_model import AdaptiveModel
 from models.standard_model import StandardModel, StandardModelType, SKIP_GATES
@@ -25,7 +25,7 @@ def clip(x: int, bounds: Tuple[int, int]) -> int:
     return x
 
 
-def save_test_log(accuracy: float, power: float, budget: float, key: str, output_file: str):
+def save_test_log(accuracy: float, power: float, valid_accuracy: Optional[float], budget: float, key: str, output_file: str):
     test_log: Dict[float, Dict[str, Any]] = dict()
     if os.path.exists(output_file):
         test_log = list(read_by_file_suffix(output_file))[0]
@@ -36,6 +36,7 @@ def save_test_log(accuracy: float, power: float, budget: float, key: str, output
     log_value = {
         'ACCURACY': accuracy,
         'AVG_POWER': power,
+        'VALID_ACCURACY': valid_accuracy,
         'BUDGET': budget
     }
     test_log[key][str(budget)] = log_value

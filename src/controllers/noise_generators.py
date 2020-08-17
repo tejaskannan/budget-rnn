@@ -12,6 +12,14 @@ class NoiseGenerator:
         self._rand = np.random.RandomState(seed=seed)
         self._gaussian_noise = self._rand.normal(loc=loc, scale=scale, size=(max_time, ))
 
+    @property
+    def loc(self) -> float:
+        return self._loc
+
+    @property
+    def scale(self) -> float:
+        return self._scale
+
     def get_noise(self, t: int) -> float:
         raise NotImplementedError()
 

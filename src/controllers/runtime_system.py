@@ -111,6 +111,7 @@ class RuntimeSystem:
         self._valid_accuracy = valid_results.accuracy  # [L]
         self._valid_predictions = valid_results.predictions  # [N, L]
         self._valid_stop_probs = valid_results.stop_probs  # [N, L]
+        self._valid_labels = valid_results.labels  # [N]
 
         self._budget_controller = None
 
@@ -242,12 +243,21 @@ class RuntimeSystem:
             # We only apply the PID controller after the first budget is set. At the beginning, there is little knowledge
             # about the correct budget
             if t >= WINDOW_SIZE - 1:
-                # start = time.time()
                 power_so_far = self._budget_controller.get_consumed_energy() / (t + 1)
                 budget_step = self._pid_controller.step(y_true=self._current_budget, y_pred=power_so_far, time=t)
-                # end = time.time()
-                # print('Time to make controller step: {0:.4f}'.format(end - start))
 
             if is_end_of_window:
                 self._budget_step = budget_step
-                # print('Power so Far: {0:.5f}, Budget Step: {1}, Current Budget Range: ({2:.5f}, {3:.5f})'.format(power_so_far, self._budget_step, self._current_budget[0], self._current_budget[1]))
+
+    def estimate_validation_accuracy(self, budget: float) -> float:
+        assert self._controller is not None, 'Must have an internal controller'
+
+        thresholds = np.expand_dims(self._controller.get_thresholds(budget=budget), axis=0)  # [1, L]
+        levels = levels_to_execute(probs=self._valid_stop_probs,
+                                   thresholds=thresholds)  # [1, N]
+        predictions = classification_for_levels(model_correct=self._valid_predictions,
+                                                levels=levels)  # [1, N]
+        predictions = predictions.reshape(-1, 1).astype(int)  # [N]
+
+        valid_correct = (predictions == self._valid_labels).astype(float)  # [N]
+        return float(np.average(valid_correct))

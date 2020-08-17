@@ -59,7 +59,7 @@ def run_simulation(runtime_systems: List[RuntimeSystem], budget: float, max_time
 def plot_and_save(sim_results: Dict[str, SimulationResult],
                   runtime_systems: List[RuntimeSystem],
                   output_folder: str,
-                  budget: int,
+                  budget: float,
                   max_time: int,
                   noise_generator: NoiseGenerator,
                   noise_terms: List[float],
@@ -74,10 +74,18 @@ def plot_and_save(sim_results: Dict[str, SimulationResult],
         system = system_dict[system_name]
         sim_result = sim_results[system_name]
 
+        # We compute the validation accuracy for this budget for the adaptive models.
+        # This allows us to choose which backend model to select at testing time.
+        if system.system_type == SystemType.ADAPTIVE:
+            valid_accuracy = system.estimate_validation_accuracy(budget=budget + noise_generator.loc)
+        else:
+            valid_accuracy = None
+
         log_file_name = LOG_FILE_FMT.format(system.system_type.name.lower(), system.model_name)
         log_path = os.path.join(output_folder, log_file_name)
         save_test_log(accuracy=sim_result.accuracy[-1],
                       power=sim_result.power[-1],
+                      valid_accuracy=valid_accuracy,
                       budget=budget,
                       key=str(noise_generator),
                       output_file=log_path)
