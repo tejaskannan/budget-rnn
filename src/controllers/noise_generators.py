@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Iterable
 
 
 class NoiseGenerator:
@@ -59,33 +59,42 @@ class SquareNoise(NoiseGenerator):
         return 'Square: Loc -> {0:.4f}, Scale -> {1:.4f}, Period -> {2:.4f}, Amp -> {3:.4f}'.format(self._loc, self._scale, self._period, self._amplitude)
 
 
-def get_noise_generator(noise_params: Dict[str, Any], max_time: int, seed: int = 48) -> NoiseGenerator:
-    # Unpack arguments
-    loc = noise_params['loc']
-    scale = noise_params['scale']
-    period = noise_params.get('period')
-    amplitude = noise_params.get('amplitude')
+def get_noise_generator(noise_params: Dict[str, Any], max_time: int, seed: int = 48) -> Iterable[NoiseGenerator]:
 
-    name = noise_params['noise_type'].lower()
-    if name == 'gaussian':
-        return GaussianNoise(max_time=max_time, loc=loc, scale=scale, seed=seed)
-    elif name == 'sin':
-        assert period is not None, 'Must provide a period for sin noise.'
-        assert amplitude is not None, 'Must provide an amplitude for sin noise.'
-        return SinusoidalNoise(period=period,
+    def make_generator(loc: float, scale: float, max_time: int, period: Optional[int], amplitude: Optional[float], seed: int) -> NoiseGenerator:
+
+        name = noise_params['noise_type'].lower()
+        if name == 'gaussian':
+            return GaussianNoise(max_time=max_time, loc=loc, scale=scale, seed=seed)
+        elif name == 'sin':
+            assert period is not None, 'Must provide a period for sin noise.'
+            assert amplitude is not None, 'Must provide an amplitude for sin noise.'
+            return SinusoidalNoise(period=period,
+                                   amplitude=amplitude,
+                                   max_time=max_time,
+                                   loc=loc,
+                                   scale=scale,
+                                   seed=seed)
+        elif name == 'square':
+            assert period is not None, 'Must provide a period for square noise.'
+            assert amplitude is not None, 'Must provide an amplitude for square noise.'
+            return SquareNoise(period=period,
                                amplitude=amplitude,
                                max_time=max_time,
                                loc=loc,
                                scale=scale,
                                seed=seed)
-    elif name == 'square':
-        assert period is not None, 'Must provide a period for square noise.'
-        assert amplitude is not None, 'Must provide an amplitude for square noise.'
-        return SquareNoise(period=period,
-                           amplitude=amplitude,
-                           max_time=max_time,
-                           loc=loc,
-                           scale=scale,
-                           seed=seed)
-    else:
-        raise ValueError('Unknown noise type: {0}'.format(name))
+        else:
+            raise ValueError('Unknown noise type: {0}'.format(name))
+
+    # Unpack arguments
+    locs = noise_params['loc']
+    scale = noise_params['scale']
+    period = noise_params.get('period')
+    amplitude = noise_params.get('amplitude')
+
+    if not isinstance(locs, list):
+        locs = [locs]
+
+    for loc in locs:
+        yield make_generator(loc=loc, scale=scale, max_time=max_time, period=period, amplitude=amplitude, seed=seed)

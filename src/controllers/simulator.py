@@ -307,23 +307,23 @@ if __name__ == '__main__':
         noise_params = read_by_file_suffix(noise_params_path)
 
         # Create the noise generator for the given parameters
-        noise_generator = get_noise_generator(noise_params=noise_params, max_time=max_time)
+        for noise_generator in get_noise_generator(noise_params=noise_params, max_time=max_time):
 
-        # Run the simulation on each budget
-        for budget in sorted(budgets):
-            print('===== Starting budget: {0} ====='.format(budget))
+            # Run the simulation on each budget
+            for budget in sorted(budgets):
+                print('===== Starting budget: {0} ====='.format(budget))
 
-            result, noise_terms = run_simulation(runtime_systems=runtime_systems,
-                                                 max_time=max_time,
-                                                 noise_generator=noise_generator,
-                                                 budget=budget)
+                result, noise_terms = run_simulation(runtime_systems=runtime_systems,
+                                                     max_time=max_time,
+                                                     noise_generator=noise_generator,
+                                                     budget=budget)
 
-            plot_and_save(sim_results=result,
-                          runtime_systems=runtime_systems,
-                          budget=budget,
-                          max_time=max_time,
-                          noise_generator=noise_generator,
-                          noise_terms=noise_terms,
-                          output_folder=args.output_folder,
-                          should_plot=not args.skip_plotting,
-                          save_plots=args.save_plots)
+                plot_and_save(sim_results=result,
+                              runtime_systems=runtime_systems,
+                              budget=budget,
+                              max_time=max_time,
+                              noise_generator=noise_generator,
+                              noise_terms=noise_terms,
+                              output_folder=args.output_folder,
+                              should_plot=not args.skip_plotting,
+                              save_plots=args.save_plots)
