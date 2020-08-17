@@ -153,13 +153,13 @@ class TFModel(Model):
         self.metadata[LABEL_MAP] = label_map
         self.metadata[REV_LABEL_MAP] = reverse_label_map
 
-    def make_placeholders(self):
+    def make_placeholders(self, is_frozen: bool):
         """
         Creates placeholders for this model.
         """
         pass
 
-    def make_model(self):
+    def make_model(self, is_train: bool):
         """
         Builds the computational graph for this model.
         """
@@ -558,10 +558,10 @@ class TFModel(Model):
                             has_improved[loss_op_name] = True
 
             # Save model if necessary
-            loss_ops_to_save = list(sorted(loss_ops_to_save))
-            if len(loss_ops_to_save) > 0:
-                print('Saving model for operations: {0}'.format(','.join(loss_ops_to_save)))
-                self.save(name=name, data_folders=dataset.data_folders, loss_ops=loss_ops_to_save, loss_var_dict=loss_var_dict)
+            loss_ops_list = list(sorted(loss_ops_to_save))
+            if len(loss_ops_list) > 0:
+                print('Saving model for operations: {0}'.format(','.join(loss_ops_list)))
+                self.save(name=name, data_folders=dataset.data_folders, loss_ops=loss_ops_list, loss_var_dict=loss_var_dict)
 
             # Increment the improvement counter
             for loss_op, improved_status in has_improved.items():

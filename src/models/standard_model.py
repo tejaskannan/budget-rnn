@@ -6,21 +6,18 @@ from collections import defaultdict
 from typing import Optional, Dict, List, Any, DefaultDict, Iterable
 
 from models.tf_model import TFModel
-from layers.rnn import dynamic_rnn
-from layers.cells.cells import make_rnn_cell
-from layers.cells.skip_rnn_cells import SkipUGRNNCell, SoftSkipUGRNNCell, InputSkipUGRNNCell
-from layers.basic import mlp, pool_sequence, dense
+from layers.cells.cell_factory import make_rnn_cell, CellClass, CellType
+from layers.dense import mlp, dense
 from layers.output_layers import OutputType, compute_binary_classification_output, compute_multi_classification_output
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.misc import sample_sequence_batch, batch_sample_noise
-from utils.tfutils import pool_rnn_outputs, get_activation, tf_rnn_cell, get_rnn_state, successive_pooling
-from utils.constants import ACCURACY, OUTPUT, INPUTS, LOSS, PREDICTION, F1_SCORE, LOGITS, NODE_REGEX_FORMAT
+from utils.tfutils import get_activation, successive_pooling
+from utils.sequence_model_utils import SequenceModelType
+from utils.constants import ACCURACY, OUTPUT, INPUTS, LOSS, PREDICTION, LOGITS, SMALL_NUMBER
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, NUM_CLASSES
-from utils.constants import AGGREGATE_SEED, TRANSFORM_SEED, OUTPUT_SEED, EMBEDDING_SEED, SMALL_NUMBER
-from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, ALL_LATENCY, get_multi_classification_metric
-from utils.loss_utils import binary_classification_loss, f1_score_loss, get_loss_weights
-from utils.rnn_utils import get_backward_name, OUTPUT_ATTENTION
+from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, get_multi_classification_metric
+from utils.loss_utils import binary_classification_loss, get_loss_weights
 from .base_model import Model
 
 
@@ -34,29 +31,18 @@ BIRNN_NAME = 'birnn'
 SKIP_GATES = 'skip-gates'
 
 
-class StandardModelType(Enum):
-    NBOW = auto()
-    CNN = auto()
-    RNN = auto()
-    BIRNN = auto()
-    SKIP_RNN = auto()
-    RANDOM_SKIP_RNN = auto()
-    SOFT_SKIP_RNN = auto()
-    INPUT_SKIP_RNN = auto()
-
-
 class StandardModel(TFModel):
 
     def __init__(self, hyper_parameters: HyperParameters, save_folder: str, is_train: bool):
         super().__init__(hyper_parameters, save_folder, is_train)
 
         model_type = self.hypers.model_params['model_type'].upper()
-        self._model_type = StandardModelType[model_type]
+        self._model_type = SequenceModelType[model_type]
 
         self.name = model_type
 
     @property
-    def model_type(self) -> StandardModelType:
+    def model_type(self) -> SequenceModelType:
         return self._model_type
 
     @property
@@ -74,6 +60,12 @@ class StandardModel(TFModel):
     @property
     def output_ops(self) -> List[str]:
         return self.prediction_ops
+
+    @property
+    def num_output_features(self) -> int:
+        if self.output_type == OutputType.MULTI_CLASSIFICATION:
+            return int(self.metadata[NUM_CLASSES])
+        return int(self.metadata[NUM_OUTPUT_FEATURES])
 
     def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool, epoch_num: int) -> Dict[tf.Tensor, np.ndarray]:
         dropout = self.hypers.dropout_keep_rate if is_train else 1.0
@@ -141,10 +133,8 @@ class StandardModel(TFModel):
                                   use_bias=True,
                                   name=EMBEDDING_LAYER_NAME)
 
-        self._ops['embedding'] = input_sequence
-
         # Apply the transformation layer. The output is a [B, T, D] tensor of transformed inputs for each model type.
-        if self.model_type == StandardModelType.NBOW:
+        if self.model_type == SequenceModelType.NBOW:
             # Apply the MLP transformation. Result is a [B, T, D] tensor
             transformed, _ = mlp(inputs=input_sequence,
                                  output_size=state_size,
@@ -168,14 +158,12 @@ class StandardModel(TFModel):
                                              aggregation_weights=aggregation_weights,
                                              name='{0}-pool'.format(AGGREGATION_LAYER_NAME),
                                              seq_length=self.metadata[SEQ_LENGTH])
-        elif self.model_type == StandardModelType.RNN:
-            # We either use a tensorflow cell or a custom RNN cell depending on whether we
-            # are compressing the trainable parameters. The compressed cell uses the custom implementation.
-            cell = tf_rnn_cell(cell_type=self.hypers.model_params['rnn_cell_type'],
-                               num_units=state_size,
-                               activation=self.hypers.model_params['rnn_activation'],
-                               layers=self.hypers.model_params['rnn_layers'],
-                               name_prefix=TRANSFORM_LAYER_NAME)
+        elif self.model_type == SequenceModelType.RNN:
+            cell = make_rnn_cell(cell_class=CellClass.STANDARD,
+                                 cell_type=CellType[self.hypers.model_params['rnn_cell_type'].upper()],
+                                 units=state_size,
+                                 activation=self.hypers.model_params['rnn_activation'],
+                                 name=TRANSFORM_LAYER_NAME)
 
             initial_state = cell.zero_state(batch_size=batch_size, dtype=tf.float32)
             rnn_outputs, state = tf.nn.dynamic_rnn(cell=cell,
@@ -184,8 +172,10 @@ class StandardModel(TFModel):
                                                    dtype=tf.float32,
                                                    scope=RNN_NAME)
             transformed = rnn_outputs  # [B, T, D]
-        elif self.model_type == StandardModelType.SKIP_RNN:
-            cell = SkipUGRNNCell(units=state_size,
+        elif self.model_type == SequenceModelType.SKIP_RNN:
+            cell = make_rnn_cell(cell_class=CellClass.SKIP,
+                                 cell_type=CellType[self.hypers.model_params['rnn_cell_type'].upper()],
+                                 units=state_size,
                                  activation=self.hypers.model_params['rnn_activation'],
                                  name=TRANSFORM_LAYER_NAME)
 
@@ -201,52 +191,8 @@ class StandardModel(TFModel):
             transformed = rnn_outputs.output  # [B, T, D]
             self._ops[SKIP_GATES] = tf.squeeze(rnn_outputs.state_update_gate, axis=-1)  # [B, T]
             self._ops['transformed'] = transformed
-        elif self.model_type == StandardModelType.SOFT_SKIP_RNN:
-            cell = SoftSkipUGRNNCell(units=state_size,
-                                     activation=self.hypers.model_params['rnn_activation'],
-                                     name=TRANSFORM_LAYER_NAME)
-
-            initial_state = cell.get_initial_state(inputs=input_sequence,
-                                                   batch_size=batch_size,
-                                                   dtype=tf.float32)
-            # Apply RNN
-            rnn_outputs, states = tf.nn.dynamic_rnn(cell=cell,
-                                                    inputs=input_sequence,
-                                                    dtype=tf.float32,
-                                                    scope=RNN_NAME)
-            transformed = rnn_outputs.output  # [B, T, D]
-            self._ops[SKIP_GATES] = tf.squeeze(rnn_outputs.state_update_gate, axis=-1)  # [B, T]
-            self._ops['transformed'] = transformed
-        elif self.model_type == StandardModelType.RANDOM_SKIP_RNN:
-            cell = RandomSkipUGRNNCell(units=state_size,
-                                       activation=self.hypers.model_params['rnn_activation'],
-                                       state_keep_prob=self.hypers.model_params['target_updates'] / self.metadata[SEQ_LENGTH],
-                                       name=TRANSFORM_LAYER_NAME)
-
-            initial_state = cell.get_initial_state(inputs=input_sequence,
-                                                   batch_size=batch_size,
-                                                   dtype=tf.float32)
-            # Apply RNN
-            rnn_outputs, states = tf.nn.dynamic_rnn(cell=cell,
-                                                    inputs=input_sequence,
-                                                    dtype=tf.float32,
-                                                    scope=RNN_NAME)
-            transformed = rnn_outputs
-        elif self.model_type == StandardModelType.INPUT_SKIP_RNN:
-            cell = InputSkipUGRNNCell(units=state_size,
-                                      activation=self.hypers.model_params['rnn_activation'],
-                                      name=TRANSFORM_LAYER_NAME)
-
-            initial_state = cell.get_initial_state(inputs=input_sequence,
-                                                   batch_size=batch_size,
-                                                   dtype=tf.float32)
-            # Apply RNN
-            rnn_outputs, states = tf.nn.dynamic_rnn(cell=cell,
-                                                    inputs=input_sequence,
-                                                    dtype=tf.float32,
-                                                    scope=RNN_NAME)
-            transformed = rnn_outputs.output
-            self._ops['input_weight'] = rnn_outputs.input_weight
+        else:
+            raise ValueError('Unknown standard model: {0}'.format(self.model_type))
 
         # Reshape the output to match the sequence length. The output is tiled along the sequence length
         # automatically via broadcasting rules.
@@ -259,7 +205,7 @@ class StandardModel(TFModel):
         # Create the output layer, result is a [B, T, C] tensor or a [B, C] tensor depending on the output type
         output_size = self.metadata[NUM_OUTPUT_FEATURES] if self.output_type != OutputType.MULTI_CLASSIFICATION else self.metadata[NUM_CLASSES]
         output, _ = mlp(inputs=transformed,
-                        output_size=output_size,
+                        output_size=self.num_output_features,
                         hidden_sizes=self.hypers.model_params['output_hidden_units'],
                         activations=self.hypers.model_params['output_hidden_activation'],
                         dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
@@ -267,23 +213,6 @@ class StandardModel(TFModel):
                         should_activate_final=False,
                         should_dropout_final=False,
                         name=OUTPUT_LAYER_NAME)
-
-        if self.hypers.model_params.get('pool_outputs', False):
-            # Compute the self-attention pooling weight
-            output_attn_weights, _ = mlp(inputs=transformed,
-                                         output_size=1,
-                                         hidden_sizes=[],
-                                         activations='sigmoid',
-                                         dropout_keep_rate=1.0,
-                                         should_bias_final=True,
-                                         should_activate_final=True,
-                                         name=OUTPUT_ATTENTION)
-
-            # Use the learned weights to pool the output logits, [B, T, C]
-            output = successive_pooling(inputs=output,
-                                        aggregation_weights=output_attn_weights,
-                                        name='output-pooling',
-                                        seq_length=self.metadata[SEQ_LENGTH])
 
         if self.output_type == OutputType.BINARY_CLASSIFICATION:
             classification_output = compute_binary_classification_output(model_output=output,
@@ -346,53 +275,13 @@ class StandardModel(TFModel):
         if self.model_type == StandardModelType.SKIP_RNN:
             skip_gates = self._ops[SKIP_GATES]  # [B, T]
             target_updates = self.hypers.model_params['target_updates']
-            
+
             # L2 penalty for deviation from target
             update_penalty = tf.square(tf.reduce_sum(skip_gates, axis=-1) - target_updates)  # [B]
             update_loss = tf.reduce_mean(update_penalty)  # Average over batch to get scalar loss
 
             self._ops['update_penalty'] = update_loss
             self._ops[LOSS] += self.hypers.model_params['update_loss_weight'] * update_loss
-
-        # Add any regularization to the loss function
-        reg_loss = self.regularize_weights(name=self.hypers.model_params.get('regularization_name'),
-                                           scale=self.hypers.model_params.get('regularization_scale'))
-        if reg_loss is not None:
-            self._ops[LOSS] += reg_loss
-
-    def compute_flops(self, level: int) -> int:
-        """
-        Returns the total number of floating point operations to produce the final output.
-        """
-        total_flops = 0
-
-        with self.sess.graph.as_default():
-
-            # Get FLOPS for operations that are applied to each sequence element
-            seq_operations = [TRANSFORM_LAYER_NAME, RNN_NAME, BIRNN_NAME]
-            seq_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), seq_operations))
-
-            seq_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
-                                        .with_node_names(show_name_regexes=seq_operations) \
-                                        .order_by('flops').build()
-            flops = tf.profiler.profile(self.sess.graph, options=seq_options)
-
-            if self.model_type == StandardModelType.NBOW:
-                total_flops += flops.total_float_ops
-            else:
-                total_flops += flops.total_float_ops * self.metadata[SEQ_LENGTH]
-
-            # Get FLOPS for operations that are applied to the entire sequence. We include the embedding layer
-            # here because it has a well-defined sequence length so Tensorflow will automatically account for
-            # the multiplier
-            single_operations = list(map(lambda t: NODE_REGEX_FORMAT.format(t), [OUTPUT_LAYER_NAME, EMBEDDING_LAYER_NAME, AGGREGATION_LAYER_NAME]))
-            single_options = tf.profiler.ProfileOptionBuilder(tf.profiler.ProfileOptionBuilder.float_operation()) \
-                                            .with_node_names(show_name_regexes=single_operations) \
-                                            .order_by('flops').build()
-            flops = tf.profiler.profile(self.sess.graph, options=single_options)
-            total_flops += flops.total_float_ops
-
-        return total_flops
 
     def predict_classification(self, test_batch_generator: Iterable[Any],
                                batch_size: int,
@@ -408,12 +297,12 @@ class StandardModel(TFModel):
                 break
 
             feed_dict = self.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
-            result = self.execute(ops=ops_to_run, feed_dict=feed_dict)
+            batch_result = self.execute(ops=ops_to_run, feed_dict=feed_dict)
 
-            prediction = result[PREDICTION]
-            
-            if self.model_type == StandardModelType.SKIP_RNN:
-                skip_gates_list.append(result[SKIP_GATES])
+            prediction = batch_result[PREDICTION]
+
+            if batch_result.get(SKIP_GATES) is not None:
+                skip_gates_list.append(batch_result[SKIP_GATES])
 
             labels_list.append(np.vstack(batch[OUTPUT]))
             predictions_list.append(np.vstack(prediction))
@@ -436,12 +325,12 @@ class StandardModel(TFModel):
 
             # Add in the average number of updates for Skip RNNs. These always have one output, so
             # we only need this case in the has_single_output == True case.
-            if self.model_type == StandardModelType.SKIP_RNN:
+            if self.model_type == SequenceModelType.SKIP_RNN:
                 skip_gates = np.concatenate(skip_gates_list, axis=0)  # [B, T] if model is a Skip RNN
                 num_updates = np.sum(skip_gates, axis=-1)
 
-                result['AVG_UPDATES'] = float(np.average(num_updates))
-                result['STD_UPDATES'] = float(np.std(num_updates))
+                result[PREDICTION]['AVG_UPDATES'] = float(np.average(num_updates))
+                result[PREDICTION]['STD_UPDATES'] = float(np.std(num_updates))
         else:
             for i in range(self.metadata[SEQ_LENGTH]):
                 level_name = '{0}_{1}'.format(PREDICTION, i)

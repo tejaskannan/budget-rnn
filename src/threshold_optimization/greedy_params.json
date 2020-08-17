@@ -1,8 +1,0 @@
-{
-    "precision": 10,
-    "batch_size": 2000,
-    "should_sort_thresholds": true,
-    "budget_type": "power",
-    "budget_value": 47,
-    "trials": 10
-}

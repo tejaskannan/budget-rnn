@@ -61,7 +61,7 @@ def save_by_file_suffix(data: Any, file_path: str):
 
 def save_jsonl_gz(data: Iterable[Any], file_path: str) -> None:
     assert file_path.endswith('.jsonl.gz'), 'Must provide a json lines gzip file.'
-    
+
     with gzip.GzipFile(file_path, 'wb') as f:
         writer = codecs.getwriter('utf-8')
         for element in data:

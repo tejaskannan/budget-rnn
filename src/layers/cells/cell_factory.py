@@ -3,12 +3,13 @@ from enum import Enum, auto
 
 from .skip_rnn_cells import SkipUGRNNCell
 from .sample_rnn_cells import SampleUGRNNCell
+from utils.tfutils import get_activation
 
 
 class CellClass(Enum):
     STANDARD = auto()
     SKIP = auto()
-    SAMPLE= auto()
+    SAMPLE = auto()
 
 
 class CellType(Enum):
@@ -16,13 +17,10 @@ class CellType(Enum):
     UGRNN = auto()
 
 
-def make_rnn_cell(cell_class: str, cell_type: str, units: int, activation: str, name: str) -> tf.nn.rnn_cell.RNNCell:
+def make_rnn_cell(cell_class: CellClass, cell_type: CellType, units: int, activation: str, name: str) -> tf.nn.rnn_cell.RNNCell:
     """
     Creates an RNN Cell using the given parameters.
     """
-    cell_class = CellClass[cell_class.upper()]
-    cell_type = CellType[cell_type.upper()]
-
     if cell_class == CellClass.STANDARD:
         if cell_type == CellType.GRU:
             return tf.nn.rnn_cell.GRUCell(num_units=units,

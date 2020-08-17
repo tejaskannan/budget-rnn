@@ -4,13 +4,11 @@ from enum import Enum, auto
 from typing import List
 
 from .basic import mlp
-from utils.loss_utils import binary_classification_loss, f1_score_loss
 from utils.constants import ONE_HALF, SMALL_NUMBER
-from utils.tfutils import tf_f1_score
 
 
 # Tuples to store output types
-ClassificationOutput = namedtuple('ClassificationOutput', ['logits', 'prediction_probs', 'predictions', 'accuracy', 'f1_score'])
+ClassificationOutput = namedtuple('ClassificationOutput', ['logits', 'prediction_probs', 'predictions', 'accuracy'])
 RegressionOutput = namedtuple('RegressionOutput', ['predictions'])
 
 
@@ -37,14 +35,10 @@ def compute_binary_classification_output(model_output: tf.Tensor, labels: tf.Ten
     # Compute the batch-wise accuracy
     accuracy = tf.reduce_mean(1.0 - tf.abs(predictions - labels))
 
-    # Compute F1 score (harmonic mean of precision and recall)
-    f1_score = tf_f1_score(predictions, labels)
-
     return ClassificationOutput(logits=logits,
                                 prediction_probs=predicted_probs,
                                 predictions=predictions,
-                                accuracy=accuracy,
-                                f1_score=f1_score)
+                                accuracy=accuracy)
 
 
 def compute_multi_classification_output(model_output: tf.Tensor, labels: tf.Tensor) -> ClassificationOutput:
@@ -63,10 +57,7 @@ def compute_multi_classification_output(model_output: tf.Tensor, labels: tf.Tens
     correct = tf.cast(tf.equal(predictions, tf.squeeze(labels, axis=-1)), dtype=tf.float32)
     accuracy = tf.reduce_mean(correct)
 
-    # TODO: Compute the 'average' F1 score for each class
-
     return ClassificationOutput(logits=logits,
                                 prediction_probs=predicted_probs,
                                 predictions=predictions,
-                                accuracy=accuracy,
-                                f1_score=None)
+                                accuracy=accuracy)

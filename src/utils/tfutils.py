@@ -4,7 +4,6 @@ from collections import namedtuple
 from functools import partial
 
 from utils.constants import SMALL_NUMBER
-from utils.hashing import pearson_hash
 
 
 def get_optimizer(name: str, learning_rate: float, learning_rate_decay: float, global_step: tf.Variable, decay_steps: int = 100000, momentum: Optional[float] = None):
@@ -84,42 +83,6 @@ def mask_last_element(values: tf.Tensor) -> tf.Tensor:
     indices = tf.range(start=0, limit=seq_length)  # [T]
     mask = tf.expand_dims(tf.cast(indices < seq_length - 1, dtype=tf.float32), axis=0)  # [1, T]
     return values * mask
-
-
-def pool_rnn_outputs(outputs: tf.Tensor, final_state: tf.Tensor, pool_mode: str, name: str = 'pool-layer'):
-    """
-    Pools the outputs of an RNN using the given strategy.
-
-    Args:
-        outputs: A [B, T, D] tensor containing the RNN outputs
-        final_state: A [B, D] tensor with the final RNN state
-        pool_mode: Pooling strategy
-        name: Name prefix for this operation
-    Returns:
-        A [B, D] tensor which represents an aggregation of the RNN outputs.
-    """
-    pool_mode = pool_mode.lower()
-
-    if pool_mode == 'sum':
-        return tf.reduce_sum(outputs, axis=-2, name=name)
-    elif pool_mode == 'max':
-        return tf.reduce_max(outputs, axis=-2, name=name)
-    elif pool_mode in ('mean', 'average'):
-        return tf.reduce_mean(outputs, axis=-2, name=name)
-    elif pool_mode == 'final_state':
-        return final_state
-    elif pool_mode == 'weighted_average':
-        # [B, T, 1]
-        attention_layer = tf.layers.dense(inputs=outputs,
-                                          units=1,
-                                          activation=get_activation('leaky_relu'),
-                                          kernel_initializer=tf.initializers.glorot_uniform(),
-                                          name='{0}-attention'.format(name))
-        normalized_attn_weights = tf.nn.softmax(attention_layer, axis=-2, name='{0}-normalize'.format(name))  # [B, T, 1]
-        scaled_outputs = tf.math.multiply(outputs, normalized_attn_weights, name='{0}-scale'.format(name))
-        return tf.reduce_sum(scaled_outputs, axis=-2, name='{0}-aggregate'.format(name))  # [B, D]
-    else:
-        raise ValueError(f'Unknown pool mode {pool_mode}.')
 
 
 def successive_pooling(inputs: tf.Tensor, aggregation_weights: tf.Tensor, seq_length: int, name: str) -> tf.Tensor:
@@ -208,38 +171,6 @@ def majority_vote(logits: tf.Tensor) -> tf.Tensor:
     return predictions_array.stack()
 
 
-def expand_to_matrix(vec: tf.Tensor, size: int, matrix_dims: Tuple[int, int], name: str) -> tf.Tensor:
-    """
-    Expands the 1D vector into a 2D matrix using hashing.
-
-    Args:
-        vec: A 1D tensor of size [K]
-        size: The size of the tensor, denoted by K
-        matrix_dims: The output dimensions of the final matrix, denoted by [N, M]
-        name: Name prefix of this layer. This acts as the seed of the hash function.
-    Returns:
-        A [N, M] tensor representing the expanded weights.
-    """
-    # Form the mapping between vector and matrix indices
-    indices: List[int] = []
-    signs: List[int] = []
-    for i in range(matrix_dims[0]):
-        for j in range(matrix_dims[1]):
-            index = pearson_hash('{0}{1}{2}'.format(name, i, j)) % size
-
-            sign_hash = pearson_hash('{0}{1}{2}s'.format(name, i, j)) % 2
-            sign = 2 * sign_hash - 1  # Map onto {-1, 1}
-
-            indices.append(index)
-            signs.append(sign)
-
-    # Expand the vector using the created index mappings
-    mat = tf.gather(vec, indices) * tf.constant(signs, dtype=vec.dtype)
-    mat = tf.reshape(mat, shape=matrix_dims)
-
-    return mat
-
-
 def variables_for_loss_op(variables: List[tf.Variable], loss_op: str) -> List[tf.Variable]:
     """
     Gets all variables that have a gradient with respect to the given loss operation.
@@ -252,105 +183,3 @@ def variables_for_loss_op(variables: List[tf.Variable], loss_op: str) -> List[tf
     """
     gradients = tf.gradients(loss_op, variables)
     return [v for g, v in zip(gradients, variables) if g is not None]
-
-
-def tf_precision(predictions: tf.Tensor, labels: tf.Tensor) -> tf.Tensor:
-    """
-    Computes precision of the given predictions.
-
-    Args:
-        predictions: A [B, 1] tensor of model predictions.
-        labels: A [B, 1] tensor of expected labels.
-    Returns:
-        A scalar tensor containing batch-wise precision.
-    """
-    true_positives = tf.reduce_sum(predictions * labels)
-    false_positives = tf.reduce_sum(predictions * (1.0 - labels))
-
-    return tf.where(tf.abs(true_positives + false_positives) < SMALL_NUMBER,
-                    x=1.0,
-                    y=true_positives / (true_positives + false_positives))
-
-
-def tf_recall(predictions: tf.Tensor, labels: tf.Tensor) -> tf.Tensor:
-    """
-    Computes recall of the given predictions.
-
-    Args:
-        predictions: A [B, 1] tensor of model predictions.
-        labels: A [B, 1] tensor of expected labels.
-    Returns:
-        A scalar tensor containing batch-wise recall.
-    """
-    true_positives = tf.reduce_sum(predictions * labels)
-    false_negatives = tf.reduce_sum((1.0 - predictions) * labels)
-
-    return tf.where(tf.abs(true_positives + false_negatives) < SMALL_NUMBER,
-                    x=1.0,
-                    y=true_positives / (true_positives + false_negatives))
-
-
-def tf_f1_score(predictions: tf.Tensor, labels: tf.Tensor) -> tf.Tensor:
-    """
-    Computes the F1 score (harmonic mean of precision and recall) of the given predictions.
-
-    Args:
-        predictions: A [B, 1] tensor of model predictions.
-        labels: A [B, 1] tensor of expected labels.
-    Returns:
-        A scalar tensor containing the batch-wise F1 score.
-    """
-    precision = tf_precision(predictions, labels)
-    recall = tf_recall(predictions, labels)
-
-    return 2 * (precision * recall) / (precision + recall + SMALL_NUMBER)
-
-
-def tf_rnn_cell(cell_type: str, num_units: int, activation: str, layers: int, name_prefix: Optional[str]) -> tf.nn.rnn_cell.MultiRNNCell:
-
-    def make_cell(cell_type: str, num_units: int, activation: str, name: str):
-        if cell_type == 'vanilla':
-            return tf.nn.rnn_cell.BasicRNNCell(num_units=num_units,
-                                               activation=get_activation(activation),
-                                               name=name)
-        elif cell_type == 'gru':
-            return tf.nn.rnn_cell.GRUCell(num_units=num_units,
-                                          activation=get_activation(activation),
-                                          kernel_initializer=tf.glorot_uniform_initializer(),
-                                          bias_initializer=tf.random_uniform_initializer(minval=-0.7, maxval=0.7),
-                                          name=name)
-        elif cell_type == 'lstm':
-            return tf.nn.rnn_cell.LSTMCell(num_units=num_units,
-                                           activation=get_activation(activation),
-                                           initializer=tf.glorot_uniform_initializer(),
-                                           name=name)
-        elif cell_type == 'ugrnn':
-            return tf.contrib.rnn.UGRNNCell(num_units=num_units,
-                                            initializer=tf.glorot_uniform_initializer())
-
-        raise ValueError(f'Unknown cell type: {cell_type}')
-
-    cell_type = cell_type.lower()
-    cells: List[tf.rnn_cell.RNNCell] = []
-    name_prefix = f'{name_prefix}-cell' if name_prefix is not None else 'cell'
-    for i in range(layers):
-        name = f'{name_prefix}-{i}'
-        cell = make_cell(cell_type, num_units, activation, name)
-        cells.append(cell)
-
-    return tf.nn.rnn_cell.MultiRNNCell(cells)
-
-
-def get_rnn_state(state: Union[tf.Tensor, tf.nn.rnn_cell.LSTMStateTuple, Tuple[tf.Tensor, ...], Tuple[tf.nn.rnn_cell.LSTMStateTuple, ...]]) -> tf.Tensor:
-    if isinstance(state, tf.nn.rnn_cell.LSTMStateTuple):
-        return state.c
-    if isinstance(state, tuple):
-        states: List[tf.Tensor] = []
-        for st in state:
-            if isinstance(st, tf.nn.rnn_cell.LSTMStateTuple):
-                states.append(st.c)
-            else:
-                states.append(st)
-        return tf.concat(states, axis=-1)
-    else:
-        return state
