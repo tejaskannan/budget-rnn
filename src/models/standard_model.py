@@ -16,19 +16,10 @@ from utils.tfutils import get_activation, successive_pooling
 from utils.sequence_model_utils import SequenceModelType
 from utils.constants import ACCURACY, OUTPUT, INPUTS, LOSS, PREDICTION, LOGITS, SMALL_NUMBER
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, NUM_CLASSES
+from utils.constants import EMBEDDING_NAME, TRANSFORM_NAME, AGGREGATION_NAME, OUTPUT_LAYER_NAME, RNN_NAME, SKIP_GATES
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, get_multi_classification_metric
 from utils.loss_utils import binary_classification_loss, get_loss_weights
 from .base_model import Model
-
-
-# Layer name constants
-EMBEDDING_LAYER_NAME = 'embedding-layer'
-TRANSFORM_LAYER_NAME = 'transform-layer'
-AGGREGATION_LAYER_NAME = 'aggregation-layer'
-OUTPUT_LAYER_NAME = 'output-layer'
-RNN_NAME = 'rnn'
-BIRNN_NAME = 'birnn'
-SKIP_GATES = 'skip-gates'
 
 
 class StandardModel(TFModel):
@@ -131,7 +122,7 @@ class StandardModel(TFModel):
                                   units=state_size,
                                   activation=self.hypers.model_params['embedding_activation'],
                                   use_bias=True,
-                                  name=EMBEDDING_LAYER_NAME)
+                                  name=EMBEDDING_NAME)
 
         # Apply the transformation layer. The output is a [B, T, D] tensor of transformed inputs for each model type.
         if self.model_type == SequenceModelType.NBOW:
@@ -144,26 +135,26 @@ class StandardModel(TFModel):
                                  should_activate_final=True,
                                  should_bias_final=True,
                                  should_dropout_final=True,
-                                 name=TRANSFORM_LAYER_NAME)
+                                 name=TRANSFORM_NAME)
 
             # Compute weights for aggregation layer, [B, T, 1]
             aggregation_weights, _ = dense(inputs=transformed,
                                            units=1,
                                            activation='sigmoid',
                                            use_bias=True,
-                                           name=AGGREGATION_LAYER_NAME)
+                                           name=AGGREGATION_NAME)
 
             # Pool the data in a successive fashion, [B, T, D]
             transformed = successive_pooling(inputs=transformed,
                                              aggregation_weights=aggregation_weights,
-                                             name='{0}-pool'.format(AGGREGATION_LAYER_NAME),
+                                             name='{0}-pool'.format(AGGREGATION_NAME),
                                              seq_length=self.metadata[SEQ_LENGTH])
         elif self.model_type == SequenceModelType.RNN:
             cell = make_rnn_cell(cell_class=CellClass.STANDARD,
                                  cell_type=CellType[self.hypers.model_params['rnn_cell_type'].upper()],
                                  units=state_size,
                                  activation=self.hypers.model_params['rnn_activation'],
-                                 name=TRANSFORM_LAYER_NAME)
+                                 name=TRANSFORM_NAME)
 
             initial_state = cell.zero_state(batch_size=batch_size, dtype=tf.float32)
             rnn_outputs, state = tf.nn.dynamic_rnn(cell=cell,
@@ -177,7 +168,7 @@ class StandardModel(TFModel):
                                  cell_type=CellType[self.hypers.model_params['rnn_cell_type'].upper()],
                                  units=state_size,
                                  activation=self.hypers.model_params['rnn_activation'],
-                                 name=TRANSFORM_LAYER_NAME)
+                                 name=TRANSFORM_NAME)
 
             initial_state = cell.get_initial_state(inputs=input_sequence,
                                                    batch_size=batch_size,
@@ -190,7 +181,6 @@ class StandardModel(TFModel):
                                                     scope=RNN_NAME)
             transformed = rnn_outputs.output  # [B, T, D]
             self._ops[SKIP_GATES] = tf.squeeze(rnn_outputs.state_update_gate, axis=-1)  # [B, T]
-            self._ops['transformed'] = transformed
         else:
             raise ValueError('Unknown standard model: {0}'.format(self.model_type))
 

@@ -3,7 +3,6 @@ from collections import namedtuple
 from enum import Enum, auto
 from typing import List
 
-from .basic import mlp
 from utils.constants import ONE_HALF, SMALL_NUMBER
 
 
