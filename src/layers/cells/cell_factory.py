@@ -1,7 +1,7 @@
 import tensorflow as tf
 from enum import Enum, auto
 
-from .skip_rnn_cells import SkipUGRNNCell
+from .skip_rnn_cells import SkipUGRNNCell, SkipGRUCell
 from .sample_rnn_cells import SampleUGRNNCell
 from utils.tfutils import get_activation
 
@@ -34,6 +34,8 @@ def make_rnn_cell(cell_class: CellClass, cell_type: CellType, units: int, activa
     elif cell_class == CellClass.SKIP:
         if cell_type == CellType.UGRNN:
             return SkipUGRNNCell(units=units, activation=activation, name=name)
+        elif cell_type == CellType.GRU:
+            return SkipGRUCell(units=units, activation=activation, name=name)
         else:
             raise ValueError('Unknown cell class {0} and type {1}'.format(cell_class.name, cell_type.name))
     elif cell_class == CellClass.SAMPLE:
