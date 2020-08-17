@@ -12,11 +12,11 @@ from models.base_model import Model
 from dataset.dataset import Dataset, DataSeries
 from layers.output_layers import OutputType
 from utils.hyperparameters import HyperParameters
-from utils.tfutils import get_optimizer, variables_for_loss_op, get_regularizer
+from utils.tfutils import get_optimizer, variables_for_loss_op
 from utils.file_utils import read_by_file_suffix, save_by_file_suffix, make_dir
 from utils.constants import BIG_NUMBER, NAME_FMT, HYPERS_PATH, GLOBAL_STEP
-from utils.constants import METADATA_PATH, MODEL_PATH, TRAIN_LOG_PATH, GRAPH_PATH
-from utils.constants import LOSS, ACCURACY, OPTIMIZER_OP, F1_SCORE, INPUTS, OUTPUT, SAMPLE_ID
+from utils.constants import METADATA_PATH, MODEL_PATH, TRAIN_LOG_PATH
+from utils.constants import LOSS, ACCURACY, OPTIMIZER_OP, INPUTS, OUTPUT, SAMPLE_ID
 from utils.constants import TRAIN, VALID, LABEL_MAP, NUM_CLASSES, REV_LABEL_MAP
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, INPUT_SCALER, OUTPUT_SCALER
 from utils.constants import SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, INPUT_NOISE, SMALL_NUMBER
@@ -587,26 +587,6 @@ class TFModel(Model):
         save_by_file_suffix(metrics_dict, log_file)
 
         return name
-
-    def regularize_weights(self, name: Optional[str], scale: float) -> Optional[tf.Tensor]:
-        """
-        Applies a regularizer to the all non-bias weights in the neural network.
-        """
-        regularizer = get_regularizer(name, scale)
-
-        if regularizer is None:
-            return None
-
-        reg_values: List[tf.Tensor] = []
-        for variable in self.trainable_vars:
-            if 'bias' not in variable.name.lower() and len(variable.get_shape()) > 1 and not any((d == 1 for d in variable.get_shape())):
-                reg = regularizer(variable)
-                reg_values.append(reg)
-
-        if len(reg_values) == 0:
-            return None
-
-        return tf.reduce_sum(tf.stack(reg_values))
 
     def save(self, name: str, data_folders: Dict[DataSeries, str], loss_ops: Optional[List[str]], loss_var_dict: Dict[str, List[str]]):
         """

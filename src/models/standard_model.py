@@ -260,7 +260,7 @@ class StandardModel(TFModel):
         self._ops[LOSS] = tf.reduce_mean(sample_loss)
 
         # If we have a skip RNN, then we apply the L2 update penalty
-        if self.model_type == StandardModelType.SKIP_RNN:
+        if self.model_type == SequenceModelType.SKIP_RNN:
             skip_gates = self._ops[SKIP_GATES]  # [B, T]
             target_updates = self.hypers.model_params['target_updates']
 
