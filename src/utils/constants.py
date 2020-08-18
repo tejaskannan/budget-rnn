@@ -25,6 +25,10 @@ RNN_NAME = 'rnn'
 SKIP_GATES = 'skip-gates'
 NODE_REGEX_FORMAT = '.*{0}.*'
 
+# Constants for Phased and Skip RNNs
+LEAK_RATE = 'leak_rate'
+TARGET_UPDATES = 'target_updates'
+
 # Data format constants
 SAMPLE_ID = 'sample_id'
 DATA_FIELD_FORMAT = '{0}-{1}'

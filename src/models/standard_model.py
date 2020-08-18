@@ -7,6 +7,7 @@ from typing import Optional, Dict, List, Any, DefaultDict, Iterable
 
 from models.tf_model import TFModel
 from layers.cells.cell_factory import make_rnn_cell, CellClass, CellType
+from layers.cells.phased_rnn_cells import PhasedUGRNNCell
 from layers.dense import mlp, dense
 from layers.output_layers import OutputType, compute_binary_classification_output, compute_multi_classification_output
 from dataset.dataset import Dataset, DataSeries
@@ -14,7 +15,7 @@ from utils.hyperparameters import HyperParameters
 from utils.misc import sample_sequence_batch, batch_sample_noise
 from utils.tfutils import get_activation, successive_pooling
 from utils.sequence_model_utils import SequenceModelType
-from utils.constants import ACCURACY, OUTPUT, INPUTS, LOSS, PREDICTION, LOGITS, SMALL_NUMBER
+from utils.constants import ACCURACY, OUTPUT, INPUTS, LOSS, PREDICTION, LOGITS, SMALL_NUMBER, LEAK_RATE
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, NUM_CLASSES
 from utils.constants import EMBEDDING_NAME, TRANSFORM_NAME, AGGREGATION_NAME, OUTPUT_LAYER_NAME, RNN_NAME, SKIP_GATES
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, get_multi_classification_metric
@@ -80,6 +81,9 @@ class StandardModel(TFModel):
             self._placeholders[DROPOUT_KEEP_RATE]: dropout
         }
 
+        if self.model_type == SequenceModelType.PHASED_RNN:
+            feed_dict[self._placeholders[LEAK_RATE]] = self.hypers.model_params['leak_rate'] if is_train else 0.0
+
         return feed_dict
 
     def make_placeholders(self, is_frozen: bool = False):
@@ -100,10 +104,18 @@ class StandardModel(TFModel):
             self._placeholders[DROPOUT_KEEP_RATE] = tf.placeholder(shape=(),
                                                                    dtype=tf.float32,
                                                                    name=DROPOUT_KEEP_RATE)
+            # Phased RNNs have an extra leak rate placeholder
+            if self.model_type == SequenceModelType.PHASED_RNN:
+                self._placeholders[LEAK_RATE] = tf.placeholder(shape=(),
+                                                               dtype=tf.float32,
+                                                               name=LEAK_RATE)
         else:
             self._placeholders[INPUTS] = tf.ones(shape=(1,) + input_shape[1:], dtype=tf.float32, name=INPUTS)
             self._placeholders[OUTPUT] = tf.ones(shape=(1, num_output_features), dtype=output_dtype, name=OUTPUT)
             self._placeholders[DROPOUT_KEEP_RATE] = tf.ones(shape=(), dtype=tf.float32, name=DROPOUT_KEEP_RATE)
+            
+            if self.model_type == SequenceModelType.PHASED_RNN:
+                self._placeholders[LEAK_RATE] = tf.ones(shape=(), dtype=tf.float32, name=LEAK_RATE)
 
     def make_model(self, is_train: bool):
         with tf.variable_scope(MODEL, reuse=tf.AUTO_REUSE):
@@ -181,6 +193,25 @@ class StandardModel(TFModel):
                                                     scope=RNN_NAME)
             transformed = rnn_outputs.output  # [B, T, D]
             self._ops[SKIP_GATES] = tf.squeeze(rnn_outputs.state_update_gate, axis=-1)  # [B, T]
+        elif self.model_type == SequenceModelType.PHASED_RNN:
+            period_init = self.metadata[SEQ_LENGTH] * 0.1
+
+            cell = PhasedUGRNNCell(units=state_size,
+                                   activation=self.hypers.model_params['rnn_activation'],
+                                   on_fraction=self.hypers.model_params['on_fraction'],
+                                   period_init=period_init,
+                                   leak_rate=self.placeholders[LEAK_RATE],
+                                   name=TRANSFORM_NAME)
+            initial_state = cell.get_initial_state(inputs=input_sequence,
+                                                   batch_size=batch_size,
+                                                   dtype=tf.float32)
+
+            rnn_outputs, state = tf.nn.dynamic_rnn(cell=cell,
+                                                   inputs=input_sequence,
+                                                   initial_state=initial_state,
+                                                   dtype=tf.float32,
+                                                   scope=RNN_NAME)
+            transformed = rnn_outputs  # [B, T, D]
         else:
             raise ValueError('Unknown standard model: {0}'.format(self.model_type))
 
@@ -268,7 +299,6 @@ class StandardModel(TFModel):
             update_penalty = tf.square(tf.reduce_sum(skip_gates, axis=-1) - target_updates)  # [B]
             update_loss = tf.reduce_mean(update_penalty)  # Average over batch to get scalar loss
 
-            self._ops['update_penalty'] = update_loss
             self._ops[LOSS] += self.hypers.model_params['update_loss_weight'] * update_loss
 
     def predict_classification(self, test_batch_generator: Iterable[Any],
