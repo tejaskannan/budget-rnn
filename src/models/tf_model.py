@@ -12,11 +12,11 @@ from models.base_model import Model
 from dataset.dataset import Dataset, DataSeries
 from layers.output_layers import OutputType
 from utils.hyperparameters import HyperParameters
-from utils.tfutils import get_optimizer, variables_for_loss_op, get_regularizer
+from utils.tfutils import get_optimizer, variables_for_loss_op
 from utils.file_utils import read_by_file_suffix, save_by_file_suffix, make_dir
 from utils.constants import BIG_NUMBER, NAME_FMT, HYPERS_PATH, GLOBAL_STEP
-from utils.constants import METADATA_PATH, MODEL_PATH, TRAIN_LOG_PATH, GRAPH_PATH
-from utils.constants import LOSS, ACCURACY, OPTIMIZER_OP, F1_SCORE, INPUTS, OUTPUT, SAMPLE_ID
+from utils.constants import METADATA_PATH, MODEL_PATH, TRAIN_LOG_PATH
+from utils.constants import LOSS, ACCURACY, OPTIMIZER_OP, INPUTS, OUTPUT, SAMPLE_ID
 from utils.constants import TRAIN, VALID, LABEL_MAP, NUM_CLASSES, REV_LABEL_MAP
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, INPUT_SCALER, OUTPUT_SCALER
 from utils.constants import SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, INPUT_NOISE, SMALL_NUMBER
@@ -153,13 +153,13 @@ class TFModel(Model):
         self.metadata[LABEL_MAP] = label_map
         self.metadata[REV_LABEL_MAP] = reverse_label_map
 
-    def make_placeholders(self):
+    def make_placeholders(self, is_frozen: bool):
         """
         Creates placeholders for this model.
         """
         pass
 
-    def make_model(self):
+    def make_model(self, is_train: bool):
         """
         Builds the computational graph for this model.
         """
@@ -418,21 +418,12 @@ class TFModel(Model):
             if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
                 train_ops_to_run += self.accuracy_op_names
 
-            # train_ops_to_run.extend(['skip-gates', 'update_penalty', 'transformed'])
-
             train_batch_counter = 1
             for batch in train_generator:
                 feed_dict = self.batch_to_feed_dict(batch, is_train=True, epoch_num=epoch)
 
                 # Run the training operations
                 train_results = self.execute(feed_dict, train_ops_to_run)
-
-                ## skip_gates = train_results['skip-gates'][0]
-                # if any([abs(x) < SMALL_NUMBER for x in skip_gates]):
-                # print('Skip Gates: {0}'.format(train_results['skip-gates']))
-                # print('Update Penalty: {0}'.format(train_results['update_penalty']))
-                ## print('Transformed: {0}'.format(train_results['transformed']))
-                # print('==========')
 
                 batch_loss = 0.0
                 for loss_op_name in self.loss_op_names:
@@ -567,10 +558,10 @@ class TFModel(Model):
                             has_improved[loss_op_name] = True
 
             # Save model if necessary
-            loss_ops_to_save = list(sorted(loss_ops_to_save))
-            if len(loss_ops_to_save) > 0:
-                print('Saving model for operations: {0}'.format(','.join(loss_ops_to_save)))
-                self.save(name=name, data_folders=dataset.data_folders, loss_ops=loss_ops_to_save, loss_var_dict=loss_var_dict)
+            loss_ops_list = list(sorted(loss_ops_to_save))
+            if len(loss_ops_list) > 0:
+                print('Saving model for operations: {0}'.format(','.join(loss_ops_list)))
+                self.save(name=name, data_folders=dataset.data_folders, loss_ops=loss_ops_list, loss_var_dict=loss_var_dict)
 
             # Increment the improvement counter
             for loss_op, improved_status in has_improved.items():
@@ -596,26 +587,6 @@ class TFModel(Model):
         save_by_file_suffix(metrics_dict, log_file)
 
         return name
-
-    def regularize_weights(self, name: Optional[str], scale: float) -> Optional[tf.Tensor]:
-        """
-        Applies a regularizer to the all non-bias weights in the neural network.
-        """
-        regularizer = get_regularizer(name, scale)
-
-        if regularizer is None:
-            return None
-
-        reg_values: List[tf.Tensor] = []
-        for variable in self.trainable_vars:
-            if 'bias' not in variable.name.lower() and len(variable.get_shape()) > 1 and not any((d == 1 for d in variable.get_shape())):
-                reg = regularizer(variable)
-                reg_values.append(reg)
-
-        if len(reg_values) == 0:
-            return None
-
-        return tf.reduce_sum(tf.stack(reg_values))
 
     def save(self, name: str, data_folders: Dict[DataSeries, str], loss_ops: Optional[List[str]], loss_var_dict: Dict[str, List[str]]):
         """

@@ -34,11 +34,11 @@ class DecisionTreeModel(TraditionalModel):
 
         if self.tree_type == DecisionTreeType.STANDARD:
             self._model = DecisionTreeClassifier(criterion=self.hypers.model_params['criterion'],
-                                                max_depth=self.hypers.model_params['max_depth'])
+                                                 max_depth=self.hypers.model_params['max_depth'])
         elif self.tree_type == DecisionTreeType.RANDOM_FOREST:
             self._model = RandomForestClassifier(n_estimators=self.hypers.model_params['num_estimators'],
-                                                criterion=self.hypers.model_params['criterion'],
-                                                max_depth=self.hypers.model_params['max_depth'])
+                                                 criterion=self.hypers.model_params['criterion'],
+                                                 max_depth=self.hypers.model_params['max_depth'])
         elif self.tree_type == DecisionTreeType.ADA_BOOST:
             base_estimator = DecisionTreeClassifier(criterion=self.hypers.model_params['criterion'],
                                                     max_depth=self.hypers.model_params['max_depth'])

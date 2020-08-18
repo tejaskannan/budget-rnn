@@ -69,7 +69,7 @@ class SampleUGRNNCell(tf.nn.rnn_cell.RNNCell):
             fusion_gate = tf.math.sigmoid(fusion + self._b_fusion)  # [B, D]
             fused_state = fusion_gate * prev_state + (1.0 - fusion_gate) * state
 
-            input_state_concat = tf.concat([inputs, fused_state], axis=-1)  # [B, 2 * D]
+            input_state_concat = tf.concat([fused_state, inputs], axis=-1)  # [B, 2 * D]
             update = tf.matmul(input_state_concat, self._W_update)  # [B, D]
             update_gate = tf.math.sigmoid(update + self._b_update + 1)  # [B, D]
 

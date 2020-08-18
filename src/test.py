@@ -50,7 +50,7 @@ def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperPa
     model.restore(name=model_name, is_train=False, is_frozen=False)
 
     # Test the model
-    print('Starting model testing...')
+    print('Starting evaluation on {0} set...'.format(series.name.capitalize()))
     test_results = model.predict(dataset=dataset,
                                  test_batch_size=batch_size,
                                  max_num_batches=max_num_batches,
@@ -66,7 +66,7 @@ def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperPa
         result_file = os.path.join(save_folder, TEST_LOG_PATH.format(model_name))
 
     save_by_file_suffix([test_results], result_file)
-    print('Completed model testing.')
+    print('Completed evaluation.')
 
 
 if __name__ == '__main__':

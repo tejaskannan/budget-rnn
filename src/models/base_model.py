@@ -18,7 +18,7 @@ class Model:
         self.metadata: Dict[str, Any] = dict()
 
         # Get the model output type
-        self._output_type = OutputType[self.hypers.model_params['output_type'].upper()] 
+        self._output_type = OutputType[self.hypers.model_params['output_type'].upper()]
 
         make_dir(self.save_folder)
         self.name = 'model'  # Default name
@@ -37,16 +37,15 @@ class Model:
     def predict(self, dataset: Dataset,
                 test_batch_size: Optional[int],
                 max_num_batches: Optional[int],
-                flops_dict: Optional[Dict[str, int]],
                 series: DataSeries = DataSeries.TEST) -> DefaultDict[str, Dict[str, Any]]:
         """
         Execute the model to produce a prediction for the given input sample.
 
         Args:
-            dataset: Dataset object used to create input tensors.
+            dataset: Dataset object used to create input tensors
             test_batch_size: Batch size to use during testing
             max_num_batches: Maximum number of batches to perform testing on
-            flops_dict: Dictionary of FLOPS for each output operation
+            series: Data series from which to compute predictions for
         Returns:
             The predicted output produced by the model.
         """
@@ -54,24 +53,21 @@ class Model:
         test_batch_generator = dataset.minibatch_generator(series=series,
                                                            batch_size=test_batch_size,
                                                            metadata=self.metadata,
-                                                           should_shuffle=False,
-                                                           drop_incomplete_batches=True)
+                                                           should_shuffle=False)
 
         if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
-            return self.predict_classification(test_batch_generator, test_batch_size, max_num_batches, flops_dict)
+            return self.predict_classification(test_batch_generator, test_batch_size, max_num_batches)
         else:  # Regression
-            return self.predict_regression(test_batch_generator, test_batch_size, max_num_batches, flops_dict)
+            return self.predict_regression(test_batch_generator, test_batch_size, max_num_batches)
 
     def predict_classification(self, test_batch_generator: Iterable[Any],
                                batch_size: int,
-                               max_num_batches: Optional[int],
-                               flops_dict: Optional[Dict[str, int]]) -> DefaultDict[str, Dict[str, float]]:
+                               max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, float]]:
         raise NotImplementedError()
 
     def predict_regression(self, test_batch_generator: Iterable[Any],
                            batch_size: int,
-                           max_num_batches: Optional[int],
-                           flops_dict: Optional[Dict[str, int]])-> DefaultDict[str, Dict[str, float]]:
+                           max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, float]]:
         raise NotImplementedError()
 
     def init(self):

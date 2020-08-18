@@ -127,7 +127,7 @@ class NpzDataManager(DataManager):
             return
 
         self._arrays = [np.load(data_file, mmap_mode='r') for data_file in data_files]
-        
+
         self._array_lengths = [int(len(arr) / len(self._fields)) for arr in self._arrays]
         self.set_length(sum(self._array_lengths))
 

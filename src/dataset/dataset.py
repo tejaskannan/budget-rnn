@@ -29,6 +29,7 @@ class Dataset:
 
         # Extract the name from the given folder
         match = re.match('^.+/(.+)/.+/.+$', self.data_folders[DataSeries.TRAIN])
+        assert match is not None, 'Could not extract name from folder: {0}'.format(self.data_folders[DataSeries.TRAIN])
         self.dataset_name = match.group(1).replace('_', '-')
 
         # Create data managers for each partition
@@ -63,12 +64,12 @@ class Dataset:
 
         return data_series.iterate(should_shuffle=False, batch_size=DEFAULT_BATCH_SIZE)
 
-    def minibatch_generator(self, series: DataSeries,
-                                  batch_size: int,
-                                  metadata: Dict[str, Any],
-                                  should_shuffle: bool,
-                                  drop_incomplete_batches: bool = False,
-                                  order_by_output: bool = False) -> Generator[DefaultDict[str, List[Any]], None, None]:
+    def minibatch_generator(self,
+                            series: DataSeries,
+                            batch_size: int,
+                            metadata: Dict[str, Any],
+                            should_shuffle: bool,
+                            drop_incomplete_batches: bool = False) -> Generator[DefaultDict[str, List[Any]], None, None]:
         """
         Generates minibatches for the given dataset. Each minibatch is expressed as a feed dict with string keys. These keys
         must be translated to placeholder tensors before passing the dictionary as an input to Tensorflow.
@@ -90,10 +91,7 @@ class Dataset:
             data_series.load()
 
         # Create iterator over the data
-        if order_by_output:
-            data_iterator = data_series.order_by_field(field=OUTPUT, min_length=5, max_length=15)
-        else:
-            data_iterator = data_series.iterate(should_shuffle=should_shuffle, batch_size=batch_size)
+        data_iterator = data_series.iterate(should_shuffle=should_shuffle, batch_size=batch_size)
 
         # Set training flag
         is_train = series == DataSeries.TRAIN

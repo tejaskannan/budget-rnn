@@ -8,7 +8,7 @@ from utils.constants import INPUT_SHAPE, INPUT_SCALER, OUTPUT_SCALER, NUM_OUTPUT
 from utils.constants import NUM_CLASSES, LABEL_MAP
 
 
-class RNNSampleDataset(Dataset):
+class SequenceDataset(Dataset):
 
     def tensorize(self, sample: Dict[str, Any], metadata: Dict[str, Any], is_train: bool) -> Dict[str, np.ndarray]:
 

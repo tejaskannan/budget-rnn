@@ -1,6 +1,5 @@
 import os
 import numpy as np
-import time
 from datetime import datetime
 from sklearn.preprocessing import StandardScaler
 from collections import defaultdict
@@ -43,10 +42,10 @@ class TraditionalModel(Model):
         unique_labels: Set[Any] = set()
         for sample in dataset.iterate_series(series=DataSeries.TRAIN):
             input_sample = np.array(sample[INPUTS]).reshape(-1)
-            if np.any(np.isnan(input_sample)) or np.any(input_sample == None):
+            if np.any(np.isnan(input_sample)) or np.any(input_sample is None):
                 continue
 
-            if sample[OUTPUT] == None:
+            if sample[OUTPUT] is None:
                 continue
 
             input_samples.append(input_sample)
@@ -138,42 +137,32 @@ class TraditionalModel(Model):
 
     def predict_classification(self, test_batch_generator: Iterable[Dict[str, Any]],
                                test_batch_size: int,
-                               max_num_batches: Optional[int],
-                               flops_dict: Dict[str, Any]) -> DefaultDict[str, Dict[str, Any]]:
+                               max_num_batches: Optional[int]) -> DefaultDict[str, Dict[str, Any]]:
         predictions_list: List[np.ndarray] = []
         labels_list: List[np.ndarray] = []
-        latencies: List[float] = []
 
         for batch_num, test_batch in enumerate(test_batch_generator):
 
             inputs = np.reshape(test_batch[INPUTS], newshape=(-1, self.metadata[INPUT_SHAPE]))
-
-            start = time.time()
             predictions = self.model.predict(inputs)
-            elapsed = time.time() - start
 
             labels_list.append(np.vstack(test_batch[OUTPUT]))
             predictions_list.append(np.vstack(predictions))
-            latencies.append(elapsed)
 
             if max_num_batches is not None and batch_num >= max_num_batches:
                 break
 
         labels = np.vstack(labels_list)
         predictions = np.vstack(predictions_list)
-        avg_latency = np.average(latencies[1:])
-        flops = flops_dict[PREDICTION]
 
         result: DefaultDict[str, Dict[str, float]] = defaultdict(dict)
         for metric_name in ClassificationMetric:
             if self.output_type == OutputType.BINARY_CLASSIFICATION:
-                metric_value = get_binary_classification_metric(metric_name, predictions, labels, avg_latency, 1, flops)
+                metric_value = get_binary_classification_metric(metric_name, predictions, labels)
             else:
-                metric_value = get_multi_classification_metric(metric_name, predictions, labels, avg_latency, 1, flops, self.metadata[NUM_CLASSES])
+                metric_value = get_multi_classification_metric(metric_name, predictions, labels, self.metadata[NUM_CLASSES])
 
             result[MODEL][metric_name.name] = metric_value
-
-        result[MODEL][ALL_LATENCY] = latencies[1:]
 
         return result
 
