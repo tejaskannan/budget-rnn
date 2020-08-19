@@ -1,9 +1,11 @@
 """
 This file implements various Phased RNN cells. These
 cells are directly based on the Phased LSTM design described
-in the paper linked below.
-
+in the paper below.
 https://papers.nips.cc/paper/6310-phased-lstm-accelerating-recurrent-network-training-for-long-or-event-based-sequences.pdf
+
+We also use the following repository as a model for this implementation.
+https://github.com/philipperemy/tensorflow-phased-lstm
 """
 import tensorflow as tf
 from collections import namedtuple
@@ -14,6 +16,7 @@ from utils.constants import SMALL_NUMBER
 
 
 PhasedUGRNNStateTuple = namedtuple('PhasedUGRNNStateTuple', ['state', 'time'])
+PhasedUGRNNOutputTuple = namedtuple('PhasedUGRNNOutputTuple', ['output', 'time_gate'])
 
 
 def phi(time: tf.Tensor, shift: tf.Tensor, period: tf.Tensor) -> tf.Tensor:
@@ -67,7 +70,7 @@ class PhasedUGRNNCell(tf.nn.rnn_cell.RNNCell):
                                  shape=[1, units],
                                  trainable=True)
 
-        self.period = tf.get_variable(name='{0}-shift'.format(name),
+        self.period = tf.get_variable(name='{0}-period'.format(name),
                                       initializer=tf.random_uniform_initializer(minval=0.0, maxval=period_init, dtype=tf.float32),
                                       shape=[],
                                       trainable=True)
@@ -82,8 +85,8 @@ class PhasedUGRNNCell(tf.nn.rnn_cell.RNNCell):
         return PhasedUGRNNStateTuple(self._units, 1)
 
     @property
-    def output_size(self) -> int:
-        return self._units
+    def output_size(self) -> PhasedUGRNNOutputTuple:
+        return PhasedUGRNNOutputTuple(self._units, 1)
 
     def get_initial_state(self, inputs: Optional[tf.Tensor], batch_size: Optional[int], dtype: Any) -> PhasedUGRNNStateTuple:
         """
@@ -104,7 +107,7 @@ class PhasedUGRNNCell(tf.nn.rnn_cell.RNNCell):
         return PhasedUGRNNStateTuple(state=tf.tile(initial_state, multiples=(batch_size, 1)),
                                      time=tf.tile(initial_time, multiples=(batch_size, 1)))
 
-    def __call__(self, inputs: tf.Tensor, state: PhasedUGRNNStateTuple, scope=None) -> Tuple[tf.Tensor, PhasedUGRNNStateTuple]:
+    def __call__(self, inputs: tf.Tensor, state: PhasedUGRNNStateTuple, scope: Optional[str] = None) -> Tuple[PhasedUGRNNOutputTuple, PhasedUGRNNStateTuple]:
         # Unpack the previous state
         prev_state, time = state
 
@@ -128,5 +131,6 @@ class PhasedUGRNNCell(tf.nn.rnn_cell.RNNCell):
             next_state = kt * next_cell_state + (1 - kt) * prev_state
 
             phased_state = PhasedUGRNNStateTuple(next_state, time + 1)
+            phased_output = PhasedUGRNNOutputTuple(next_state, kt)
 
-        return next_state, phased_state
+        return phased_output, phased_state
