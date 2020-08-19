@@ -194,7 +194,7 @@ class StandardModel(TFModel):
             transformed = rnn_outputs.output  # [B, T, D]
             self._ops[SKIP_GATES] = tf.squeeze(rnn_outputs.state_update_gate, axis=-1)  # [B, T]
         elif self.model_type == SequenceModelType.PHASED_RNN:
-            period_init = self.metadata[SEQ_LENGTH] * 0.1
+            period_init = self.metadata[SEQ_LENGTH]
 
             cell = PhasedUGRNNCell(units=state_size,
                                    activation=self.hypers.model_params['rnn_activation'],
@@ -211,7 +211,7 @@ class StandardModel(TFModel):
                                                    initial_state=initial_state,
                                                    dtype=tf.float32,
                                                    scope=RNN_NAME)
-            transformed = rnn_outputs  # [B, T, D]
+            transformed = rnn_outputs.output  # [B, T, D]
         else:
             raise ValueError('Unknown standard model: {0}'.format(self.model_type))
 
