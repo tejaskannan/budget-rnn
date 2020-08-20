@@ -161,11 +161,6 @@ class AdaptiveModel(TFModel):
             feed_dict = self.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
             results = self.execute(ops=self.prediction_ops, feed_dict=feed_dict)
 
-            #debug_ops = ['embedding_0', 'embedding_1', 'transformed_0', 'transformed_1', 'fusion_0', 'fusion_1']
-            #debug_results = self.execute(ops=debug_ops, feed_dict=feed_dict)
-            #for op_name in debug_ops:
-            #    print('{0}: {1}'.format(op_name, debug_results[op_name]))
-
             predictions.append(results[PREDICTION])
             labels.append(np.vstack(batch[OUTPUT]))
 
