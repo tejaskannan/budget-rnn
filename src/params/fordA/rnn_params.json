@@ -8,8 +8,7 @@
 	"patience": 20,
     "model": "standard",
     "dataset_type": "standard",
-    "input_noise": 0.0001,
-    "batch_noise": 0.0,
+    "input_noise": 0.001,
     "seq_length": 20,
 	"model_params": {
 		"state_size": 10,
@@ -17,12 +16,12 @@
 		"output_hidden_activation": "leaky_relu",
         "embedding_activation": "leaky_relu",
         "output_type": "multi_classification",
-        "rnn_cell_type": "gru",
+        "rnn_cell_type": "ugrnn",
         "rnn_layers": 1,
         "rnn_activation": "tanh",
 		"model_type": "rnn",
         "loss_mode": "cross-entropy",
         "normalize_inputs": true,
-        "use_loss_weights": false
+        "loss_weights": "linear"
 	}
 }

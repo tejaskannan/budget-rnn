@@ -4,7 +4,7 @@
 	"learning_rate": 0.0001,
 	"gradient_clip": 1,
 	"epochs": 250,
-	"patience": 20,
+	"patience": 25,
     "model": "standard",
     "input_noise": 0.001,
     "dataset_type": "standard",
@@ -17,8 +17,8 @@
         "mlp_hidden_units": [12, 12],
         "mlp_activation": "leaky_relu",
 		"model_type": "nbow",
-        "loss_mode": "cross-entropy",
         "normalize_inputs": true,
-        "embedding_activation": "leaky_relu"
+        "embedding_activation": "leaky_relu",
+	"loss_weights": "linear"
 	}
 }

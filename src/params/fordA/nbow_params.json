@@ -19,6 +19,6 @@
 		"model_type": "nbow",
         "normalize_inputs": true,
         "embedding_activation": "leaky_relu",
-        "use_loss_weights": false
+        "loss_weights": "linear"
 	}
 }

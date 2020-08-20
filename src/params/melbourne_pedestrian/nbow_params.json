@@ -1,10 +1,10 @@
 {
 	"batch_size": 8,
-	"dropout_keep_rate": 1.0,
+	"dropout_keep_rate": 0.9,
 	"learning_rate": 0.0001,
 	"gradient_clip": 1,
 	"epochs": 250,
-	"patience": 20,
+	"patience": 25,
     "model": "standard",
     "input_noise": 0.001,
     "dataset_type": "standard",
@@ -18,6 +18,7 @@
         "mlp_activation": "leaky_relu",
 		"model_type": "nbow",
         "normalize_inputs": true,
-        "embedding_activation": "leaky_relu"
+        "embedding_activation": "leaky_relu",
+	"loss_weights": "linear"
 	}
 }
