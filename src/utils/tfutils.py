@@ -171,6 +171,41 @@ def majority_vote(logits: tf.Tensor) -> tf.Tensor:
     return predictions_array.stack()
 
 
+def make_tf_rnn_cell(cell_type: str, num_units: int, activation: str, layers: int, name_prefix: Optional[str]) -> tf.nn.rnn_cell.MultiRNNCell:
+
+    def make_cell(cell_type: str, num_units: int, activation: str, name: str):
+        if cell_type == 'vanilla':
+            return tf.nn.rnn_cell.BasicRNNCell(num_units=num_units,
+                                               activation=get_activation(activation),
+                                               name=name)
+        elif cell_type == 'gru':
+            return tf.nn.rnn_cell.GRUCell(num_units=num_units,
+                                          activation=get_activation(activation),
+                                          kernel_initializer=tf.glorot_uniform_initializer(),
+                                          bias_initializer=tf.random_uniform_initializer(minval=-0.7, maxval=0.7),
+                                          name=name)
+        elif cell_type == 'lstm':
+            return tf.nn.rnn_cell.LSTMCell(num_units=num_units,
+                                           activation=get_activation(activation),
+                                           initializer=tf.glorot_uniform_initializer(),
+                                           name=name)
+        elif cell_type == 'ugrnn':
+            return tf.contrib.rnn.UGRNNCell(num_units=num_units,
+                                            initializer=tf.glorot_uniform_initializer())
+
+        raise ValueError(f'Unknown cell type: {cell_type}')
+
+    cell_type = cell_type.lower()
+    cells: List[tf.rnn_cell.RNNCell] = []
+    name_prefix = f'{name_prefix}-cell' if name_prefix is not None else 'cell'
+    for i in range(layers):
+        name = f'{name_prefix}-{i}'
+        cell = make_cell(cell_type, num_units, activation, name)
+        cells.append(cell)
+
+    return tf.nn.rnn_cell.MultiRNNCell(cells)
+
+
 def variables_for_loss_op(variables: List[tf.Variable], loss_op: str) -> List[tf.Variable]:
     """
     Gets all variables that have a gradient with respect to the given loss operation.

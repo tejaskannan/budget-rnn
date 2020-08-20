@@ -23,6 +23,7 @@ LOSS_WEIGHTS = 'loss_weights'
 RNN_CELL_NAME = 'rnn_cell'
 RNN_NAME = 'rnn'
 SKIP_GATES = 'skip-gates'
+PHASE_GATES = 'phase-gates'
 NODE_REGEX_FORMAT = '.*{0}.*'
 
 # Constants for Phased and Skip RNNs
