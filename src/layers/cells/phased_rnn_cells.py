@@ -12,7 +12,7 @@ from collections import namedtuple
 from typing import Optional, Any, Tuple
 
 from utils.tfutils import get_activation
-from utils.constants import SMALL_NUMBER
+from utils.constants import SMALL_NUMBER, ONE_HALF
 
 
 PhasedUGRNNStateTuple = namedtuple('PhasedUGRNNStateTuple', ['state', 'time'])
@@ -26,8 +26,10 @@ def phi(time: tf.Tensor, shift: tf.Tensor, period: tf.Tensor) -> tf.Tensor:
 def time_gate(time: tf.Tensor, shift: tf.Tensor, on_fraction: tf.Tensor, period: tf.Tensor, leak_rate: tf.Tensor) -> tf.Tensor:
     phi_t = phi(time=time, shift=shift, period=period)
 
-    mask_1 = tf.cast(phi_t < 0.5 * on_fraction, dtype=tf.float32)
-    mask_2 = tf.cast(tf.logical_and(phi_t >= 0.5 * on_fraction, phi_t < on_fraction), dtype=tf.float32)
+    half_on_fraction = ONE_HALF * on_fraction
+
+    mask_1 = tf.cast(phi_t < half_on_fraction, dtype=tf.float32)
+    mask_2 = tf.cast(tf.logical_and(phi_t >= half_on_fraction, phi_t < on_fraction), dtype=tf.float32)
     mask_3 = tf.cast(phi_t >= on_fraction, dtype=tf.float32)
 
     linear_1 = 2 * phi_t / on_fraction
