@@ -13,9 +13,9 @@ from layers.output_layers import OutputType, compute_binary_classification_outpu
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.misc import sample_sequence_batch, batch_sample_noise
-from utils.tfutils import get_activation, successive_pooling
+from utils.tfutils import get_activation, successive_pooling, make_tf_rnn_cell
 from utils.sequence_model_utils import SequenceModelType
-from utils.constants import ACCURACY, OUTPUT, INPUTS, LOSS, PREDICTION, LOGITS, SMALL_NUMBER, LEAK_RATE
+from utils.constants import ACCURACY, OUTPUT, INPUTS, LOSS, PREDICTION, LOGITS, SMALL_NUMBER, LEAK_RATE, PHASE_GATES
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, NUM_CLASSES
 from utils.constants import EMBEDDING_NAME, TRANSFORM_NAME, AGGREGATION_NAME, OUTPUT_LAYER_NAME, RNN_NAME, SKIP_GATES
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, get_multi_classification_metric
@@ -36,6 +36,10 @@ class StandardModel(TFModel):
     @property
     def model_type(self) -> SequenceModelType:
         return self._model_type
+
+    @property
+    def seq_length(self) -> int:
+        return self.metadata[SEQ_LENGTH]
 
     @property
     def prediction_ops(self) -> List[str]:
@@ -162,11 +166,11 @@ class StandardModel(TFModel):
                                              name='{0}-pool'.format(AGGREGATION_NAME),
                                              seq_length=self.metadata[SEQ_LENGTH])
         elif self.model_type == SequenceModelType.RNN:
-            cell = make_rnn_cell(cell_class=CellClass.STANDARD,
-                                 cell_type=CellType[self.hypers.model_params['rnn_cell_type'].upper()],
-                                 units=state_size,
-                                 activation=self.hypers.model_params['rnn_activation'],
-                                 name=TRANSFORM_NAME)
+            cell = make_tf_rnn_cell(self.hypers.model_params['rnn_cell_type'],
+                                    num_units=state_size,
+                                    layers=1,
+                                    activation=self.hypers.model_params['rnn_activation'],
+                                    name_prefix=TRANSFORM_NAME)
 
             initial_state = cell.zero_state(batch_size=batch_size, dtype=tf.float32)
             rnn_outputs, state = tf.nn.dynamic_rnn(cell=cell,
@@ -212,7 +216,7 @@ class StandardModel(TFModel):
                                                    dtype=tf.float32,
                                                    scope=RNN_NAME)
             transformed = rnn_outputs.output  # [B, T, D]
-            self._ops['time_gate'] = rnn_outputs.time_gate
+            self._ops[PHASE_GATES] = tf.squeeze(rnn_outputs.time_gate, axis=-1)  # [B, T]
         else:
             raise ValueError('Unknown standard model: {0}'.format(self.model_type))
 

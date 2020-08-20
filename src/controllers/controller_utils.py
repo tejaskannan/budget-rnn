@@ -5,11 +5,11 @@ from collections import namedtuple
 from typing import Dict, Any, Tuple, List, Optional
 
 from models.adaptive_model import AdaptiveModel
-from models.standard_model import StandardModel, StandardModelType, SKIP_GATES
+from models.standard_model import StandardModel
 from dataset.dataset import Dataset, DataSeries
 from utils.file_utils import save_by_file_suffix, read_by_file_suffix
-from utils.rnn_utils import get_logits_name, get_stop_output_name
-from utils.constants import OUTPUT, LOGITS, SEQ_LENGTH
+from utils.sequence_model_utils import SequenceModelType
+from utils.constants import OUTPUT, LOGITS, SEQ_LENGTH, SKIP_GATES, PHASE_GATES, STOP_OUTPUT_NAME
 from controllers.power_utils import get_avg_power
 
 
@@ -26,7 +26,7 @@ def clip(x: int, bounds: Tuple[int, int]) -> int:
 
 
 def save_test_log(accuracy: float, power: float, valid_accuracy: Optional[float], budget: float, key: str, output_file: str):
-    test_log: Dict[float, Dict[str, Any]] = dict()
+    test_log: Dict[str, Dict[str, Any]] = dict()
     if os.path.exists(output_file):
         test_log = list(read_by_file_suffix(output_file))[0]
 
@@ -89,6 +89,21 @@ def get_budget_index(budget: float, valid_accuracy: np.ndarray, max_time: int, p
     return best_index
 
 
+def concat_model_results(model_results: List[ModelResults]) -> ModelResults:
+    """
+    Stacks each field of the given results into a single array. This is useful
+    for Skip RNN and Phased RNN systems in which each output is a separate model.
+    """
+    predictions = np.concatenate([r.predictions for r in model_results], axis=1)  # [N, L]
+    labels = model_results[0].labels  # [N, 1]
+    stop_probs = [r.stop_probs for r in model_results]
+    accuracy = [r.accuracy for r in model_results]
+    return ModelResults(predictions=predictions,
+                        labels=labels,
+                        stop_probs=stop_probs,
+                        accuracy=accuracy)
+
+
 def execute_adaptive_model(model: AdaptiveModel, dataset: Dataset, series: DataSeries) -> ModelResults:
     """
     Executes the neural network on the given data series. We do this in a separate step
@@ -108,8 +123,7 @@ def execute_adaptive_model(model: AdaptiveModel, dataset: Dataset, series: DataS
     num_outputs = model.num_outputs
 
     # Operations to execute
-    logit_ops = [get_logits_name(i) for i in range(num_outputs)]
-    stop_output_ops = [get_stop_output_name(i) for i in range(num_outputs)]
+    ops = [LOGITS, STOP_OUTPUT_NAME]
 
     # Make the batch generator. Don't shuffle so we have consistent results.
     data_generator = dataset.minibatch_generator(series=series,
@@ -120,19 +134,17 @@ def execute_adaptive_model(model: AdaptiveModel, dataset: Dataset, series: DataS
     for batch_num, batch in enumerate(data_generator):
         # Compute the predicted log probabilities
         feed_dict = model.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
-        model_results = model.execute(feed_dict, logit_ops + stop_output_ops)
+        model_results = model.execute(feed_dict, ops=ops)
 
         # Concatenate logits into a [B, L, C] array (logit_ops is already ordered by level).
         # For reference, L is the number of levels and C is the number of classes
-        logits_concat = np.concatenate([np.expand_dims(model_results[op], axis=1) for op in logit_ops], axis=1)
+        logits = model_results[LOGITS]
 
-        # Concatenate stop outputs into a [B, L] array if supported by this model
-        stop_outputs = [np.expand_dims(model_results[op], axis=1) for op in stop_output_ops if op in model_results]
-        stop_output_concat = np.concatenate(stop_outputs, axis=1)
-        stop_probs.append(stop_output_concat) 
+        stop_output = model_results[STOP_OUTPUT_NAME]  # [B, L]
+        stop_probs.append(stop_output)
 
         # Compute the predictions for each level
-        level_pred = np.argmax(logits_concat, axis=-1)  # [B, L]
+        level_pred = np.argmax(logits, axis=-1)  # [B, L]
         level_predictions.append(level_pred)
 
         labels.append(np.array(batch[OUTPUT]).reshape(-1, 1))
@@ -199,8 +211,8 @@ def execute_skip_rnn_model(model: StandardModel, dataset: Dataset, series: DataS
     Returns:
         A model result tuple containing the inference results. The sample fractions are placed in the stop_probs element.
     """
-    assert model.model_type == StandardModelType.SKIP_RNN, 'Must provide a Skip RNN'
-    seq_length = model.metadata[SEQ_LENGTH]
+    assert model.model_type == SequenceModelType.SKIP_RNN, 'Must provide a Skip RNN'
+    seq_length = model.seq_length
 
     predictions: List[np.ndarray] = []
     labels: List[np.ndarray] = []
@@ -225,6 +237,62 @@ def execute_skip_rnn_model(model: StandardModel, dataset: Dataset, series: DataS
         # because it is impossible for the models to consume zero samples.
         num_samples = np.sum(model_results[SKIP_GATES], axis=-1).astype(int) - 1  # [B]
         counts = np.bincount(num_samples, minlength=seq_length)
+        sample_counts += counts  # [T]
+
+        labels.append(np.array(batch[OUTPUT]).reshape(-1, 1))
+
+    # Save results as attributes
+    predictions = np.concatenate(predictions, axis=0)
+    labels = np.concatenate(labels, axis=0)  # [N, 1]
+    accuracy = np.average((predictions == labels).astype(float), axis=0)
+
+    # Normalize the sample counts
+    sample_counts = sample_counts.astype(float)
+    sample_fractions = sample_counts / np.sum(sample_counts)
+
+    return ModelResults(predictions=predictions, labels=labels, stop_probs=sample_fractions, accuracy=accuracy)
+
+
+def execute_phased_rnn_model(model: StandardModel, dataset: Dataset, series: DataSeries) -> ModelResults:
+    """
+    Executes the neural network on the given data series. We do this in a separate step
+    to avoid recomputing for multiple budgets. Executing the neural network is relatively expensive.
+
+    Args:
+        model: The Phased RNN standard model used to perform inference
+        dataset: The dataset to perform inference on
+        series: The data series to extract. This is usually the TEST set.
+    Returns:
+        A model result tuple containing the inference results. The sample fractions are placed in the stop_probs element.
+    """
+    assert model.model_type == SequenceModelType.PHASED_RNN, 'Must provide a Phased RNN'
+    seq_length = model.seq_length
+
+    predictions: List[np.ndarray] = []
+    labels: List[np.ndarray] = []
+    sample_counts = np.zeros(shape=(seq_length, ), dtype=np.int64)
+
+    # Make the batch generator. Don't shuffle so we have consistent results.
+    data_generator = dataset.minibatch_generator(series=series,
+                                                 batch_size=BATCH_SIZE,
+                                                 metadata=model.metadata,
+                                                 should_shuffle=False)
+
+    for batch_num, batch in enumerate(data_generator):
+        # Compute the predicted log probabilities
+        feed_dict = model.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
+        model_results = model.execute(feed_dict, [LOGITS, PHASE_GATES])
+
+        # Compute the predictions for each level
+        pred = np.argmax(model_results[LOGITS], axis=-1)  # [B]
+        predictions.append(pred.reshape(-1, 1))
+
+        # Collect the number of samples processed for each batch element. We subtract 1
+        # because it is impossible for the models to consume zero samples.
+        phase_gates = model_results[PHASE_GATES]  # [B, T]
+        num_samples = np.count_nonzero(phase_gates, axis=-1) - 1  # [B]
+        counts = np.bincount(num_samples, minlength=seq_length)
+
         sample_counts += counts  # [T]
 
         labels.append(np.array(batch[OUTPUT]).reshape(-1, 1))

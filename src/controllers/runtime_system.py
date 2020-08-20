@@ -8,12 +8,11 @@ from typing import List, Dict, Any
 from controllers.controller_utils import clip, get_budget_index, ModelResults
 from controllers.power_utils import get_power_estimates
 from controllers.model_controllers import AdaptiveController, FixedController, RandomController, BudgetWrapper
-from controllers.model_controllers import CONTROLLER_PATH, levels_to_execute, classification_for_levels, SkipRNNController
+from controllers.model_controllers import CONTROLLER_PATH, levels_to_execute, classification_for_levels, MultiModelController
 from controllers.runtime_controllers import PIDController, BudgetController, BudgetDistribution, PowerSetpoint
 from dataset.dataset import DataSeries, Dataset
 from models.adaptive_model import AdaptiveModel
 from models.tf_model import TFModel
-from utils.rnn_utils import get_logits_name, get_stop_output_name
 from utils.file_utils import extract_model_name
 from utils.constants import INPUTS, OUTPUT, SEQ_LENGTH, NUM_CLASSES, SEQ_LENGTH, SMALL_NUMBER
 
@@ -119,7 +118,9 @@ class RuntimeSystem:
 
         # For some systems, we can load the controller now. Otherwise, we wait until later
         if self._system_type == SystemType.ADAPTIVE:
-            self._controller = AdaptiveController.load(os.path.join(save_folder, CONTROLLER_PATH.format(model_name)), dataset_folder=dataset_folder)
+            self._controller = AdaptiveController.load(os.path.join(save_folder, CONTROLLER_PATH.format(model_name)),
+                                                       dataset_folder=dataset_folder,
+                                                       model_path=model_path)
         else:
             self._controller = None
 
@@ -166,12 +167,13 @@ class RuntimeSystem:
             # Create the fixed policy based on the model type. Skip RNNs use a similar strategy as those seen in
             # other model types. For Skip RNNs, however, the policy applies to model selection as opposed to
             # sample size selection.
-            if 'skip_rnn' in self._model_name.lower():
-                self._controller = SkipRNNController(sample_counts=self._valid_stop_probs,
-                                                     model_accuracy=self._valid_accuracy,
-                                                     seq_length=self._seq_length,
-                                                     max_time=max_time,
-                                                     allow_violations=allow_violations)
+            model_name = self._model_name.lower()
+            if ('skip_rnn' in model_name) or ('phased_rnn' in model_name):
+                self._controller = MultiModelController(sample_counts=self._valid_stop_probs,
+                                                        model_accuracy=self._valid_accuracy,
+                                                        seq_length=self._seq_length,
+                                                        max_time=max_time,
+                                                        allow_violations=allow_violations)
             else:
                 level = get_budget_index(budget=budget,
                                         valid_accuracy=self._valid_accuracy,

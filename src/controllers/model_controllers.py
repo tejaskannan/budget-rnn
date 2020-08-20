@@ -5,7 +5,6 @@ from typing import List, Optional, Tuple
 
 from dataset.dataset import Dataset, DataSeries
 from models.adaptive_model import AdaptiveModel
-from utils.rnn_utils import get_logits_name, get_states_name, AdaptiveModelType, get_input_name, is_cascade, is_sample, get_stop_output_name
 from utils.np_utils import index_of, round_to_precision
 from utils.constants import OUTPUT, BIG_NUMBER, SMALL_NUMBER, INPUTS, SEQ_LENGTH, DROPOUT_KEEP_RATE, SEQ_LENGTH
 from utils.file_utils import save_pickle_gz, read_pickle_gz, extract_model_name
@@ -490,16 +489,17 @@ class AdaptiveController(Controller):
         save_pickle_gz(self.as_dict(), output_file)
 
     @classmethod
-    def load(cls, save_file: str, dataset_folder: Optional[str] = None):
+    def load(cls, save_file: str, dataset_folder: Optional[str] = None, model_path: Optional[str] = None):
         """
         Loads the controller from the given serialized file.
         """
         # Load the serialized information.
         serialized_info = read_pickle_gz(save_file)
         dataset_folder = dataset_folder if dataset_folder is not None else serialized_info['dataset_folder']
+        model_path = model_path if model_path is not None else serialized_info['model_path']
 
         # Initialize the new controller
-        controller = AdaptiveController(model_path=serialized_info['model_path'],
+        controller = AdaptiveController(model_path=model_path,
                                         dataset_folder=dataset_folder,
                                         precision=serialized_info['precision'],
                                         budgets=serialized_info['budgets'],
@@ -574,7 +574,7 @@ class RandomController(Controller):
         return chosen_level, get_avg_power(chosen_level + 1, seq_length=self._seq_length, multiplier=self._power_multiplier)
 
 
-class SkipRNNController(Controller):
+class MultiModelController(Controller):
 
     def __init__(self, sample_counts: List[np.ndarray], model_accuracy: List[float], seq_length: int, max_time: int, allow_violations: bool):
         model_power: List[float] = []

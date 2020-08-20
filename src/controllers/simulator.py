@@ -9,8 +9,8 @@ from scipy import integrate
 from typing import Tuple, List, Union, Optional, Dict, Any
 
 from controllers.runtime_system import RuntimeSystem, SystemType
-from controllers.controller_utils import execute_adaptive_model, execute_standard_model
-from controllers.controller_utils import save_test_log, execute_skip_rnn_model, ModelResults
+from controllers.controller_utils import execute_adaptive_model, execute_standard_model, concat_model_results
+from controllers.controller_utils import save_test_log, execute_skip_rnn_model, ModelResults, execute_phased_rnn_model
 from controllers.noise_generators import get_noise_generator, NoiseGenerator
 from models.base_model import Model
 from models.model_factory import get_model
@@ -141,11 +141,63 @@ def plot_and_save(sim_results: Dict[str, SimulationResult],
             plt.show()
 
 
+def create_multi_model_systems(folder: str, model_type: str) -> List[RuntimeSystem]:
+    model_type = model_type.upper()
+    assert model_type in ('SKIP_RNN', 'PHASED_RNN'), 'Unknown model type: {0}'.format(model_type)
+
+    runtime_systems: List[RuntimeSystem] = []
+
+    valid_results: List[ModelResults] = []
+    test_results: List[ModelResults] = []
+    model_paths: List[str] = []
+    for model_path in iterate_files(folder, pattern='model-{0}-.*model_best\.pkl\.gz'.format(model_type)):
+        model, dataset = restore_neural_network(model_path, dataset_folder=dataset_folder)
+
+        if model_type == 'SKIP_RNN':
+            valid_result = execute_skip_rnn_model(model, dataset, series=DataSeries.VALID)
+            test_result = execute_skip_rnn_model(model, dataset, series=DataSeries.TEST)
+        else:
+            valid_result = execute_phased_rnn_model(model, dataset, series=DataSeries.VALID)
+            test_result = execute_phased_rnn_model(model, dataset, series=DataSeries.TEST)
+
+        valid_results.append(valid_result)
+        test_results.append(test_result)
+
+        model_paths.append(model_path)
+
+    # Concatenate the results from each model
+    test_results_concat = concat_model_results(test_results)
+    valid_results_concat = concat_model_results(valid_results)
+
+    under_budget = RuntimeSystem(test_results=test_results_concat,
+                                 valid_results=valid_results_concat,
+                                 system_type=SystemType.FIXED_UNDER_BUDGET,
+                                 model_path=model_paths[0],
+                                 dataset_folder=dataset_folder,
+                                 seq_length=seq_length,
+                                 num_levels=len(model_paths),
+                                 num_classes=num_classes)
+    runtime_systems.append(under_budget)
+
+    max_accuracy = RuntimeSystem(test_results=test_results_concat,
+                                 valid_results=valid_results_concat,
+                                 system_type=SystemType.FIXED_MAX_ACCURACY,
+                                 model_path=model_paths[0],
+                                 dataset_folder=dataset_folder,
+                                 seq_length=seq_length,
+                                 num_levels=len(model_paths),
+                                 num_classes=num_classes)
+    runtime_systems.append(max_accuracy)
+
+    return runtime_systems
+
+
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--adaptive-model-paths', type=str, nargs='+', required=True)
     parser.add_argument('--baseline-model-path', type=str, required=True)
     parser.add_argument('--skip-model-folder', type=str)
+    parser.add_argument('--phased-model-folder', type=str)
     parser.add_argument('--dataset-folder', type=str, required=True)
     parser.add_argument('--budget-start', type=float, required=True)
     parser.add_argument('--budget-end', type=float, required=True)
@@ -261,52 +313,14 @@ if __name__ == '__main__':
     # Add the Skip RNN models if provided
     skip_rnn_folder = args.skip_model_folder
     if skip_rnn_folder is not None:
-        valid_results: List[ModelResults] = []
-        test_results: List[ModelResults] = []
-        model_paths: List[str] = []
-        for model_path in iterate_files(skip_rnn_folder, pattern='model-SKIP_RNN-.*model_best\.pkl\.gz'):
-            model, dataset = restore_neural_network(model_path, dataset_folder=dataset_folder)
+        skip_rnn_systems = create_multi_model_systems(folder=skip_rnn_folder, model_type='SKIP_RNN')
+        runtime_systems.extend(skip_rnn_systems)
 
-            valid_result = execute_skip_rnn_model(model, dataset, series=DataSeries.VALID)
-            test_result = execute_skip_rnn_model(model, dataset, series=DataSeries.TEST)
-
-            valid_results.append(valid_result)
-            test_results.append(test_result)
-
-            model_paths.append(model_path)
-
-        # Concatenate the results from each model
-        valid_predictions = np.concatenate([r.predictions for r in valid_results], axis=1)  # [N, L]
-        valid_labels = valid_results[0].labels  # [N, 1]
-        valid_stop_probs = [r.stop_probs for r in valid_results]
-        valid_accuracy = [r.accuracy for r in valid_results]
-        valid_skip_results = ModelResults(predictions=valid_predictions, labels=valid_labels, stop_probs=valid_stop_probs, accuracy=valid_accuracy)
-
-        test_predictions = np.concatenate([r.predictions for r in test_results], axis=1)  # [N, L]
-        test_labels = test_results[0].labels  # [N, 1]
-        test_stop_probs = [r.stop_probs for r in test_results]
-        test_accuracy = [r.accuracy for r in test_results]
-        test_skip_results = ModelResults(predictions=test_predictions, labels=test_labels, stop_probs=test_stop_probs, accuracy=test_accuracy)
-
-        skip_under_budget = RuntimeSystem(test_results=test_skip_results,
-                                          valid_results=valid_skip_results,
-                                          system_type=SystemType.FIXED_UNDER_BUDGET,
-                                          model_path=model_paths[0],  # Design decision: Pick the first model path to save results under
-                                          dataset_folder=dataset_folder,
-                                          seq_length=seq_length,
-                                          num_levels=len(model_paths),
-                                          num_classes=num_classes)
-        runtime_systems.append(skip_under_budget)
-
-        skip_max_accuracy = RuntimeSystem(test_results=test_skip_results,
-                                          valid_results=valid_skip_results,
-                                          system_type=SystemType.FIXED_MAX_ACCURACY,
-                                          model_path=model_paths[0],  # Design decision: Pick the first model path to save results under
-                                          dataset_folder=dataset_folder,
-                                          seq_length=seq_length,
-                                          num_levels=len(model_paths),
-                                          num_classes=num_classes)
-        runtime_systems.append(skip_max_accuracy)
+    # Add the Phased RNN models if provided
+    phased_rnn_folder = args.phased_model_folder
+    if phased_rnn_folder is not None:
+        phased_rnn_systems = create_multi_model_systems(folder=phased_rnn_folder, model_type='PHASED_RNN')
+        runtime_systems.extend(phased_rnn_systems)
 
     # Max time equals the number of test samples
     max_time = dataset.dataset[DataSeries.TEST].length
