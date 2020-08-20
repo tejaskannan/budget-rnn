@@ -366,8 +366,10 @@ class AdaptiveModel(TFModel):
                              should_activate_final=False,
                              dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
                              name=STOP_PREDICTION)
-        self._ops[STOP_OUTPUT_LOGITS] = stop_output
-        self._ops[STOP_OUTPUT_NAME] = tf.math.sigmoid(stop_output)  # [B, L, 1]
+
+        stop_output_logits = tf.squeeze(stop_output, axis=-1)  # [B, L]
+        self._ops[STOP_OUTPUT_LOGITS] = stop_output_logits
+        self._ops[STOP_OUTPUT_NAME] = tf.math.sigmoid(stop_output_logits)  # [B, L]
 
         # Compute the predictions, Result is a [B, L, K] tensor
         output, _ = mlp(inputs=transformed,
@@ -406,28 +408,28 @@ class AdaptiveModel(TFModel):
         expected_output = self._placeholders[OUTPUT]  # [B, 1]
 
         if self.output_type == OutputType.BINARY_CLASSIFICATION:
-            expected_output = tf.tile(expected_output, multiples=(1, self.num_outputs))  # [B, T]
+            expected_output = tf.tile(expected_output, multiples=(1, self.num_outputs))  # [B, L]
             sample_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=expected_output,
                                                                   logits=self._ops[LOGITS])
         elif self.output_type == OutputType.MULTI_CLASSIFICATION:
-            expected_output = tf.tile(expected_output, multiples=(1, self.num_outputs))  # [B, T]
+            expected_output = tf.tile(expected_output, multiples=(1, self.num_outputs))  # [B, L]
             sample_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=expected_output,
                                                                          logits=self._ops[LOGITS])
         else:
             sample_loss = tf.reduce_sum(tf.square(self._ops[PREDICTION] - expected_output), axis=-1)
 
-        output_loss = tf.reduce_mean(sample_loss, axis=0)  # [T]
+        output_loss = tf.reduce_mean(sample_loss, axis=0)  # [L]
         weighted_loss = tf.reduce_sum(output_loss * self._placeholders[LOSS_WEIGHTS])  # Scalar
 
-        predictions = self._ops[PREDICTION]  # [B, T]
-        stop_outputs = self._ops[STOP_OUTPUT_LOGITS]  # [B, T, 1]
-        stop_labels = tf.cast(tf.equal(predictions, self._placeholders[OUTPUT]), dtype=tf.float32)  # [B, T]
+        predictions = self._ops[PREDICTION]  # [B, L]
+        stop_outputs = self._ops[STOP_OUTPUT_LOGITS]  # [B, L, 1]
+        stop_labels = tf.cast(tf.equal(predictions, self._placeholders[OUTPUT]), dtype=tf.float32)  # [B, L]
 
         # Compute binary cross entropy loss and sum over levels, average over batch. We mask out the final output
         # because there is no decision to make at the last sample.
-        stop_element_loss = tf.nn.sigmoid_cross_entropy_with_logits(logits=stop_outputs, labels=stop_labels)  # [B, T]
-        masked_stop_element_loss = mask_last_element(stop_element_loss)  # [B, T]
+        stop_element_loss = tf.nn.sigmoid_cross_entropy_with_logits(logits=stop_outputs, labels=stop_labels)  # [B, L]
+        masked_stop_element_loss = mask_last_element(stop_element_loss)  # [B, L]
         stop_loss = tf.reduce_mean(tf.reduce_sum(masked_stop_element_loss, axis=-1))  # Scalar
 
         # Create the loss operation
-        self._ops[LOSS] = weighted_loss + self._placeholders[STOP_LOSS_WEIGHT] * (stop_loss + stop_level_loss)
+        self._ops[LOSS] = weighted_loss + self._placeholders[STOP_LOSS_WEIGHT] * stop_loss
