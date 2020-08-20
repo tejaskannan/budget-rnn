@@ -9,7 +9,7 @@ from collections import namedtuple
 from utils.tfutils import get_activation
 
 
-SampleState = namedtuple('SampleState', ['state', 'should_apply_fusion'])
+SampleOutput = namedtuple('SampleOutput', ['output', 'fusion'])
 
 
 class SampleUGRNNCell(tf.nn.rnn_cell.RNNCell):
@@ -18,6 +18,7 @@ class SampleUGRNNCell(tf.nn.rnn_cell.RNNCell):
         self._units = units
         self._activation = get_activation(activation)
         self._name = name
+        self._fusion_mask = 0
 
         # Create the trainable parameters
         self._W_candidate = tf.get_variable(name='{0}-W-candidate'.format(name),
@@ -45,33 +46,30 @@ class SampleUGRNNCell(tf.nn.rnn_cell.RNNCell):
                                          shape=[1, units],
                                          trainable=True)
 
-    @property
-    def state_size(self) -> SampleState:
-        return SampleState(self._units, 1)
+    def set_fusion_mask(self, mask_value: int):
+        assert mask_value == 0 or mask_value == 1, 'Can only set the mask value to zero or 1'
+        self._fusion_mask = mask_value
 
     @property
-    def output_size(self) -> int:
+    def state_size(self) -> int:
         return self._units
 
-    def get_initial_state(self, inputs: Optional[tf.Tensor], batch_size: Optional[int], should_apply_fusion: bool, dtype: Any) -> tf.Tensor:
+    @property
+    def output_size(self) -> SampleOutput:
+        return SampleOutput(self._units, self._units)
+
+    def get_initial_state(self, inputs: Optional[tf.Tensor], batch_size: Optional[int], dtype: Any) -> tf.Tensor:
         initial_state = tf.get_variable(name='initial-state',
                                         initializer=tf.zeros_initializer(),
                                         shape=[1, self._units],
                                         dtype=dtype,
                                         trainable=False)
-        fusion_mask = tf.get_variable(name='fusion-mask',
-                                      initializer=tf.ones_initializer() if should_apply_fusion else tf.zeros_initializer(),
-                                      shape=[1, 1],
-                                      dtype=dtype,
-                                      trainable=False)
 
-        return SampleState(state=tf.tile(initial_state, multiples=(batch_size, 1)),  # [B, D]
-                           should_apply_fusion=tf.tile(fusion_mask, multiples=(batch_size, 1)))
+        return tf.tile(initial_state, multiples=(batch_size, 1))  # [B, D]
 
-    def __call__(self, inputs: tf.Tensor, state: SampleState, scope=None) -> Tuple[tf.Tensor, SampleState]:
+    def __call__(self, inputs: tf.Tensor, state: tf.Tensor, scope=None) -> Tuple[SampleOutput, tf.Tensor]:
         scope = scope if scope is not None else type(self).__name__
 
-        state, fusion_mask = state
 
         with tf.variable_scope(scope):
             # Split inputs into two [B, D] tensors
@@ -79,7 +77,7 @@ class SampleUGRNNCell(tf.nn.rnn_cell.RNNCell):
 
             states_concat = tf.concat([state, prev_state], axis=-1)  # [B, 2 * D]
             fusion = tf.matmul(states_concat, self._W_fusion)  # [B, D]
-            fusion_gate = fusion_mask * (1.0 - tf.math.sigmoid(fusion + self._b_fusion))  # [B, D]
+            fusion_gate = self._fusion_mask * (1.0 - tf.math.sigmoid(fusion + self._b_fusion))  # [B, D]
             fused_state = (1.0 - fusion_gate) * state + fusion_gate * prev_state
 
             input_state_concat = tf.concat([fused_state, inputs], axis=-1)  # [B, 2 * D]
@@ -91,4 +89,4 @@ class SampleUGRNNCell(tf.nn.rnn_cell.RNNCell):
 
             next_state = update_gate * fused_state + (1.0 - update_gate) * candidate_state
 
-        return next_state, SampleState(next_state, fusion_mask)
+        return SampleOutput(output=next_state, fusion=fused_state), next_state

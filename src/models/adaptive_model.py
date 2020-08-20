@@ -161,6 +161,11 @@ class AdaptiveModel(TFModel):
             feed_dict = self.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
             results = self.execute(ops=self.prediction_ops, feed_dict=feed_dict)
 
+            #debug_ops = ['embedding_0', 'embedding_1', 'transformed_0', 'transformed_1', 'fusion_0', 'fusion_1']
+            #debug_results = self.execute(ops=debug_ops, feed_dict=feed_dict)
+            #for op_name in debug_ops:
+            #    print('{0}: {1}'.format(op_name, debug_results[op_name]))
+
             predictions.append(results[PREDICTION])
             labels.append(np.vstack(batch[OUTPUT]))
 
@@ -335,10 +340,11 @@ class AdaptiveModel(TFModel):
                 rnn_inputs = tf.concat([level_embeddings, prev_states], axis=-1)
 
                 # Apply the RNN to each sub-sequence, result is a [B, S, D] tensor
-                should_apply_fusion = bool(i > 0)
+                fusion_mask = int(i > 0)
+                rnn_cell.set_fusion_mask(mask_value=fusion_mask)
+
                 initial_state = rnn_cell.get_initial_state(inputs=rnn_inputs,
                                                            batch_size=batch_size,
-                                                           should_apply_fusion=should_apply_fusion,
                                                            dtype=tf.float32)
                 rnn_outputs, final_state = tf.nn.dynamic_rnn(cell=rnn_cell,
                                                              inputs=rnn_inputs,
@@ -346,17 +352,17 @@ class AdaptiveModel(TFModel):
                                                              dtype=tf.float32,
                                                              scope=TRANSFORM_NAME)
 
-                level_outputs.append(tf.expand_dims(final_state.state, axis=1))
-                level_stop_states.append(tf.expand_dims(rnn_outputs[:, 0, :], axis=1))
+                level_outputs.append(tf.expand_dims(final_state, axis=1))
+                level_stop_states.append(tf.expand_dims(rnn_outputs.output[:, 0, :], axis=1))
 
                 # Set sequence of previous states
-                prev_states = rnn_outputs
+                prev_states = rnn_outputs.output
 
             # Concatenate the outputs and first states from each sub-sequence into [B, L, D] tensors
             transformed = tf.concat(level_outputs, axis=1)
             stop_states = tf.concat(level_stop_states, axis=1)
 
-        # Compute the stop output, Result is a [B, T, 1] tensor.
+        # Compute the stop output, Result is a [B, L, 1] tensor.
         stop_output, _ = mlp(inputs=stop_states,
                              output_size=1,
                              hidden_sizes=self.hypers.model_params['stop_output_hidden_units'],
@@ -366,9 +372,9 @@ class AdaptiveModel(TFModel):
                              dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
                              name=STOP_PREDICTION)
         self._ops[STOP_OUTPUT_LOGITS] = stop_output
-        self._ops[STOP_OUTPUT_NAME] = tf.math.sigmoid(stop_output)  # [B, T, 1]
+        self._ops[STOP_OUTPUT_NAME] = tf.math.sigmoid(stop_output)  # [B, L, 1]
 
-        # Compute the predictions, Result is a [B, T, K] tensor
+        # Compute the predictions, Result is a [B, L, K] tensor
         output, _ = mlp(inputs=transformed,
                         output_size=self.num_output_features,
                         hidden_sizes=self.hypers.model_params['output_hidden_units'],
@@ -421,65 +427,6 @@ class AdaptiveModel(TFModel):
         predictions = self._ops[PREDICTION]  # [B, T]
         stop_outputs = self._ops[STOP_OUTPUT_LOGITS]  # [B, T, 1]
         stop_labels = tf.cast(tf.equal(predictions, self._placeholders[OUTPUT]), dtype=tf.float32)  # [B, T]
-
-        ## For sample models, we have an additional stop output which calculates whether the model is right
-        ## at each level. We need this signal to prevent capturing intermediate samples which will later
-        ## be ignored.
-        #if self.stride_length > 1:
-        #    # Fetch the stop level predictions
-        #    stop_level_pred = stop_outputs[:, :, 1]  # [B, T]
-
-        #    # Get the output from the first sample in each sub-sequence. We must
-        #    # use the first sample to determine the sub-sequence stopping behavior.
-        #    first_indices = np.arange(0, stop=self.stride_length)  # [L]
-        #    subseq_pred = tf.gather(stop_level_pred, indices=first_indices, axis=1)  # [B, L]
-
-        #    # Create indices used to for the later segment operation. The segment operation
-        #    # collects the label at each sub-sequence.
-        #    batch_size = tf.shape(stop_level_pred)[0]
-
-        #    batch_idx = tf.expand_dims(tf.range(start=0, limit=batch_size) * self.stride_length, axis=1)  # [B, 1]
-        #    subseq_idx = tf.tile(tf.range(start=0, limit=self.stride_length, dtype=tf.int32),
-        #                         multiples=[self.samples_per_seq])  # [T]
-        #    subseq_idx = tf.expand_dims(subseq_idx, axis=0)  # [1, T]
-        #    segment_ids = batch_idx + subseq_idx  # [B, T]
-
-        #    self._ops['segment_ids'] = segment_ids
-
-        #    # The stop level labels indicate whether the model is right (1) or wrong (0) at each level.
-        #    # We collect these labels by taking the max over the labels from each sample in each level.
-        #    # This operations results in a [B, L] tensor containing the label for each level (L).
-        #    stop_level_labels = tf.unsorted_segment_max(tf.reshape(stop_labels, shape=[-1]),
-        #                                                segment_ids=tf.reshape(segment_ids, shape=[-1]),
-        #                                                num_segments=self.stride_length * batch_size)  # [B, L]
-        #    stop_level_labels = tf.reshape(stop_level_labels, shape=(-1, self.stride_length))  # [B, L]
-
-        #    # Avoid back-propagating through the stop level labels (this is a not a differentiable operation)
-        #    stop_level_labels = tf.stop_gradient(stop_level_labels)
-
-        #    self._ops['subseq_pred'] = subseq_pred
-        #    self._ops['stop_level_labels'] = stop_level_labels
-
-        #    # Compute the cross entropy loss. We mask out the final element because there is no decision
-        #    # to make at the top level. Once we reach the final sub-sequence, we collect all data.
-        #    stop_level_element_loss = tf.nn.sigmoid_cross_entropy_with_logits(logits=subseq_pred,
-        #                                                                      labels=stop_level_labels)  # [B, L]
-        #    masked_level_element_loss = mask_last_element(stop_level_element_loss)  # [B, L]
-
-        #    self._ops['stop_level_loss'] = masked_level_element_loss
-
-        #    stop_level_loss = tf.reduce_mean(tf.reduce_sum(masked_level_element_loss, axis=-1))  # Scalar
-        #    stop_outputs = stop_outputs[:, :, 0]  # [B, T]
-        #else:
-        #    stop_level_loss = 0
-        #    stop_outputs = tf.squeeze(stop_outputs, axis=-1)  # [B, T]
-
-        ## We explicitly prevent propagating the gradient through the stop labels. These labels are treated
-        ## as constants with respect to the stop output. This treatment is necessary because the stop labels
-        ## are not differentiable with respect to the sequence model output.
-        #stop_labels = tf.stop_gradient(stop_labels)
-
-        #self._ops['stop_labels'] = stop_labels
 
         # Compute binary cross entropy loss and sum over levels, average over batch. We mask out the final output
         # because there is no decision to make at the last sample.
