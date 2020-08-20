@@ -1,5 +1,5 @@
 {
-	"batch_size": 8,
+	"batch_size": 1,
 	"dropout_keep_rate": 1.0,
 	"learning_rate": 0.0001,
     "learning_rate_decay": 0.999,
@@ -19,11 +19,11 @@
         "rnn_cell_type": "ugrnn",
         "rnn_layers": 1,
         "rnn_activation": "tanh",
-		"model_type": "skip_rnn",
+		"model_type": "phased_rnn",
+        "leak_rate": 0.001,
+        "on_fraction": 0.2,
         "loss_mode": "cross-entropy",
         "normalize_inputs": true,
-        "has_single_output": true,
-        "target_updates": 5,
-        "update_loss_weight": 0.1
+        "has_single_output": true
 	}
 }

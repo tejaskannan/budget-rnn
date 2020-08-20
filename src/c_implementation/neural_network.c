@@ -4,6 +4,34 @@
 dtype DATA_BUFFER[400];
 
 
+uint16_t getCurrentLevel(uint16_t seqIndex) {
+    #ifndef IS_ADAPTIVE
+    return seqIndex;
+    #endif
+    
+    uint16_t numSequences = SEQ_LENGTH / SAMPLES_PER_SEQ;
+
+    #ifdef IS_SAMPLE
+    return seqIndex % numSequences;
+    #else
+    return seqIndex / SAMPLES_PER_SEQ;
+    #endif
+}
+
+
+uint8_t isLastSampleInLevel(uint16_t seqIndex, uint16_t fixedSeqIndex) {
+    #ifndef IS_ADAPTIVE
+        return seqIndex == fixedSeqIndex;
+    #elif defined(IS_SAMPLE)
+        UNUSED(fixedSeqIndex);
+        return (SEQ_LENGTH - seqIndex) <= (SEQ_LENGTH / SAMPLES_PER_SEQ);
+    #else
+        UNUSED(fixedSeqIndex);
+        return ((seqIndex + 1) % SAMPLES_PER_SEQ) == 0;
+    #endif
+}
+
+
 matrix *apply_transformation(matrix *result, matrix *input, matrix *state, uint16_t precision) {
     /**
      * Applies both the embedding layer and the transformation to the input and previous state.
@@ -47,8 +75,7 @@ matrix *apply_transformation(matrix *result, matrix *input, matrix *state, uint1
 	
         // Apply the GRU Cell
         apply_gru(result, &embedding, state, &rnn_cell, &rnnTemp, precision);
-    #endif
-    #ifdef UGRNN_TRANSFORM
+    #elif defined(UGRNN_TRANSFORM)
         // Allocate temporary states
         matrix inputTemp = { DATA_BUFFER + data_buffer_offset, state->numRows, state->numCols };
         data_buffer_offset += inputTemp.numRows * inputTemp.numCols;
@@ -73,6 +100,21 @@ matrix *apply_transformation(matrix *result, matrix *input, matrix *state, uint1
 
         // Apply the GRU Cell
         apply_ugrnn(result, &embedding, state, &rnn_cell, &rnnTemp, precision);
+    #else  // Dense Transformation
+        // By default, we use a dense layer with two hidden layers
+        // Allocate intermediate states
+        matrix hidden0 = { DATA_BUFFER + data_buffer_offset, TRANSFORM_HIDDEN_BIAS_0_MAT->numRows, TRANSFORM_HIDDEN_BIAS_0_MAT->numCols };
+        data_buffer_offset += hidden0.numRows * hidden0.numCols;
+
+        matrix hidden1 = { DATA_BUFFER + data_buffer_offset, TRANSFORM_HIDDEN_BIAS_1_MAT->numRows, TRANSFORM_HIDDEN_BIAS_1_MAT->numCols };
+        data_buffer_offset += hidden1.numRows * hidden1.numCols;
+
+        // Apply hidden layers
+        dense(&hidden0, &embedding, TRANSFORM_HIDDEN_KERNEL_0_MAT, TRANSFORM_HIDDEN_BIAS_0_MAT, &fp_leaky_relu, precision);
+        dense(&hidden1, &hidden0, TRANSFORM_HIDDEN_KERNEL_1_MAT, TRANSFORM_HIDDEN_BIAS_1_MAT, &fp_leaky_relu, precision);
+        
+        // Apply the output layer
+        dense(result, &hidden1, TRANSFORM_KERNEL_0_MAT, TRANSFORM_BIAS_0_MAT, &fp_leaky_relu, precision);
     #endif
 
     return result;
@@ -94,7 +136,14 @@ int16_t compute_prediction(matrix *input, uint16_t precision) {
 
     // Apply the dense layers
     dense(&hidden, input, OUTPUT_HIDDEN_KERNEL_0_MAT, OUTPUT_HIDDEN_BIAS_0_MAT, &fp_leaky_relu, precision);
+
+    #ifdef IS_RNN
     dense(&output, &hidden, OUTPUT_KERNEL_0_MAT, OUTPUT_BIAS_0_MAT, &fp_linear, precision);
+    #else
+    matrix hidden1 = { DATA_BUFFER + data_buffer_offset, OUTPUT_HIDDEN_BIAS_1_MAT->numRows, 1 };
+    dense(&hidden1, &hidden, OUTPUT_HIDDEN_KERNEL_1_MAT, OUTPUT_HIDDEN_BIAS_1_MAT, &fp_leaky_relu, precision);
+    dense(&output, &hidden1, OUTPUT_KERNEL_0_MAT, NULL_PTR, &fp_linear, precision);
+    #endif
 
     return argmax(&output);
 }
@@ -152,3 +201,89 @@ matrix *fuse_states(matrix *result, matrix *current, matrix *previous, uint16_t 
 
 
 // Function to pool states in NBOW models
+#ifndef IS_RNN
+void normalizeSampling(dtype normalizedWeights[SEQ_LENGTH], dtype weights[SEQ_LENGTH], uint16_t n, uint16_t precision) {
+    uint16_t sampleLevel = 0;
+
+    // Normalize the weights
+    dtype weight_sum = 0;
+    uint16_t i = 0;
+    for (; i < SEQ_LENGTH; i++) {
+        sampleLevel = getCurrentLevel(i);
+        if (sampleLevel <= n) {
+            weight_sum += weights[i];
+        }
+    }
+    
+    for (i = 0; i < SEQ_LENGTH; i++) {
+        sampleLevel = getCurrentLevel(i);
+        if (sampleLevel <= n) {
+            normalizedWeights[i] = fp_div(weights[i], weight_sum, precision);
+        } else {
+            normalizedWeights[i] = 0;
+        }
+    }
+}
+
+void normalizeConsecutive(dtype normalizedWeights[SEQ_LENGTH], dtype weights[SEQ_LENGTH], uint16_t n, uint16_t precision) {
+    uint16_t sampleLevel = 0;
+
+    // Normalize the weights
+    dtype weight_sum = 0;
+    uint16_t i = 0;
+    for (; i <= n; i++) {
+        weight_sum += weights[i];
+    }
+    
+    for (i = 0; i < SEQ_LENGTH; i++) {
+        if (i <= n) {
+            normalizedWeights[i] = fp_div(weights[i], weight_sum, precision);
+        } else {
+            normalizedWeights[i] = 0;
+        }
+    }
+}
+
+matrix *pool_states(matrix *result, matrix states[SEQ_LENGTH], dtype weights[SEQ_LENGTH], uint16_t n, uint8_t useSampleStrategy, uint16_t precision){
+    uint8_t mask = 1;
+    uint16_t sampleLevel = 0;
+
+    // Normalize the weights
+    dtype normalizedWeights[SEQ_LENGTH];
+    if (useSampleStrategy) {
+        normalizeSampling(normalizedWeights, weights, n, precision);
+    } else {
+        normalizeConsecutive(normalizedWeights, weights, n, precision);
+    }
+
+    // Zero out the result before aggregation
+    matrix_set(result, 0);
+
+    // Create the temp state
+    matrix temp = { DATA_BUFFER, result->numRows, result->numCols };
+
+    uint16_t i;
+    for (i = 0; i < SEQ_LENGTH; i++) {
+        // Apply the normalized weight
+        scalar_product(&temp, states + i, normalizedWeights[i], precision);
+
+        // Accumulate into the result matrix
+        matrix_add(result, result, &temp);
+    }
+
+    return result;
+}
+
+
+dtype compute_aggregation_weight(matrix *state, uint16_t precision) {
+    // Allocate intermediate state
+    uint16_t data_buffer_offset = 0;
+
+    matrix weight = { DATA_BUFFER + data_buffer_offset, 1, 1 };
+    data_buffer_offset += weight.numRows * weight.numCols;
+
+    dense(&weight, state, AGGREGATE_KERNEL_0_MAT, AGGREGATE_BIAS_0_MAT, &fp_sigmoid, precision);
+
+    return weight.data[0];
+}
+#endif
