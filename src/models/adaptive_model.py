@@ -32,7 +32,7 @@ class AdaptiveModel(TFModel):
 
     @property
     def stride_length(self) -> int:
-        return int(self.hypers.model_params['stride_length'])
+        return self.hypers.model_params['stride_length']
 
     @property
     def seq_length(self) -> int:
@@ -44,11 +44,7 @@ class AdaptiveModel(TFModel):
 
     @property
     def num_outputs(self) -> int:
-        return self.seq_length
-
-    @property
-    def num_stop_outputs(self) -> int:
-        return 1 if self.stride_length == 1 else 2
+        return self.hypers.model_params['num_outputs']
 
     @property
     def num_output_features(self) -> int:
@@ -168,18 +164,18 @@ class AdaptiveModel(TFModel):
             predictions.append(results[PREDICTION])
             labels.append(np.vstack(batch[OUTPUT]))
 
-        predictions_array = np.vstack(predictions).astype(int)  # [N, T]
+        predictions_array = np.vstack(predictions).astype(int)  # [N, L]
         labels_array = np.vstack(labels).reshape(-1).astype(int)  # [N]
 
         result: DefaultDict[str, Dict[str, Any]] = defaultdict(dict)
-        for seq_idx in range(self.seq_length):
+        for idx in range(self.num_outputs):
             for metric_name in ClassificationMetric:
                 if self.output_type == OutputType.BINARY_CLASSIFICATION:
-                    metric_value = get_binary_classification_metric(metric_name, predictions_array[:, seq_idx], labels_array)
+                    metric_value = get_binary_classification_metric(metric_name, predictions_array[:, idx], labels_array)
                 else:
-                    metric_value = get_multi_classification_metric(metric_name, predictions_array[:, seq_idx], labels_array, self.metadata[NUM_CLASSES])
+                    metric_value = get_multi_classification_metric(metric_name, predictions_array[:, idx], labels_array, self.metadata[NUM_CLASSES])
 
-                result['{0}_{1}'.format(PREDICTION, seq_idx)][metric_name.name] = metric_value
+                result['{0}_{1}'.format(PREDICTION, idx)][metric_name.name] = metric_value
 
         return result
 
@@ -249,9 +245,9 @@ class AdaptiveModel(TFModel):
                         should_dropout_final=False,
                         name=OUTPUT_LAYER_NAME)
 
-        # Create the stop output, [B, T, 1] or [B, T, 2] based on the stride length
+        # Create the stop output, [B, T, 1]
         stop_output_logits, _ = mlp(inputs=pooled_states,
-                                    output_size=self.num_stop_outputs,
+                                    output_size=1,
                                     hidden_sizes=self.hypers.model_params['stop_output_units'],
                                     activations=self.hypers.model_params['stop_output_activation'],
                                     dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
@@ -303,74 +299,79 @@ class AdaptiveModel(TFModel):
                                  activation=self.hypers.model_params['rnn_activation'],
                                  name=RNN_CELL_NAME)
 
-        # Execute the RNN, outputs consist of a [B, T, D] tensor
+        # Execute the RNN, outputs consist of a [B, L, D] tensor in the variable `transformed`
         if self.stride_length == 1:
-            initial_state = rnn_cell.zero_state(batch_size=batch_size, dtype=tf.float32)
+            initial_state = rnn_cell.get_initial_state(inputs=embeddings,
+                                                       batch_size=batch_size,
+                                                       dtype=tf.float32)
             rnn_outputs, _ = tf.nn.dynamic_rnn(cell=rnn_cell,
                                                inputs=embeddings,
                                                initial_state=initial_state,
                                                dtype=tf.float32,
                                                scope=TRANSFORM_NAME)
-            transformed = rnn_outputs  # [B, T, D]
-            stop_states = rnn_outputs[:, 0:-1, :]  # [B, T - 1, D]
+
+            # Collect the outputs at the end of every chunk
+            output_stride = int(self.seq_length / self.num_outputs)
+            output_indices = list(range(output_stride - 1, self.seq_length, output_stride))
+            transformed = tf.gather(rnn_outputs, indices=output_indices, axis=1)  # [B, L, D]
+            stop_states = transformed  # [B, L, D]
         else:
             prev_states = tf.get_variable(name='prev-states',
                                           initializer=tf.zeros_initializer(),
                                           shape=[1, 1, state_size],
                                           dtype=tf.float32,
                                           trainable=False)
-            prev_states = tf.tile(prev_states, multiples=(batch_size, self.samples_per_seq, 1))  # [B, L, D]
+            prev_states = tf.tile(prev_states, multiples=(batch_size, self.samples_per_seq, 1))  # [B, S, D]
 
             level_outputs: List[tf.Tensor] = []
-            for i in range(self.stride_length):
-                # Get the inputs for the current sub-sequence
+            level_stop_states: List[tf.Tensor] = []
+            for i in range(self.num_outputs):
+                # Get the inputs for the current sub-sequence, S is the number of samples per
+                # sub-sequence
                 level_indices = list(range(i, self.seq_length, self.stride_length))
-                level_embeddings = tf.gather(embeddings, indices=level_indices, axis=1)  # [B, L, D]
+                level_embeddings = tf.gather(embeddings, indices=level_indices, axis=1)  # [B, S, D]
 
-                # Construct the RNN inputs by concatenating the inputs with the previous states, [B, L, 2*D]
+                # Construct the RNN inputs by concatenating the inputs with the previous states, [B, S, 2*D]
                 rnn_inputs = tf.concat([level_embeddings, prev_states], axis=-1)
 
-                # Apply the RNN to each sub-sequence, result is a [B, L, D] tensor
-                initial_state = rnn_cell.get_initial_state(inputs=level_embeddings, batch_size=batch_size, dtype=tf.float32)
-                rnn_outputs, _ = tf.nn.dynamic_rnn(cell=rnn_cell,
-                                                   inputs=rnn_inputs,
-                                                   initial_state=initial_state,
-                                                   dtype=tf.float32,
-                                                   scope=TRANSFORM_NAME)
-                level_outputs.append(rnn_outputs)
+                # Apply the RNN to each sub-sequence, result is a [B, S, D] tensor
+                fusion_mask = int(i > 0)
+                rnn_cell.set_fusion_mask(mask_value=fusion_mask)
+
+                initial_state = rnn_cell.get_initial_state(inputs=rnn_inputs,
+                                                           batch_size=batch_size,
+                                                           dtype=tf.float32)
+                rnn_outputs, final_state = tf.nn.dynamic_rnn(cell=rnn_cell,
+                                                             inputs=rnn_inputs,
+                                                             initial_state=initial_state,
+                                                             dtype=tf.float32,
+                                                             scope=TRANSFORM_NAME)
+
+                level_outputs.append(tf.expand_dims(final_state, axis=1))
+                level_stop_states.append(tf.expand_dims(rnn_outputs.output[:, 0, :], axis=1))
 
                 # Set sequence of previous states
-                prev_states = rnn_outputs
+                prev_states = rnn_outputs.output
 
-            # Concatenate the outputs from each sub-sequence into a [B, T, D] tensor. At this point
-            # the sequence elements are ordered with respect to the sub-sequences as opposed to the original
-            # sequence. We re-order this tensor back to the original sequence ordering for consistency purposes.
-            concat_transformed = tf.concat(level_outputs, axis=1)
+            # Concatenate the outputs and first states from each sub-sequence into [B, L, D] tensors
+            transformed = tf.concat(level_outputs, axis=1)
+            stop_states = tf.concat(level_stop_states, axis=1)
 
-            subseq_indices = np.arange(0, stop=self.seq_length, step=self.stride_length)  # [L]
-            subseq_indices = np.tile(subseq_indices, reps=self.stride_length)  # [T]
-
-            offsets = np.arange(0, stop=self.stride_length)
-            offsets = np.repeat(offsets, repeats=self.samples_per_seq)  # [T]
-
-            original_indices = subseq_indices + offsets  # [T]
-
-            # [B, T, D]
-            transformed = tf.gather(concat_transformed, indices=original_indices, axis=1)
-
-        # Compute the stop output, Result is a [B, T, 1] or [B, T, 2] tensor.
-        stop_output, _ = mlp(inputs=transformed,
-                             output_size=self.num_stop_outputs,
+        # Compute the stop output, Result is a [B, L, 1] tensor.
+        stop_output, _ = mlp(inputs=stop_states,
+                             output_size=1,
                              hidden_sizes=self.hypers.model_params['stop_output_hidden_units'],
                              activations=self.hypers.model_params['stop_output_activation'],
                              should_bias_final=True,
                              should_activate_final=False,
                              dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
                              name=STOP_PREDICTION)
-        self._ops[STOP_OUTPUT_LOGITS] = stop_output
-        self._ops[STOP_OUTPUT_NAME] = tf.math.sigmoid(stop_output)  # [B, T, 1] or [B, T, 2]
 
-        # Compute the predictions, Result is a [B, T, K] tensor
+        stop_output_logits = tf.squeeze(stop_output, axis=-1)  # [B, L]
+        self._ops[STOP_OUTPUT_LOGITS] = stop_output_logits
+        self._ops[STOP_OUTPUT_NAME] = tf.math.sigmoid(stop_output_logits)  # [B, L]
+
+        # Compute the predictions, Result is a [B, L, K] tensor
         output, _ = mlp(inputs=transformed,
                         output_size=self.num_output_features,
                         hidden_sizes=self.hypers.model_params['output_hidden_units'],
@@ -407,87 +408,28 @@ class AdaptiveModel(TFModel):
         expected_output = self._placeholders[OUTPUT]  # [B, 1]
 
         if self.output_type == OutputType.BINARY_CLASSIFICATION:
-            expected_output = tf.tile(expected_output, multiples=(1, self.num_outputs))  # [B, T]
+            expected_output = tf.tile(expected_output, multiples=(1, self.num_outputs))  # [B, L]
             sample_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=expected_output,
                                                                   logits=self._ops[LOGITS])
         elif self.output_type == OutputType.MULTI_CLASSIFICATION:
-            expected_output = tf.tile(expected_output, multiples=(1, self.num_outputs))  # [B, T]
+            expected_output = tf.tile(expected_output, multiples=(1, self.num_outputs))  # [B, L]
             sample_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=expected_output,
                                                                          logits=self._ops[LOGITS])
         else:
             sample_loss = tf.reduce_sum(tf.square(self._ops[PREDICTION] - expected_output), axis=-1)
 
-        output_loss = tf.reduce_mean(sample_loss, axis=0)  # [T]
+        output_loss = tf.reduce_mean(sample_loss, axis=0)  # [L]
         weighted_loss = tf.reduce_sum(output_loss * self._placeholders[LOSS_WEIGHTS])  # Scalar
 
-        predictions = self._ops[PREDICTION]  # [B, T]
-        stop_outputs = self._ops[STOP_OUTPUT_LOGITS]  # [B, T, 1] or [B, T, 2]
-        stop_labels = tf.cast(tf.equal(predictions, self._placeholders[OUTPUT]), dtype=tf.float32)  # [B, T]
-
-        # For sample models, we have an additional stop output which calculates whether the model is right
-        # at each level. We need this signal to prevent capturing intermediate samples which will later
-        # be ignored.
-        if self.stride_length > 1:
-            # Fetch the stop level predictions
-            stop_level_pred = stop_outputs[:, :, 1]  # [B, T]
-
-            # Get the output from the first sample in each sub-sequence. We must
-            # use the first sample to determine the sub-sequence stopping behavior.
-            first_indices = np.arange(0, stop=self.stride_length)  # [L]
-            subseq_pred = tf.gather(stop_level_pred, indices=first_indices, axis=1)  # [B, L]
-
-            # Create indices used to for the later segment operation. The segment operation
-            # collects the label at each sub-sequence.
-            batch_size = tf.shape(stop_level_pred)[0]
-
-            batch_idx = tf.expand_dims(tf.range(start=0, limit=batch_size) * self.stride_length, axis=1)  # [B, 1]
-            subseq_idx = tf.tile(tf.range(start=0, limit=self.stride_length, dtype=tf.int32),
-                                 multiples=[self.samples_per_seq])  # [T]
-            subseq_idx = tf.expand_dims(subseq_idx, axis=0)  # [1, T]
-            segment_ids = batch_idx + subseq_idx  # [B, T]
-
-            self._ops['segment_ids'] = segment_ids
-
-            # The stop level labels indicate whether the model is right (1) or wrong (0) at each level.
-            # We collect these labels by taking the max over the labels from each sample in each level.
-            # This operations results in a [B, L] tensor containing the label for each level (L).
-            stop_level_labels = tf.unsorted_segment_max(tf.reshape(stop_labels, shape=[-1]),
-                                                        segment_ids=tf.reshape(segment_ids, shape=[-1]),
-                                                        num_segments=self.stride_length * batch_size)  # [B, L]
-            stop_level_labels = tf.reshape(stop_level_labels, shape=(-1, self.stride_length))  # [B, L]
-
-            # Avoid back-propagating through the stop level labels (this is a not a differentiable operation)
-            stop_level_labels = tf.stop_gradient(stop_level_labels)
-
-            self._ops['subseq_pred'] = subseq_pred
-            self._ops['stop_level_labels'] = stop_level_labels
-
-            # Compute the cross entropy loss. We mask out the final element because there is no decision
-            # to make at the top level. Once we reach the final sub-sequence, we collect all data.
-            stop_level_element_loss = tf.nn.sigmoid_cross_entropy_with_logits(logits=subseq_pred,
-                                                                              labels=stop_level_labels)  # [B, L]
-            masked_level_element_loss = mask_last_element(stop_level_element_loss)  # [B, L]
-
-            self._ops['stop_level_loss'] = masked_level_element_loss
-
-            stop_level_loss = tf.reduce_mean(tf.reduce_sum(masked_level_element_loss, axis=-1))  # Scalar
-            stop_outputs = stop_outputs[:, :, 0]  # [B, T]
-        else:
-            stop_level_loss = 0
-            stop_outputs = tf.squeeze(stop_outputs, axis=-1)  # [B, T]
-
-        # We explicitly prevent propagating the gradient through the stop labels. These labels are treated
-        # as constants with respect to the stop output. This treatment is necessary because the stop labels
-        # are not differentiable with respect to the sequence model output.
-        stop_labels = tf.stop_gradient(stop_labels)
-
-        self._ops['stop_labels'] = stop_labels
+        predictions = self._ops[PREDICTION]  # [B, L]
+        stop_outputs = self._ops[STOP_OUTPUT_LOGITS]  # [B, L, 1]
+        stop_labels = tf.cast(tf.equal(predictions, self._placeholders[OUTPUT]), dtype=tf.float32)  # [B, L]
 
         # Compute binary cross entropy loss and sum over levels, average over batch. We mask out the final output
         # because there is no decision to make at the last sample.
-        stop_element_loss = tf.nn.sigmoid_cross_entropy_with_logits(logits=stop_outputs, labels=stop_labels)  # [B, T]
-        masked_stop_element_loss = mask_last_element(stop_element_loss)  # [B, T]
+        stop_element_loss = tf.nn.sigmoid_cross_entropy_with_logits(logits=stop_outputs, labels=stop_labels)  # [B, L]
+        masked_stop_element_loss = mask_last_element(stop_element_loss)  # [B, L]
         stop_loss = tf.reduce_mean(tf.reduce_sum(masked_stop_element_loss, axis=-1))  # Scalar
 
         # Create the loss operation
-        self._ops[LOSS] = weighted_loss + self._placeholders[STOP_LOSS_WEIGHT] * (stop_loss + stop_level_loss)
+        self._ops[LOSS] = weighted_loss + self._placeholders[STOP_LOSS_WEIGHT] * stop_loss

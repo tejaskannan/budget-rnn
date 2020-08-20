@@ -3,6 +3,7 @@ from enum import Enum, auto
 
 from .skip_rnn_cells import SkipUGRNNCell, SkipGRUCell
 from .sample_rnn_cells import SampleUGRNNCell
+from .standard_rnn_cells import UGRNNCell
 from utils.tfutils import get_activation
 
 
@@ -22,13 +23,8 @@ def make_rnn_cell(cell_class: CellClass, cell_type: CellType, units: int, activa
     Creates an RNN Cell using the given parameters.
     """
     if cell_class == CellClass.STANDARD:
-        if cell_type == CellType.GRU:
-            return tf.nn.rnn_cell.GRUCell(num_units=units,
-                                          activation=get_activation(activation),
-                                          name=name)
-        elif cell_type == CellType.UGRNN:
-            return tf.contrib.rnn.UGRNNCell(num_units=units,
-                                            initializer=tf.glorot_uniform_initializer())
+        if cell_type == CellType.UGRNN:
+            return UGRNNCell(units=units, activation=activation, name=name)
         else:
             raise ValueError('Unknown cell class {0} and type {1}'.format(cell_class.name, cell_type.name))
     elif cell_class == CellClass.SKIP:
