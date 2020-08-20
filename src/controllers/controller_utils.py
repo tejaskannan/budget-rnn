@@ -2,7 +2,7 @@ import os.path
 import numpy as np
 import math
 from collections import namedtuple
-from typing import Dict, Any, Tuple, List
+from typing import Dict, Any, Tuple, List, Optional
 
 from models.adaptive_model import AdaptiveModel
 from models.standard_model import StandardModel, StandardModelType, SKIP_GATES
@@ -25,34 +25,66 @@ def clip(x: int, bounds: Tuple[int, int]) -> int:
     return x
 
 
-def save_test_log(accuracy: float, power: float, budget: float, noise_loc: float, output_file: str):
+def save_test_log(accuracy: float, power: float, valid_accuracy: Optional[float], budget: float, key: str, output_file: str):
     test_log: Dict[float, Dict[str, Any]] = dict()
     if os.path.exists(output_file):
         test_log = list(read_by_file_suffix(output_file))[0]
 
+    if key not in test_log:
+        test_log[key] = dict()
+
     log_value = {
-        'SHIFT': noise_loc,
         'ACCURACY': accuracy,
         'AVG_POWER': power,
+        'VALID_ACCURACY': valid_accuracy,
         'BUDGET': budget
     }
-    test_log['{0} {1}'.format(budget, noise_loc)] = log_value
+    test_log[key][str(budget)] = log_value
 
     save_by_file_suffix([test_log], output_file)
 
 
-def get_budget_index(budget: int, level_accuracy: np.ndarray) -> int:
-    seq_length = level_accuracy.shape[0]
+def get_budget_index(budget: float, valid_accuracy: np.ndarray, max_time: int, power_estimates: np.ndarray, allow_violations: bool) -> int:
+    """
+    Selects the single model level which should yield the best overall accuracy. This decision
+    is based on the validation accuracy for each level.
 
-    fixed_index = 0
+    Args:
+        budget: The current avg power budget
+        valid_accuracy: A [L] array containing the validation accuracy for each model level
+        max_time: The number of timesteps
+        power_estimates: A [L] array of power estimates for each level
+        allow_violations: Index selected in a manner which allows for budget violations if such violations
+            will lead to better end-to-end accuracy.
+    Returns:
+        The "optimal" model level.
+    """
     best_index = 0
     best_acc = 0.0
-    while fixed_index < seq_length and get_avg_power(fixed_index + 1, seq_length) < budget:
-        if best_acc < level_accuracy[fixed_index]:
-            best_acc = level_accuracy[fixed_index]
-            best_index = fixed_index
 
-        fixed_index += 1
+    if allow_violations:
+        num_levels = valid_accuracy.shape[0]
+        energy_budget = budget * max_time
+
+        for level_idx in range(num_levels):
+            # Estimate the number of timesteps on which we can perform inference with this level
+            avg_power = power_estimates[level_idx]
+            projected_timesteps = min(energy_budget / avg_power, max_time)
+
+            projected_correct = valid_accuracy[level_idx] * projected_timesteps
+            estimated_accuracy = projected_correct / max_time
+
+            if estimated_accuracy > best_acc:
+                best_acc = estimated_accuracy
+                best_index = level_idx
+    else:
+        budget_comparison = power_estimates <= budget
+        if np.any(budget_comparison):
+            budget_mask = budget_comparison.astype(float)
+            masked_accuracy = valid_accuracy * budget_mask
+            best_index = np.argmax(masked_accuracy)
+        else:
+            best_index = np.argmin(power_estimates)
 
     return best_index
 

@@ -55,6 +55,17 @@ def get_weighted_avg_power(sample_weights: np.ndarray, seq_length: int) -> float
     return avg_power
 
 
+def get_power_estimates(num_levels: int, seq_length: int) -> np.ndarray:
+    estimates: List[float] = []
+
+    multiplier = int(seq_length / num_levels)
+    for level_idx in range(1, num_levels + 1):
+        power = get_avg_power(num_samples=level_idx, seq_length=seq_length, multiplier=multiplier)
+        estimates.append(power)
+
+    return np.array(estimates)
+
+
 def print_all_power(seq_length: int):
     for i in range(1, seq_length + 1):
         print('{0}: {1:.4f}'.format(i, get_avg_power(i, seq_length)))

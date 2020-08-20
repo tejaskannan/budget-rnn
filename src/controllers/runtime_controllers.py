@@ -1,13 +1,14 @@
 import numpy as np
 from scipy import integrate
 from typing import Tuple, Union, List, Dict
+from collections import deque, defaultdict
 
 from controllers.controller_utils import clip
-from controllers.power_utils import get_avg_power
+from controllers.power_utils import get_avg_power, get_power_estimates
 from utils.constants import SMALL_NUMBER
 
 
-SMOOTHING_FACTOR = 10
+SMOOTHING_FACTOR = 1
 POWER_PRIOR_COUNT = 100
 
 
@@ -18,25 +19,13 @@ class PIDController:
         self._ki = ki
         self._kd = kd
 
-        self._errors: List[float] = []
-        self._times: List[float] = []
+        self._errors: deque = deque()
+        self._times: deque = deque()
         self._integral_bounds = integral_bounds
         self._integral_window = integral_window
 
-    def errors(self) -> List[float]:
-        return self._errors
-
-    def times(self) -> List[float]:
-        return self._times
-
     def plant_function(self, y_pred: Union[float, int], proportional_error: float, integral_error: float) -> float:
         raise NotImplementedError()
-
-    def update(self, **kwargs):
-        """
-        A general update function to update any controller-specific parameters
-        """
-        pass
 
     def step(self, y_true: Tuple[float, float], y_pred: float, time: float) -> Union[float, int]:
         """
@@ -49,29 +38,35 @@ class PIDController:
         elif y_pred > y_true[1]:
             error = y_true[1] - y_pred
 
-        # Approximate the derivative term
-        derivative = 0
-        if len(self._errors) > 0:
-            derivative = (error - self._errors[-1]) / (time - self._times[-1])
-
+        # Append error and clip to window
         self._errors.append(error)
         self._times.append(time)
 
-        # Approximate the integral term using a trapezoid rule approximation
-        integral = 0
         if len(self._errors) > self._integral_window:
-            integral_errors = self._errors[-self._integral_window:]
+            self._errors.popleft()
 
-            integral = integrate.trapz(integral_errors, dx=1)
-            integral = clip(integral, bounds=self._integral_bounds)
+        if len(self._times) > self._integral_window:
+            self._times.popleft()
+
+        # Approximate the integral term using a trapezoid rule approximation
+        integral = integrate.trapz(self._errors, dx=1)
+        integral = clip(integral, bounds=self._integral_bounds)
+
+        # Approximate the derivative term using the average over the window
+        derivative = 0
+        if len(self._errors) > 1:
+            derivative_sum = 0
+            for i in range(1, len(self._errors)):
+                de = self._errors[i] - self._errors[i-1]
+                dt = self._times[i] - self._times[i-1]
+                derivative_sum = de / dt
+
+            derivative = derivative_sum / (len(self._errors) - 1)
 
         derivative_error = self._kd * derivative
         integral_error = self._ki * integral
         proportional_error = self._kp * error
         control_error = proportional_error + integral_error + derivative_error
-
-        self._errors.append(error)
-        self._times.append(time)
 
         return self.plant_function(y_true, y_pred, control_error)
 
@@ -79,9 +74,8 @@ class PIDController:
         """
         Resets the PI Controller.
         """
-        self._errors = []
-        self._times = []
-        self._integral = 0.0
+        self._errors = deque()
+        self._times = deque()
 
 
 class BudgetController(PIDController):
@@ -95,6 +89,41 @@ class BudgetController(PIDController):
         return control_error
 
 
+class PowerSetpoint:
+
+    def __init__(self, num_levels: int, seq_length: int, window_size: int):
+        self._num_levels = num_levels
+        self._seq_length = seq_length
+        self._window_size = window_size
+
+        # [L] array of power estimates for each level
+        self._power_estimates = get_power_estimates(num_levels=num_levels,
+                                                    seq_length=seq_length)
+
+        self._observed_power = defaultdict(deque)
+
+    def get_setpoint(self) -> Tuple[float, float]:
+
+        measurements: List[float] = []
+        level_counts: List[int] = []
+        for level in range(self._num_levels):
+            measurements.extend(self._observed_power[level])
+            level_counts.append(len(self._observed_power[level]))
+
+        observed_power = np.average(measurements)
+
+        total_count = sum(level_counts)
+        expected_power = sum(((self._power_estimates[level] * level_counts[level]) / total_count  for level in range(self._num_levels)))
+
+        return observed_power, expected_power
+
+    def update(self, level: int, power: float):
+        self._observed_power[level].append(power)
+
+        while len(self._observed_power[level]) > self._window_size:
+            self._observed_power[level].popleft()
+
+
 class BudgetDistribution:
 
     def __init__(self,
@@ -103,14 +132,12 @@ class BudgetDistribution:
                  max_time: int,
                  num_levels: int,
                  seq_length: int,
-                 num_classes: int,
-                 panic_frac: float):
+                 num_classes: int):
         self._prior_counts = prior_counts  # key: class index, value: array [L] counts for each level
         self._max_time = max_time
         self._budget = budget
         self._num_levels = num_levels
         self._num_classes = num_classes
-        self._panic_time = int(panic_frac * max_time)
         self._level_counts = np.zeros(shape=(num_levels, ))
         self._observed_power = np.zeros(shape=(num_levels, ))
         self._seq_length = seq_length
@@ -130,10 +157,6 @@ class BudgetDistribution:
         self._observed_label_counts = np.zeros_like(self._estimated_label_counts)
 
     def get_budget(self, time: int) -> Tuple[float, float]:
-        # Force the budget after the panic time is reached
-        if time > self._panic_time:
-            return self._budget, self._budget
-
         expected_rest = 0
         variance_rest = 0
         time_delta = self._max_time - time
@@ -152,16 +175,17 @@ class BudgetDistribution:
             n_class = max(np.sum(class_level_counts), SMALL_NUMBER)
 
             # MLE estimate of the mean power
-            power_mean = np.sum((class_level_counts * power_estimates) / (n_class))
+            power_mean = np.sum((class_level_counts * power_estimates) / n_class)
 
+            # MLE estimate of the power variance
             squared_diff = np.square(power_estimates - power_mean)
             power_var = np.sum((class_level_counts * squared_diff) / n_class)
 
-            count_diff = max(self._estimated_label_counts[class_idx] - self._observed_label_counts[class_idx], 0)
-            remaining_fraction = count_diff / estimated_remaining
+            # Estimate the fraction of remaining samples which should belong to this class
+            remaining_fraction = class_count_diff[class_idx] / estimated_remaining
 
             expected_rest += power_mean * remaining_fraction
-            variance_rest += np.square(count_diff / time) * power_var
+            variance_rest += np.square(class_count_diff[class_idx] / time) * power_var
 
         expected_power = (1.0 / time) * (self._max_time * self._budget - time_delta * expected_rest)
         expected_power = max(expected_power, power_estimates[0])  # We clip the power to the lowest level
