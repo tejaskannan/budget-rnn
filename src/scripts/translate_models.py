@@ -1,7 +1,7 @@
 """
 Script to translate the old-style models into those
 with new cell types. The new implementation is more efficient
-and does not change the model correctness.
+and does not change the model behavior.
 """
 import os.path
 import numpy as np
@@ -10,7 +10,7 @@ from shutil import copy
 from typing import Dict
 
 from utils.file_utils import extract_model_name, read_by_file_suffix, make_dir, save_by_file_suffix, iterate_files
-from utils.constants import EMBEDDING_NAME, OUTPUT_LAYER_NAME, STOP_PREDICTION, RNN_CELL_NAME, MODEL_PATH, HYPERS_PATH
+from utils.constants import EMBEDDING_NAME, OUTPUT_LAYER_NAME, STOP_PREDICTION, RNN_CELL_NAME, MODEL_PATH, HYPERS_PATH, TRANSFORM_NAME
 from utils.hyperparameters import HyperParameters
 
 
@@ -26,14 +26,14 @@ def translate_hyperparameters(hypers_file: str) -> HyperParameters:
         hypers.model_params['stride_length'] = 1
         hypers.model_params['num_outputs'] = int(1.0 / hypers.model_params['sample_frac'])
         hypers.model_params['model_type'] = 'sample_rnn'
-    else:
+    elif hypers.model_params['model_type'] == 'sample_rnn':
         hypers.model_params['stride_length'] = int(1.0 / hypers.model_params['sample_frac'])
         hypers.model_params['num_outputs'] = int(1.0 / hypers.model_params['sample_frac'])
 
     return hypers
 
 
-def translate_model_parameters(model_file: str) -> Dict[str, np.ndarray]:
+def translate_adaptive_model(model_file: str) -> Dict[str, np.ndarray]:
     """
     Translates the model parameters to the new format. This is a mostly manual process.
     """
@@ -101,6 +101,31 @@ def translate_model_parameters(model_file: str) -> Dict[str, np.ndarray]:
     return result
 
 
+def translate_skip_model(model_file: str) -> Dict[str, np.ndarray]:
+    model_parameters = read_by_file_suffix(model_file)
+
+    # Copy all non-RNN cell weight matrices
+    result: Dict[str, np.ndarray] = dict()
+    for var_name, var in model_parameters.items():
+        if TRANSFORM_NAME not in var_name or BIAS in var_name:
+            result[var_name] = var
+
+    # The RNN cell now stacks the transformation layers together. We perform this
+    # translation with the given variables. This only works for UGRNN Cells (currently)
+    W_update = model_parameters[NAME_FORMAT.format('transform-layer-W-update', KERNEL)]
+    U_update = model_parameters[NAME_FORMAT.format('transform-layer-U-update', KERNEL)]
+    result[NAME_FORMAT.format('transform-layer-W-update', KERNEL)] = np.vstack([W_update, U_update])  # [2*D, D]
+
+    W_candidate = model_parameters[NAME_FORMAT.format('transform-layer-W', KERNEL)]
+    U_candidate = model_parameters[NAME_FORMAT.format('transform-layer-U', KERNEL)]
+    result[NAME_FORMAT.format('transform-layer-W', KERNEL)] = np.vstack([W_candidate, U_candidate])  # [2*D, D]
+
+    W_state_name = NAME_FORMAT.format('transform-layer-W-state', KERNEL)
+    result[W_state_name] = model_parameters[W_state_name]
+
+    return result
+
+
 def translate_model(model_file: str, output_folder: str):
     make_dir(output_folder)
     
@@ -113,7 +138,11 @@ def translate_model(model_file: str, output_folder: str):
     save_by_file_suffix(translated_hypers.__dict__(), os.path.join(output_folder, HYPERS_PATH.format(model_name)))
 
     # Translate and save the model parameters
-    translated_params = translate_model_parameters(model_file)
+    if translated_hypers.model_params['model_type'] == 'skip_rnn':
+        translated_params = translate_skip_model(model_file)
+    else:
+        translated_params = translate_adaptive_model(model_file)
+
     save_by_file_suffix(translated_params, os.path.join(output_folder, MODEL_PATH.format(model_name)))
 
     # Copy all other files
@@ -125,8 +154,14 @@ def translate_model(model_file: str, output_folder: str):
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--model-file', type=str, required=True)
+    parser.add_argument('--model-path', type=str, required=True)
     parser.add_argument('--output-folder', type=str, required=True)
     args = parser.parse_args()
 
-    translate_model(args.model_file, args.output_folder)
+    if os.path.isdir(args.model_path):
+        model_paths = list(iterate_files(args.model_path, pattern='model-[A-Z]+.*_model_best\.pkl\.gz'))
+    else:
+        model_paths = [args.model_path]
+
+    for model_file in model_paths:
+        translate_model(model_file, args.output_folder)
