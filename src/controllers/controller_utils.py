@@ -39,7 +39,8 @@ def save_test_log(accuracy: float, power: float, valid_accuracy: Optional[float]
         'VALID_ACCURACY': valid_accuracy,
         'BUDGET': budget
     }
-    test_log[key][str(budget)] = log_value
+    budget_str = '{0:.4f}'.format(budget)
+    test_log[key][budget_str] = log_value
 
     save_by_file_suffix([test_log], output_file)
 

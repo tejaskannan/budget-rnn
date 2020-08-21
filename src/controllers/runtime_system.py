@@ -3,10 +3,10 @@ import os.path
 import time
 from collections import namedtuple
 from enum import Enum, auto
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 from controllers.controller_utils import clip, get_budget_index, ModelResults
-from controllers.power_utils import get_power_estimates
+from controllers.power_utils import get_power_estimates, get_avg_power_multiple
 from controllers.model_controllers import AdaptiveController, FixedController, RandomController, BudgetWrapper
 from controllers.model_controllers import CONTROLLER_PATH, levels_to_execute, classification_for_levels, MultiModelController
 from controllers.runtime_controllers import PIDController, BudgetController, BudgetDistribution, PowerSetpoint
@@ -251,7 +251,7 @@ class RuntimeSystem:
             if is_end_of_window:
                 self._budget_step = budget_step
 
-    def estimate_validation_accuracy(self, budget: float) -> float:
+    def estimate_validation_results(self, budget: float, max_time: int) -> Tuple[float, float]:
         assert self._controller is not None, 'Must have an internal controller'
 
         thresholds = np.expand_dims(self._controller.get_thresholds(budget=budget), axis=0)  # [1, L]
@@ -259,7 +259,14 @@ class RuntimeSystem:
                                    thresholds=thresholds)  # [1, N]
         predictions = classification_for_levels(model_correct=self._valid_predictions,
                                                 levels=levels)  # [1, N]
-        predictions = predictions.reshape(-1, 1).astype(int)  # [N]
-
+        predictions = predictions.reshape(-1, 1).astype(int)  # [N, 1]
         valid_correct = (predictions == self._valid_labels).astype(float)  # [N]
-        return float(np.average(valid_correct))
+        accuracy = np.average(valid_correct)
+
+        avg_power = get_avg_power_multiple(num_samples=np.squeeze(levels + 1, axis=0),
+                                           seq_length=self._seq_length,
+                                           multiplier=int(self._seq_length / self._num_levels))
+        time_steps = min(int((budget * max_time) / avg_power), max_time)
+        adjusted_accuracy = (accuracy * time_steps) / max_time
+
+        return float(adjusted_accuracy), float(avg_power)

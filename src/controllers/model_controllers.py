@@ -245,6 +245,8 @@ class BudgetOptimizer:
         early_stopping_counter = 0
         prev_thresholds = np.copy(thresholds)
 
+        print(self._num_levels)
+
         for i in range(self._max_iter):
 
             # Select a random level to optimize. We skip the top-level because it does

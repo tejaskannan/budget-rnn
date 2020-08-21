@@ -77,7 +77,8 @@ def plot_and_save(sim_results: Dict[str, SimulationResult],
         # We compute the validation accuracy for this budget for the adaptive models.
         # This allows us to choose which backend model to select at testing time.
         if system.system_type == SystemType.ADAPTIVE:
-            valid_accuracy = system.estimate_validation_accuracy(budget=budget + noise_generator.loc)
+            valid_accuracy, valid_power = system.estimate_validation_results(budget=budget + noise_generator.loc,
+                                                                             max_time=max_time)
         else:
             valid_accuracy = None
 
@@ -333,7 +334,7 @@ if __name__ == '__main__':
 
             # Run the simulation on each budget
             for budget in sorted(budgets):
-                print('===== Starting budget: {0} ====='.format(budget))
+                print('===== Starting budget: {0:.4f} ====='.format(budget))
 
                 result, noise_terms = run_simulation(runtime_systems=runtime_systems,
                                                      max_time=max_time,
