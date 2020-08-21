@@ -313,7 +313,7 @@ class StandardModel(TFModel):
         labels_list: List[np.ndarray] = []
         skip_gates_list: List[np.ndarray] = []  # Only used for Skip RNN models
 
-        ops_to_run = [PREDICTION, SKIP_GATES, 'time_gate']
+        ops_to_run = [PREDICTION, SKIP_GATES]
 
         for batch_num, batch in enumerate(test_batch_generator):
             if max_num_batches is not None and batch_num >= max_num_batches:
@@ -321,8 +321,6 @@ class StandardModel(TFModel):
 
             feed_dict = self.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
             batch_result = self.execute(ops=ops_to_run, feed_dict=feed_dict)
-
-            print(batch_result['time_gate'])
 
             prediction = batch_result[PREDICTION]
 
