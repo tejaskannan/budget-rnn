@@ -62,10 +62,6 @@ class TFModel(Model):
         return [ACCURACY]
 
     @property
-    def f1_op_names(self) -> List[str]:
-        return [F1_SCORE]
-
-    @property
     def output_ops(self) -> List[str]:
         raise NotImplementedError()
 

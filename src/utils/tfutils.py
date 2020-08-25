@@ -70,6 +70,14 @@ def get_regularizer(name: Optional[str], scale: float) -> Optional[Callable[[tf.
         raise ValueError(f'Unknown regularization name: {name}')
 
 
+def apply_noise(x: tf.Tensor, scale: Union[float, tf.Tensor]) -> tf.Tensor:
+    """
+    Applies unbiased Gaussian noise with the given scale to the given tensor.
+    """
+    noise = scale * tf.random.normal(shape=tf.shape(x), mean=0.0, stddev=1.0)
+    return x + noise
+
+
 def mask_last_element(values: tf.Tensor) -> tf.Tensor:
     """
     Sets the final element of each sequence to zero.

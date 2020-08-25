@@ -9,12 +9,12 @@ from layers.cells.cell_factory import make_rnn_cell, CellClass, CellType
 from layers.output_layers import OutputType, compute_binary_classification_output, compute_multi_classification_output
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
-from utils.tfutils import mask_last_element, successive_pooling
+from utils.tfutils import mask_last_element, successive_pooling, apply_noise
 from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, OUTPUT, INPUTS, LOSS, OPTIMIZER_OP
 from utils.constants import DROPOUT_KEEP_RATE, MODEL, NUM_CLASSES, GLOBAL_STEP, PREDICTION, LOGITS
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE, STOP_LOSS_WEIGHT
 from utils.constants import EMBEDDING_NAME, TRANSFORM_NAME, AGGREGATION_NAME, OUTPUT_LAYER_NAME, LOSS_WEIGHTS
-from utils.constants import STOP_OUTPUT_NAME, STOP_OUTPUT_LOGITS, STOP_PREDICTION, RNN_CELL_NAME
+from utils.constants import STOP_OUTPUT_NAME, STOP_OUTPUT_LOGITS, STOP_PREDICTION, RNN_CELL_NAME, ACTIVATION_NOISE
 from utils.loss_utils import get_loss_weights, get_temperate_loss_weight
 from utils.sequence_model_utils import SequenceModelType, is_rnn, is_nbow, is_sample
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, get_multi_classification_metric
@@ -82,6 +82,7 @@ class AdaptiveModel(TFModel):
 
     def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool, epoch_num: int) -> Dict[tf.Tensor, np.ndarray]:
         dropout = self.hypers.dropout_keep_rate if is_train else 1.0
+        activation_noise = self.hypers.input_noise if is_train else 0.0
         input_batch = np.array(batch[INPUTS])
         output_batch = np.array(batch[OUTPUT])
 
@@ -103,7 +104,8 @@ class AdaptiveModel(TFModel):
             self._placeholders[INPUTS]: input_batch,
             self._placeholders[OUTPUT]: output_batch.reshape(-1, num_output_features),
             self._placeholders[DROPOUT_KEEP_RATE]: dropout,
-            self._placeholders[STOP_LOSS_WEIGHT]: stop_loss_weight
+            self._placeholders[STOP_LOSS_WEIGHT]: stop_loss_weight,
+            self._placeholders[ACTIVATION_NOISE]: activation_noise
         }
 
         # The loss weights are sorted in ascending order to more-heavily weight larger sample sizes.
@@ -141,12 +143,16 @@ class AdaptiveModel(TFModel):
             self._placeholders[STOP_LOSS_WEIGHT] = tf.placeholder(shape=[],
                                                                   dtype=tf.float32,
                                                                   name=STOP_LOSS_WEIGHT)
+            self._placeholders[ACTIVATION_NOISE] = tf.placeholder(shape=[],
+                                                                  dtype=tf.float32,
+                                                                  name=ACTIVATION_NOISE)
         else:
             self._placeholders[INPUTS] = tf.ones(shape=[1, self.seq_length] + list(input_features_shape), dtype=tf.float32, name=INPUTS)
             self._placeholders[OUTPUT] = tf.ones(shape=[1, num_output_features], dtype=output_dtype, name=OUTPUT)
             self._placeholders[DROPOUT_KEEP_RATE] = tf.ones(shape=[], dtype=tf.float32, name=DROPOUT_KEEP_RATE)
             self._placeholders[STOP_LOSS_WEIGHT] = tf.ones(shape=[], dtype=tf.float32, name=STOP_LOSS_WEIGHT)
             self._placeholders[LOSS_WEIGHTS] = tf.ones(shape=[self.num_outputs], dtype=tf.float32, name=LOSS_WEIGHTS)
+            self._placeholders[ACTIVATION_NOISE] = tf.zeros(shape=[], dtype=tf.float32, name=ACTIVATION_NOISE)
 
     def predict_classification(self, test_batch_generator: Iterable[Any],
                                batch_size: int,
@@ -188,11 +194,17 @@ class AdaptiveModel(TFModel):
 
     def _make_nbow_model(self, is_train: bool):
         state_size = self.hypers.model_params['state_size']
+        activation_noise = self._placeholders[ACTIVATION_NOISE]
+        dropout_keep_rate = self._placeholders[DROPOUT_KEEP_RATE]
+
+        # Apply input noise
+        inputs = apply_noise(self._placeholders[INPUTS], scale=activation_noise)
 
         # Apply the embedding layer, [B, T, D]
-        embedding, _ = dense(inputs=self._placeholders[INPUTS],
+        embedding, _ = dense(inputs=inputs,
                              units=state_size,
                              activation=self.hypers.model_params['embedding_activation'],
+                             activation_noise=activation_noise,
                              use_bias=True,
                              name=EMBEDDING_NAME)
 
@@ -201,7 +213,8 @@ class AdaptiveModel(TFModel):
                              output_size=state_size,
                              hidden_sizes=self.hypers.model_params['transform_units'],
                              activations=self.hypers.model_params['transform_activation'],
-                             dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                             activation_noise=activation_noise,
+                             dropout_keep_rate=dropout_keep_rate,
                              should_activate_final=True,
                              should_bias_final=True,
                              should_dropout_final=True,
@@ -209,8 +222,9 @@ class AdaptiveModel(TFModel):
 
         # Compute the attention aggregation weights, [B, T, 1]
         aggregation_weights, _ = dense(inputs=transformed,
-                                       output_size=1,
+                                       units=1,
                                        activation='sigmoid',
+                                       activation_noise=activation_noise,
                                        use_bias=True,
                                        name=AGGREGATION_NAME)
 
@@ -239,7 +253,8 @@ class AdaptiveModel(TFModel):
                         output_size=self.num_output_features,
                         hidden_sizes=self.hypers.model_params['output_hidden_units'],
                         activations=self.hypers.model_params['output_hidden_activation'],
-                        dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                        dropout_keep_rate=dropout_keep_rate,
+                        activation_noise=activation_noise,
                         should_activate_final=False,
                         should_bias_final=True,
                         should_dropout_final=False,
@@ -250,7 +265,8 @@ class AdaptiveModel(TFModel):
                                     output_size=1,
                                     hidden_sizes=self.hypers.model_params['stop_output_units'],
                                     activations=self.hypers.model_params['stop_output_activation'],
-                                    dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                                    dropout_keep_rate=dropout_keep_rate,
+                                    activation_noise=activation_noise,
                                     should_activate_final=False,
                                     should_bias_final=True,
                                     should_dropout_final=False,
@@ -283,11 +299,17 @@ class AdaptiveModel(TFModel):
         """
         state_size = self.hypers.model_params['state_size']
         batch_size = tf.shape(self._placeholders[INPUTS])[0]
+        activation_noise = self._placeholders[ACTIVATION_NOISE]
+        dropout_keep_rate = self._placeholders[DROPOUT_KEEP_RATE]
 
-        # Compute the input embeddings, result is a [B, T, D] tensor
-        embeddings, _ = dense(inputs=self._placeholders[INPUTS],
+        # Apply noise to the inputs
+        inputs = apply_noise(self._placeholders[INPUTS], scale=activation_noise)
+
+        # Compute the input embedding features, result is a [B, T, D] tensor
+        embeddings, _ = dense(inputs=inputs,
                               units=state_size,
                               activation=self.hypers.model_params['embedding_activation'],
+                              activation_noise=activation_noise,
                               use_bias=True,
                               name=EMBEDDING_NAME)
 
@@ -297,6 +319,7 @@ class AdaptiveModel(TFModel):
                                  cell_type=CellType[self.hypers.model_params['rnn_cell_type'].upper()],
                                  units=state_size,
                                  activation=self.hypers.model_params['rnn_activation'],
+                                 recurrent_noise=activation_noise,
                                  name=RNN_CELL_NAME)
 
         # Execute the RNN, outputs consist of a [B, L, D] tensor in the variable `transformed`
@@ -362,9 +385,10 @@ class AdaptiveModel(TFModel):
                              output_size=1,
                              hidden_sizes=self.hypers.model_params['stop_output_hidden_units'],
                              activations=self.hypers.model_params['stop_output_activation'],
+                             activation_noise=activation_noise,
                              should_bias_final=True,
                              should_activate_final=False,
-                             dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                             dropout_keep_rate=dropout_keep_rate,
                              name=STOP_PREDICTION)
 
         stop_output_logits = tf.squeeze(stop_output, axis=-1)  # [B, L]
@@ -376,10 +400,27 @@ class AdaptiveModel(TFModel):
                         output_size=self.num_output_features,
                         hidden_sizes=self.hypers.model_params['output_hidden_units'],
                         activations=self.hypers.model_params['output_hidden_activation'],
+                        activation_noise=activation_noise,
                         should_bias_final=True,
                         should_activate_final=False,
-                        dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                        dropout_keep_rate=dropout_keep_rate,
                         name=OUTPUT_LAYER_NAME)
+
+        # Add optional output pooling layer
+        if self.hypers.model_params.get('pool_outputs', False):
+            # Compute output weights, [B, L, 1]
+            output_weights, _ = dense(inputs=transformed,
+                                      units=1,
+                                      activation='sigmoid',
+                                      use_bias=True,
+                                      activation_noise=activation_noise,
+                                      name=AGGREGATION_NAME)
+
+            # Successively pool the logits, [B, L, K]
+            output = successive_pooling(inputs=output,
+                                        aggregation_weights=output_weights,
+                                        seq_length=self.num_outputs,
+                                        name=AGGREGATION_NAME)
 
         # Reshape to [B, 1, 1]
         expected_output = tf.expand_dims(self._placeholders[OUTPUT], axis=-1)

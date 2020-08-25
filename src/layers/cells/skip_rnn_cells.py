@@ -9,8 +9,9 @@ import tensorflow as tf
 from collections import namedtuple
 from typing import Optional, Any, Tuple
 
-from utils.tfutils import get_activation
+from utils.tfutils import get_activation, apply_noise
 from utils.constants import SMALL_NUMBER
+from .cell_utils import ugrnn
 
 
 SkipUGRNNStateTuple = namedtuple('SkipUGRNNStateTuple', ['state', 'cumulative_state_update'])
@@ -33,34 +34,26 @@ def binarize(x: tf.Tensor, name: str = 'binarize') -> tf.Tensor:
 
 class SkipUGRNNCell(tf.nn.rnn_cell.RNNCell):
 
-    def __init__(self, units: int, activation: str, name: str):
+    def __init__(self, units: int, activation: str, name: str, recurrent_noise: tf.Tensor):
         self._units = units
         self._activation = get_activation(activation)
+        self._recurrent_noise = recurrent_noise
 
         # Make the trainable variables for this cell
-        self.W_update = tf.get_variable(name='{0}-W-update-kernel'.format(name),
-                                        initializer=tf.glorot_uniform_initializer(),
-                                        shape=[2 * units, units],
-                                        trainable=True)
-        self.b_update = tf.get_variable(name='{0}-b-update-bias'.format(name),
-                                        initializer=tf.glorot_uniform_initializer(),
-                                        shape=[1, units],
-                                        trainable=True)
+        self.W_transform = tf.get_variable(name='{0}-W-transform'.format(name),
+                                           initializer=tf.glorot_uniform_initializer(),
+                                           shape=[2 * units, 2 * units],
+                                           trainable=True)
+        self.b_transform = tf.get_variable(name='{0}-b-transform'.format(name),
+                                           initializer=tf.glorot_uniform_initializer(),
+                                           shape=[1, 2 * units],
+                                           trainable=True)
 
-        self.W = tf.get_variable(name='{0}-W-kernel'.format(name),
-                                 initializer=tf.glorot_uniform_initializer(),
-                                 shape=[2 * units, units],
-                                 trainable=True)
-        self.b = tf.get_variable(name='{0}-b-bias'.format(name),
-                                 initializer=tf.glorot_uniform_initializer(),
-                                 shape=[1, units],
-                                 trainable=True)
-
-        self.W_state = tf.get_variable(name='{0}-W-state-kernel'.format(name),
+        self.W_state = tf.get_variable(name='{0}-W-state'.format(name),
                                        initializer=tf.glorot_uniform_initializer(),
                                        shape=[units, 1],
                                        trainable=True)
-        self.b_state = tf.get_variable(name='{0}-b-state-bias'.format(name),
+        self.b_state = tf.get_variable(name='{0}-b-state'.format(name),
                                        initializer=tf.glorot_uniform_initializer(),
                                        shape=[1, 1],
                                        trainable=True)
@@ -98,18 +91,16 @@ class SkipUGRNNCell(tf.nn.rnn_cell.RNNCell):
 
         scope = scope if scope is not None else type(self).__name__
         with tf.variable_scope(scope):
-            # Concatenate the previous state and the current input. This allows for fewer matrix multiplications
-            # and helps with efficiency
-            input_state_concat = tf.concat([prev_state, inputs], axis=-1)  # [B, 2 * D]
+            
+            # Apply the standard UGRNN update, [B, D]
+            next_cell_state = ugrnn(inputs=inputs,
+                                    state=prev_state,
+                                    W_transform=self.W_transform,
+                                    b_transform=self.b_transform,
+                                    activation=self._activation)
 
-            # Compute the standard UGRNN Cell
-            update_state = tf.matmul(input_state_concat, self.W_update)  # [B, D]
-            update = tf.math.sigmoid(update_state + self.b_update + 1)
-
-            candidate_state = tf.matmul(input_state_concat, self.W)  # [B, D]
-            candidate = self._activation(candidate_state + self.b)
-
-            next_cell_state = update * candidate + (1 - update) * prev_state  # [B, D]
+            # Apply regularization noise
+            next_cell_state = apply_noise(next_cell_state, scale=self._recurrent_noise)
 
             # Apply the state update gate. This is the Skip portion.
             # We first compute the state update gate. This is a binary version of the cumulative state update prob.
@@ -131,34 +122,35 @@ class SkipUGRNNCell(tf.nn.rnn_cell.RNNCell):
 
 class SkipGRUCell(tf.nn.rnn_cell.RNNCell):
 
-    def __init__(self, units: int, activation: str, name: str):
+    def __init__(self, units: int, activation: str, name: str, recurrent_noise: tf.Tensor):
         self._units = units
         self._activation = get_activation(activation)
+        self._recurrent_noise = recurrent_noise
 
         # Make the trainable variables for this cell
-        self.W_gates = tf.get_variable(name='{0}-W-update-kernel'.format(name),
+        self.W_gates = tf.get_variable(name='{0}-W-update'.format(name),
                                        initializer=tf.glorot_uniform_initializer(),
                                        shape=[2 * units, 2 * units],
                                        trainable=True)
-        self.b_gates = tf.get_variable(name='{0}-b-update-bias'.format(name),
+        self.b_gates = tf.get_variable(name='{0}-b-update'.format(name),
                                        initializer=tf.glorot_uniform_initializer(),
                                        shape=[1, 2 * units],
                                        trainable=True)
 
-        self.W = tf.get_variable(name='{0}-W-kernel'.format(name),
+        self.W = tf.get_variable(name='{0}-W-candidate'.format(name),
                                  initializer=tf.glorot_uniform_initializer(),
                                  shape=[2 * units, units],
                                  trainable=True)
-        self.b = tf.get_variable(name='{0}-b-bias'.format(name),
+        self.b = tf.get_variable(name='{0}-b-candidate'.format(name),
                                  initializer=tf.glorot_uniform_initializer(),
                                  shape=[1, units],
                                  trainable=True)
 
-        self.W_state = tf.get_variable(name='{0}-W-state-kernel'.format(name),
+        self.W_state = tf.get_variable(name='{0}-W-state'.format(name),
                                        initializer=tf.glorot_uniform_initializer(),
                                        shape=[units, 1],
                                        trainable=True)
-        self.b_state = tf.get_variable(name='{0}-b-state-bias'.format(name),
+        self.b_state = tf.get_variable(name='{0}-b-state'.format(name),
                                        initializer=tf.glorot_uniform_initializer(),
                                        shape=[1, 1],
                                        trainable=True)
@@ -207,11 +199,15 @@ class SkipGRUCell(tf.nn.rnn_cell.RNNCell):
             # Split into reset and update gates, pair of [B, D] tensors
             reset, update = tf.split(gates, num_or_size_splits=2, axis=-1)
 
+            # Create the candidate state
             reset_state_concat = tf.concat([reset * prev_state, inputs], axis=-1)  # [B, 2 * D]
-            candidate_state = tf.matmul(reset_state_concat, self.W)  # [B, D]
-            candidate = self._activation(candidate_state + self.b)
+            candidate = tf.matmul(reset_state_concat, self.W) + self.b  # [B, D]
+            candidate_state = self._activation(candidate) if self._activation is not None else candidate
 
-            next_cell_state = update * candidate + (1 - update) * prev_state  # [B, D]
+            next_cell_state = update * prev_state + (1.0 - update) * candidate_state  # [B, D]
+
+            # Apply regularization noise
+            next_cell_state = apply_noise(next_cell_state, scale=self._recurrent_noise)
 
             # Apply the state update gate. This is the Skip portion.
             # We first compute the state update gate. This is a binary version of the cumulative state update prob.
@@ -229,87 +225,3 @@ class SkipGRUCell(tf.nn.rnn_cell.RNNCell):
             skip_output = SkipGRUOutputTuple(next_state, state_update_gate)
 
         return skip_output, skip_state
-
-
-class RandomSkipUGRNNCell(tf.nn.rnn_cell.RNNCell):
-
-    def __init__(self, units: int, activation: str, state_keep_prob: float, name: str):
-        self._units = units
-        self._activation = get_activation(activation)
-        self._state_keep_prob = state_keep_prob
-
-        # Make the trainable variables for this cell
-        self.W_update = tf.get_variable(name='{0}-W-update-kernel'.format(name),
-                                        initializer=tf.glorot_uniform_initializer(),
-                                        shape=[units, units],
-                                        trainable=True)
-        self.U_update = tf.get_variable(name='{0}-U-update-kernel'.format(name),
-                                        initializer=tf.glorot_uniform_initializer(),
-                                        shape=[units, units],
-                                        trainable=True)
-        self.b_update = tf.get_variable(name='{0}-b-update-bias'.format(name),
-                                        initializer=tf.glorot_uniform_initializer(),
-                                        shape=[1, units],
-                                        trainable=True)
-
-        self.W = tf.get_variable(name='{0}-W-kernel'.format(name),
-                                 initializer=tf.glorot_uniform_initializer(),
-                                 shape=[units, units],
-                                 trainable=True)
-        self.U = tf.get_variable(name='{0}-U-kernel'.format(name),
-                                 initializer=tf.glorot_uniform_initializer(),
-                                 shape=[units, units],
-                                 trainable=True)
-        self.b = tf.get_variable(name='{0}-b-bias'.format(name),
-                                 initializer=tf.glorot_uniform_initializer(),
-                                 shape=[1, units],
-                                 trainable=True)
-
-        self.W_state = tf.get_variable(name='{0}-W-state-kernel'.format(name),
-                                       initializer=tf.glorot_uniform_initializer(),
-                                       shape=[units, 1],
-                                       trainable=True)
-        self.b_state = tf.get_variable(name='{0}-b-state-bias'.format(name),
-                                       initializer=tf.glorot_uniform_initializer(),
-                                       shape=[1, 1],
-                                       trainable=True)
-
-    @property
-    def state_size(self) -> int:
-        return self._units
-
-    @property
-    def output_size(self) -> int:
-        return self._units
-
-    def get_initial_state(self, inputs: Optional[tf.Tensor], batch_size: Optional[int], dtype: Any) -> tf.Tensor:
-        """
-        Creates an initial state by setting the hidden state to zero.
-        """
-        initial_state = tf.get_variable(name='initial-hidden-state',
-                                        initializer=tf.zeros_initializer(),
-                                        shape=[1, self._units],
-                                        dtype=dtype,
-                                        trainable=False)
-        return tf.tile(initial_state, multiples=(batch_size, 1))  # [B, D]
-
-    def __call__(self, inputs: tf.Tensor, state: tf.Tensor, scope: Optional[str] = None) -> Tuple[tf.Tensor, tf.Tensor]:
-        scope = scope if scope is not None else type(self).__name__
-        with tf.variable_scope(scope):
-            # Compute the standard UGRNN Cell with the added state update multiplier
-            update_state = tf.matmul(state, self.W_update)
-            update_input = tf.matmul(inputs, self.U_update)
-            update = tf.math.sigmoid(update_state + update_input + self.b_update + 1)
-
-            candidate_state = tf.matmul(state, self.W)
-            candidate_input = tf.matmul(inputs, self.U)
-            candidate = self._activation(candidate_state + candidate_input + self.b)
-
-            next_state = update * candidate + (1 - update) * state
-
-            # Make Updates Randomly
-            random_sample = tf.uniform(shape=(tf.shape(inputs)[0], 1), minval=0.0, maxval=1.0)
-            update_mask = tf.cast(random_sample < self._state_keep_prob, dtype=tf.float32)
-            next_state = update_mask * next_state + (1.0 - update_mask) * state
-
-        return next_state, next_state

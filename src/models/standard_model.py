@@ -7,17 +7,16 @@ from typing import Optional, Dict, List, Any, DefaultDict, Iterable
 
 from models.tf_model import TFModel
 from layers.cells.cell_factory import make_rnn_cell, CellClass, CellType
-from layers.cells.phased_rnn_cells import PhasedUGRNNCell
 from layers.dense import mlp, dense
 from layers.output_layers import OutputType, compute_binary_classification_output, compute_multi_classification_output
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.misc import sample_sequence_batch, batch_sample_noise
-from utils.tfutils import get_activation, successive_pooling, make_tf_rnn_cell
+from utils.tfutils import get_activation, successive_pooling, make_tf_rnn_cell, apply_noise, apply_noise
 from utils.sequence_model_utils import SequenceModelType
 from utils.constants import ACCURACY, OUTPUT, INPUTS, LOSS, PREDICTION, LOGITS, SMALL_NUMBER, LEAK_RATE, PHASE_GATES
-from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, NUM_CLASSES
-from utils.constants import EMBEDDING_NAME, TRANSFORM_NAME, AGGREGATION_NAME, OUTPUT_LAYER_NAME, RNN_NAME, SKIP_GATES
+from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, NUM_CLASSES, ACTIVATION_NOISE
+from utils.constants import EMBEDDING_NAME, TRANSFORM_NAME, AGGREGATION_NAME, OUTPUT_LAYER_NAME, RNN_NAME, SKIP_GATES, RNN_CELL_NAME
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, get_multi_classification_metric
 from utils.loss_utils import binary_classification_loss, get_loss_weights
 from .base_model import Model
@@ -65,6 +64,7 @@ class StandardModel(TFModel):
 
     def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool, epoch_num: int) -> Dict[tf.Tensor, np.ndarray]:
         dropout = self.hypers.dropout_keep_rate if is_train else 1.0
+        activation_noise = self.hypers.input_noise if is_train else 0.0
         input_batch = np.array(batch[INPUTS])
         output_batch = np.array(batch[OUTPUT])
 
@@ -75,14 +75,11 @@ class StandardModel(TFModel):
         num_output_features = self.metadata[NUM_OUTPUT_FEATURES]
         seq_length = self.metadata[SEQ_LENGTH]
 
-        # Add noise to batch during training
-        if is_train and self.hypers.batch_noise > SMALL_NUMBER:
-            input_batch = batch_sample_noise(input_batch, noise_weight=self.hypers.batch_noise)
-
         feed_dict = {
             self._placeholders[INPUTS]: input_batch,
             self._placeholders[OUTPUT]: output_batch.reshape(-1, num_output_features),
-            self._placeholders[DROPOUT_KEEP_RATE]: dropout
+            self._placeholders[DROPOUT_KEEP_RATE]: dropout,
+            self._placeholders[ACTIVATION_NOISE]: activation_noise
         }
 
         if self.model_type == SequenceModelType.PHASED_RNN:
@@ -108,6 +105,9 @@ class StandardModel(TFModel):
             self._placeholders[DROPOUT_KEEP_RATE] = tf.placeholder(shape=(),
                                                                    dtype=tf.float32,
                                                                    name=DROPOUT_KEEP_RATE)
+            self._placeholders[ACTIVATION_NOISE] = tf.placeholder(shape=(),
+                                                                  dtype=tf.float32,
+                                                                  name=ACTIVATION_NOISE)
             # Phased RNNs have an extra leak rate placeholder
             if self.model_type == SequenceModelType.PHASED_RNN:
                 self._placeholders[LEAK_RATE] = tf.placeholder(shape=(),
@@ -117,7 +117,8 @@ class StandardModel(TFModel):
             self._placeholders[INPUTS] = tf.ones(shape=(1,) + input_shape[1:], dtype=tf.float32, name=INPUTS)
             self._placeholders[OUTPUT] = tf.ones(shape=(1, num_output_features), dtype=output_dtype, name=OUTPUT)
             self._placeholders[DROPOUT_KEEP_RATE] = tf.ones(shape=(), dtype=tf.float32, name=DROPOUT_KEEP_RATE)
-            
+            self._placeholders[ACTIVATION_NOISE] = tf.zeros(shape=(), dtype=tf.float32, name=ACTIVATION_NOISE)
+
             if self.model_type == SequenceModelType.PHASED_RNN:
                 self._placeholders[LEAK_RATE] = tf.ones(shape=(), dtype=tf.float32, name=LEAK_RATE)
 
@@ -127,27 +128,33 @@ class StandardModel(TFModel):
 
     def _make_model(self, is_train: bool):
         """
-        Builds the comptuation graph based on the model type.
+        Builds the computation graph for this model.
         """
-        compression_fraction = self.hypers.model_params.get('compression_fraction')
         state_size = self.hypers.model_params['state_size']
         batch_size = tf.shape(self._placeholders[INPUTS])[0]
+        activation_noise = self._placeholders[ACTIVATION_NOISE]
+        dropout_keep_rate = self._placeholders[DROPOUT_KEEP_RATE]
+
+        # Apply input noise
+        inputs = apply_noise(self._placeholders[INPUTS], scale=activation_noise)
 
         # Embed the input sequence into a [B, T, D] tensor
-        input_sequence, _ = dense(inputs=self._placeholders[INPUTS],
-                                  units=state_size,
-                                  activation=self.hypers.model_params['embedding_activation'],
-                                  use_bias=True,
-                                  name=EMBEDDING_NAME)
+        embeddings, _ = dense(inputs=inputs,
+                              units=state_size,
+                              activation=self.hypers.model_params['embedding_activation'],
+                              use_bias=True,
+                              activation_noise=activation_noise,
+                              name=EMBEDDING_NAME)
 
         # Apply the transformation layer. The output is a [B, T, D] tensor of transformed inputs for each model type.
         if self.model_type == SequenceModelType.NBOW:
             # Apply the MLP transformation. Result is a [B, T, D] tensor
-            transformed, _ = mlp(inputs=input_sequence,
+            transformed, _ = mlp(inputs=embeddings,
                                  output_size=state_size,
                                  hidden_sizes=self.hypers.model_params['mlp_hidden_units'],
                                  activations=self.hypers.model_params['mlp_activation'],
-                                 dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                                 dropout_keep_rate=dropout_keep_rate,
+                                 activation_noise=activation_noise,
                                  should_activate_final=True,
                                  should_bias_final=True,
                                  should_dropout_final=True,
@@ -157,6 +164,7 @@ class StandardModel(TFModel):
             aggregation_weights, _ = dense(inputs=transformed,
                                            units=1,
                                            activation='sigmoid',
+                                           activation_noise=activation_noise,
                                            use_bias=True,
                                            name=AGGREGATION_NAME)
 
@@ -166,55 +174,61 @@ class StandardModel(TFModel):
                                              name='{0}-pool'.format(AGGREGATION_NAME),
                                              seq_length=self.metadata[SEQ_LENGTH])
         elif self.model_type == SequenceModelType.RNN:
-            cell = make_tf_rnn_cell(self.hypers.model_params['rnn_cell_type'],
-                                    num_units=state_size,
-                                    layers=1,
-                                    activation=self.hypers.model_params['rnn_activation'],
-                                    name_prefix=TRANSFORM_NAME)
+            cell = make_rnn_cell(cell_class=CellClass.STANDARD,
+                                 cell_type=CellType[self.hypers.model_params['rnn_cell_type'].upper()],
+                                 units=state_size,
+                                 activation=self.hypers.model_params['rnn_activation'],
+                                 recurrent_noise=activation_noise,
+                                 name=RNN_CELL_NAME)
 
             initial_state = cell.zero_state(batch_size=batch_size, dtype=tf.float32)
             rnn_outputs, state = tf.nn.dynamic_rnn(cell=cell,
-                                                   inputs=input_sequence,
+                                                   inputs=embeddings,
                                                    initial_state=initial_state,
                                                    dtype=tf.float32,
-                                                   scope=RNN_NAME)
+                                                   scope=TRANSFORM_NAME)
             transformed = rnn_outputs  # [B, T, D]
         elif self.model_type == SequenceModelType.SKIP_RNN:
             cell = make_rnn_cell(cell_class=CellClass.SKIP,
                                  cell_type=CellType[self.hypers.model_params['rnn_cell_type'].upper()],
                                  units=state_size,
                                  activation=self.hypers.model_params['rnn_activation'],
-                                 name=TRANSFORM_NAME)
+                                 recurrent_noise=activation_noise,
+                                 name=RNN_CELL_NAME)
 
-            initial_state = cell.get_initial_state(inputs=input_sequence,
+            initial_state = cell.get_initial_state(inputs=embeddings,
                                                    batch_size=batch_size,
                                                    dtype=tf.float32)
             # Apply RNN
             rnn_outputs, states = tf.nn.dynamic_rnn(cell=cell,
-                                                    inputs=input_sequence,
+                                                    inputs=embeddings,
                                                     initial_state=initial_state,
                                                     dtype=tf.float32,
-                                                    scope=RNN_NAME)
+                                                    scope=TRANSFORM_NAME)
             transformed = rnn_outputs.output  # [B, T, D]
             self._ops[SKIP_GATES] = tf.squeeze(rnn_outputs.state_update_gate, axis=-1)  # [B, T]
         elif self.model_type == SequenceModelType.PHASED_RNN:
             period_init = self.metadata[SEQ_LENGTH]
 
-            cell = PhasedUGRNNCell(units=state_size,
-                                   activation=self.hypers.model_params['rnn_activation'],
-                                   on_fraction=self.hypers.model_params['on_fraction'],
-                                   period_init=period_init,
-                                   leak_rate=self.placeholders[LEAK_RATE],
-                                   name=TRANSFORM_NAME)
-            initial_state = cell.get_initial_state(inputs=input_sequence,
+            cell = make_rnn_cell(cell_class=CellClass.PHASED,
+                                 cell_type=CellType[self.hypers.model_params['rnn_cell_type'].upper()],
+                                 units=state_size,
+                                 activation=self.hypers.model_params['rnn_activation'],
+                                 recurrent_noise=activation_noise,
+                                 on_fraction=self.hypers.model_params['on_fraction'],
+                                 period_init=period_init,
+                                 leak_rate=self.placeholders[LEAK_RATE],
+                                 name=RNN_CELL_NAME)
+
+            initial_state = cell.get_initial_state(inputs=embeddings,
                                                    batch_size=batch_size,
                                                    dtype=tf.float32)
 
             rnn_outputs, state = tf.nn.dynamic_rnn(cell=cell,
-                                                   inputs=input_sequence,
+                                                   inputs=embeddings,
                                                    initial_state=initial_state,
                                                    dtype=tf.float32,
-                                                   scope=RNN_NAME)
+                                                   scope=TRANSFORM_NAME)
             transformed = rnn_outputs.output  # [B, T, D]
             self._ops[PHASE_GATES] = tf.squeeze(rnn_outputs.time_gate, axis=-1)  # [B, T]
         else:
@@ -234,7 +248,8 @@ class StandardModel(TFModel):
                         output_size=self.num_output_features,
                         hidden_sizes=self.hypers.model_params['output_hidden_units'],
                         activations=self.hypers.model_params['output_hidden_activation'],
-                        dropout_keep_rate=self._placeholders[DROPOUT_KEEP_RATE],
+                        dropout_keep_rate=dropout_keep_rate,
+                        activation_noise=activation_noise,
                         should_bias_final=True,
                         should_activate_final=False,
                         should_dropout_final=False,
@@ -243,7 +258,6 @@ class StandardModel(TFModel):
         if self.output_type == OutputType.BINARY_CLASSIFICATION:
             classification_output = compute_binary_classification_output(model_output=output,
                                                                          labels=expected_output)
-
             self._ops[LOGITS] = classification_output.logits
             self._ops[PREDICTION] = classification_output.predictions
             self._ops[ACCURACY] = classification_output.accuracy

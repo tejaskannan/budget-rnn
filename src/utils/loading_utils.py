@@ -1,5 +1,5 @@
 import os.path
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, Any
 
 from dataset.dataset import Dataset
 from dataset.dataset_factory import get_dataset
@@ -9,6 +9,27 @@ from models.model_factory import get_model
 from .constants import TRAIN, METADATA_PATH, HYPERS_PATH
 from .file_utils import read_by_file_suffix, extract_model_name
 from .hyperparameters import HyperParameters
+
+
+def get_hyperparameters(model_path: str) -> HyperParameters:
+    save_folder, model_file = os.path.split(model_path)
+
+    model_name = extract_model_name(model_file)
+    assert model_name is not None, 'Could not extract name from file: {0}'.format(model_name)
+
+    # Extract hyperparameters
+    hypers_path = os.path.join(save_folder, HYPERS_PATH.format(model_name))
+    return HyperParameters.create_from_file(hypers_path)
+
+
+def get_metadata(model_path: str) -> Dict[str, Any]:
+    save_folder, model_file = os.path.split(model_path)
+
+    model_name = extract_model_name(model_file)
+    assert model_name is not None, 'Could not extract name from file: {0}'.format(model_name)
+
+    metadata_file = os.path.join(save_folder, METADATA_PATH.format(model_name))
+    return read_by_file_suffix(metadata_file)['metadata']
 
 
 def make_dataset(model_name: str, save_folder: str, dataset_type: str, dataset_folder: Optional[str]) -> Dataset:
@@ -45,6 +66,3 @@ def restore_neural_network(model_path: str, dataset_folder: Optional[str]) -> Tu
     model = make_model(model_name, hypers, save_folder)
 
     return model, dataset
-
-
-

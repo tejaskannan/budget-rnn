@@ -11,8 +11,9 @@ import tensorflow as tf
 from collections import namedtuple
 from typing import Optional, Any, Tuple
 
-from utils.tfutils import get_activation
+from utils.tfutils import get_activation, apply_noise
 from utils.constants import SMALL_NUMBER, ONE_HALF
+from .cell_utils import ugrnn
 
 
 PhasedUGRNNStateTuple = namedtuple('PhasedUGRNNStateTuple', ['state', 'time'])
@@ -47,30 +48,23 @@ class PhasedUGRNNCell(tf.nn.rnn_cell.RNNCell):
                  on_fraction: tf.Tensor,
                  period_init: tf.Tensor,
                  leak_rate: tf.Tensor,
+                 recurrent_noise: tf.Tensor,
                  name: str):
         self._units = units
         self._activation = get_activation(activation)
         self._on_fraction = on_fraction
         self._leak_rate = leak_rate
+        self._recurrent_noise = recurrent_noise
 
         # Make the trainable variables for this cell
-        self.W_update = tf.get_variable(name='{0}-W-update-kernel'.format(name),
-                                        initializer=tf.glorot_uniform_initializer(),
-                                        shape=[2 * units, units],
-                                        trainable=True)
-        self.b_update = tf.get_variable(name='{0}-b-update-bias'.format(name),
-                                        initializer=tf.glorot_uniform_initializer(),
-                                        shape=[1, units],
-                                        trainable=True)
-
-        self.W = tf.get_variable(name='{0}-W-kernel'.format(name),
-                                 initializer=tf.glorot_uniform_initializer(),
-                                 shape=[2 * units, units],
-                                 trainable=True)
-        self.b = tf.get_variable(name='{0}-b-bias'.format(name),
-                                 initializer=tf.glorot_uniform_initializer(),
-                                 shape=[1, units],
-                                 trainable=True)
+        self.W_transform = tf.get_variable(name='{0}-W-transform'.format(name),
+                                           initializer=tf.glorot_uniform_initializer(),
+                                           shape=[2 * units, 2 * units],
+                                           trainable=True)
+        self.b_transform = tf.get_variable(name='{0}-b-transform'.format(name),
+                                           initializer=tf.glorot_uniform_initializer(),
+                                           shape=[1, 2 * units],
+                                           trainable=True)
 
         self.period = tf.get_variable(name='{0}-period'.format(name),
                                       initializer=tf.random_uniform_initializer(minval=0.0, maxval=period_init, dtype=tf.float32),
@@ -115,18 +109,16 @@ class PhasedUGRNNCell(tf.nn.rnn_cell.RNNCell):
 
         scope = scope if scope is not None else type(self).__name__
         with tf.variable_scope(scope):
-            # Concatenate the previous state and the current input. This allows for fewer matrix multiplications
-            # and helps with efficiency
-            input_state_concat = tf.concat([prev_state, inputs], axis=-1)  # [B, 2 * D]
 
-            # Compute the standard UGRNN Cell
-            update_state = tf.matmul(input_state_concat, self.W_update)  # [B, D]
-            update = tf.math.sigmoid(update_state + self.b_update + 1)
+            # Apply the standard UGRNN update, [B, D]
+            next_cell_state = ugrnn(inputs=inputs,
+                                    state=prev_state,
+                                    W_transform=self.W_transform,
+                                    b_transform=self.b_transform,
+                                    activation=self._activation)
 
-            candidate_state = tf.matmul(input_state_concat, self.W)  # [B, D]
-            candidate = self._activation(candidate_state + self.b)
-
-            next_cell_state = update * candidate + (1 - update) * prev_state  # [B, D]
+            # Apply regularization noise
+            next_cell_state = apply_noise(next_cell_state, scale=self._recurrent_noise)
 
             # Apply the time oscillation gate
             kt = time_gate(time=time, period=self.period, on_fraction=self._on_fraction, shift=self.shift, leak_rate=self._leak_rate)

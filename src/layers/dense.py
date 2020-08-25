@@ -1,14 +1,16 @@
 import tensorflow as tf
 from typing import Optional, List, Union, Any, Tuple
 
-from utils.tfutils import get_activation
+from utils.tfutils import get_activation, apply_noise
 
 
 def dense(inputs: tf.Tensor,
           units: int,
           activation: Optional[str],
+          activation_noise: tf.Tensor,
           name: str,
-          use_bias: bool = False) -> Tuple[tf.Tensor, tf.Tensor]:
+          use_bias: bool,
+          dropout_keep_rate: Optional[Union[float, tf.Tensor]] = None) -> Tuple[tf.Tensor, tf.Tensor]:
     """
     Creates a dense, feed-forward layer with the given parameters.
 
@@ -16,8 +18,10 @@ def dense(inputs: tf.Tensor,
         inputs: The input tensor. Has the shape [B, ..., D]
         units: The number of output units. Denoted by K.
         activation: Optional activation function. If none, the activation is linear.
+        activation_noise: Noise scale to apply to the final activations
         name: Name prefix for the created trainable variables.
         use_bias: Whether to add a bias to the output.
+        dropout_keep_rate: Optional dropout to apply to the activations
     Returns:
         A tuple of 2 elements: (1) the transformed inputs in a [B, ..., K] tensor and (2) the transformed inputs without the activation function.
             This second entry is included for debugging purposes.
@@ -25,12 +29,8 @@ def dense(inputs: tf.Tensor,
     # Get the size of the input features, denoted by D
     input_units = inputs.get_shape()[-1].value
 
-    # Get names for the trainable variables
-    weight_name = '{0}-kernel'.format(name)
-    bias_name = '{0}-bias'.format(name)
-
     # Create the weight matrix
-    W = tf.get_variable(name=weight_name,
+    W = tf.get_variable(name='{0}-kernel'.format(name),
                         shape=[input_units, units],
                         initializer=tf.initializers.glorot_uniform(),
                         trainable=True)
@@ -41,7 +41,7 @@ def dense(inputs: tf.Tensor,
     # Add the bias if specified
     if use_bias:
         # Bias vector of size [K]
-        b = tf.get_variable(name=bias_name,
+        b = tf.get_variable(name='{0}-bias'.format(name),
                             shape=[1, units],
                             initializer=tf.initializers.random_uniform(minval=-0.7, maxval=0.7),
                             trainable=True)
@@ -54,6 +54,12 @@ def dense(inputs: tf.Tensor,
     if activation_fn is not None:
         transformed = activation_fn(transformed)
 
+    # Apply noise regularization
+    transformed = apply_noise(transformed, scale=activation_noise)
+    
+    if dropout_keep_rate is not None:
+        transformed = tf.nn.dropout(transformed, keep_prob=dropout_keep_rate)
+
     return transformed, pre_activation
 
 
@@ -62,7 +68,8 @@ def mlp(inputs: tf.Tensor,
         hidden_sizes: Optional[List[int]],
         activations: Optional[Union[List[str], str]],
         name: str,
-        dropout_keep_rate: float = 1.0,
+        activation_noise: tf.Tensor,
+        dropout_keep_rate: Union[float, tf.Tensor] = 1.0,
         should_activate_final: bool = False,
         should_bias_final: bool = False,
         should_dropout_final: bool = False) -> Tuple[tf.Tensor, List[tf.Tensor]]:
@@ -80,6 +87,7 @@ def mlp(inputs: tf.Tensor,
             signals that no hidden layers should be included.
         activations: Activation functions to apply the each layer. This can either be a list
             of different activations or a single activation function (which is applied everywhere).
+        activation_noise: Noise scale to apply to activation values
         dropout_keep_rate: The dropout keep probability.
         should_activate_final: Whether to apply activations to the output layer.
         should_bias_final: Whether to apply a bias to the output layer.
@@ -114,20 +122,20 @@ def mlp(inputs: tf.Tensor,
         intermediate, _ = dense(inputs=intermediate,
                                 units=hidden_size,
                                 activation=activation,
+                                activation_noise=activation_noise,
                                 use_bias=True,
+                                dropout_keep_rate=dropout_keep_rate,
                                 name='{0}-hidden-{1}'.format(name, i))
-        intermediate = tf.nn.dropout(intermediate, keep_prob=dropout_keep_rate)
         states.append(intermediate)
 
     # Apply the output layer
+    final_dropout = dropout_keep_rate if should_dropout_final else None
     result, _ = dense(inputs=intermediate,
                       units=output_size,
                       activation=activation_fns[-1],
                       use_bias=should_bias_final,
+                      activation_noise=activation_noise,
+                      dropout_keep_rate=final_dropout,
                       name='{0}-output'.format(name))
-
-    # Apply dropout to the final layer if specified
-    if should_dropout_final:
-        result = tf.nn.dropout(result, keep_prob=dropout_keep_rate)
 
     return result, states
