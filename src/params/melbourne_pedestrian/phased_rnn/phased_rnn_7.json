@@ -1,0 +1,27 @@
+{
+	"batch_size": 8,
+	"dropout_keep_rate": 0.9,
+	"learning_rate": 0.0001,
+    "learning_rate_decay": 0.999,
+	"gradient_clip": 1,
+	"epochs": 250,
+	"patience": 25,
+    "model": "standard",
+    "dataset_type": "standard",
+    "input_noise": 0.001,
+    "seq_length": 20,
+	"model_params": {
+		"state_size": 14,
+		"output_hidden_units": [20],
+		"output_hidden_activation": "leaky_relu",
+        "embedding_activation": "leaky_relu",
+        "output_type": "multi_classification",
+        "rnn_cell_type": "ugrnn",
+        "rnn_activation": "tanh",
+		"model_type": "phased_rnn",
+        "leak_rate": 0.001,
+        "on_fraction": 0.7,
+        "normalize_inputs": true,
+        "has_single_output": true
+	}
+}
