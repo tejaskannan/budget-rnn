@@ -8,6 +8,7 @@ int main(void) {
     test_add_two();
     test_add_three();
     test_add_diff();
+    test_add_min_dims();
     test_add_wrong_dims();
     printf("\tPassed addition tests.\n");
 
@@ -20,11 +21,18 @@ int main(void) {
     test_mult_wrong_dims();
     printf("\tPassed multiplication tests.\n");
 
+    // Vector Dot Product
+    printf("---- Testing Vector Dot Product ----\n");
+    test_dot_product();
+    test_dot_product_two();
+    printf("\tPassed dot product tests.\n");
+
     // Matrix Hadamard Product
     printf("---- Testing Hadamard Product ----\n");
     test_hadamard_two();
     test_hadamard_three();
     test_hadamard_diff();
+    test_hadamard_min_dims();
     test_hadamard_wrong_dims();
     printf("\tPassed multiplication tests.\n");
 
@@ -58,6 +66,7 @@ int main(void) {
     // Vector Argmax
     printf("---- Testing Vector Argmax ----\n");
     test_argmax();
+    test_argmax_two();
     printf("\tPassed argmax tests.\n");
 
     // Matrix Minimum
@@ -117,6 +126,22 @@ void test_add_diff(void) {
 
     int16_t expectedData[] = { 8, 12, 14, 12, 17, 19 };
     matrix expected = { to_fixed_point(expectedData, 6, PRECISION), 2, 3 };
+
+    matrix *sum = matrix_add(&mat1, &mat1, &mat2);
+    assert(matrix_equal(&expected, sum));
+}
+
+
+void test_add_min_dims(void) {
+    // Test 4 x 1 + 4 x 2 case (only adds first column)
+    int16_t mat1Data[] = { 1, 2, 3, 4 };
+    matrix mat1 = { to_fixed_point(mat1Data, 4, PRECISION), 4, 1 };
+
+    int16_t mat2Data[] = { 7, 10, 11, 8, 12, 13, 15, 3 };
+    matrix mat2 = { to_fixed_point(mat2Data, 8, PRECISION), 4, 2 };
+
+    int16_t expectedData[] = { 8, 13, 15, 19 };
+    matrix expected = { to_fixed_point(expectedData, 4, PRECISION), 4, 1 };
 
     matrix *sum = matrix_add(&mat1, &mat1, &mat2);
     assert(matrix_equal(&expected, sum));
@@ -276,6 +301,22 @@ void test_hadamard_diff(void) {
 }
 
 
+void test_hadamard_min_dims(void) {
+    // Test 4 x 1 * 4 x 2 case (only multiply the first column)
+    int16_t mat1Data[] = { 1, 2, 3, 4 };
+    matrix mat1 = { to_fixed_point(mat1Data, 4, PRECISION), 4, 1 };
+
+    int16_t mat2Data[] = { 5, 2, 1, 7, 4, 9, 2, 10 };
+    matrix mat2 = { to_fixed_point(mat2Data, 8, PRECISION), 4, 2 };
+
+    int16_t expectedData[] = { 5, 2, 2, 7, 12, 9, 8, 10  };
+    matrix expected = { to_fixed_point(expectedData, 8, PRECISION), 4, 2 };
+
+    matrix *prod = matrix_hadamard(&mat2, &mat1, &mat2, PRECISION);
+    assert(matrix_equal(&expected, prod));
+}
+
+
 void test_hadamard_wrong_dims(void) {
     // Test misaligned dimensions
     int16_t mat1Data[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9 };
@@ -390,6 +431,37 @@ void test_argmax(void) {
     int16_t vecData[] = { 2, 3, 1, 4, 5, 2 };
     matrix vec = { to_fixed_point(vecData, 6, PRECISION), 6, 1 };
     assert(4 == argmax(&vec));
+}
+
+
+void test_argmax_two(void) {
+    int16_t vecData[] = { 2, 3, 1, 4, 5, 6 };
+    matrix vec = { to_fixed_point(vecData, 6, PRECISION), 3, 2 };
+    assert(2 == argmax(&vec));
+}
+
+
+void test_dot_product(void) {
+    int16_t vec1Data[] = { 2, 3, 1 };
+    matrix vec1 = { to_fixed_point(vec1Data, 3, PRECISION), 1, 3 };
+
+    int16_t vec2Data[] = { 4, 5, 2 };
+    matrix vec2 = { to_fixed_point(vec2Data, 3, PRECISION), 3, 1 };
+
+    int16_t result = dot_product(&vec1, &vec2, PRECISION);
+    assert(int_to_fp(25, PRECISION) == result);
+}
+
+
+void test_dot_product_two(void) {
+    int16_t vec1Data[] = { 2, 3, 1, 1, 1, 1 };
+    matrix vec1 = { to_fixed_point(vec1Data, 3, PRECISION), 1, 3 };
+
+    int16_t vec2Data[] = { 4, 1, 5, 1, 2, 1 };
+    matrix vec2 = { to_fixed_point(vec2Data, 6, PRECISION), 3, 2 };
+
+    int16_t result = dot_product(&vec1, &vec2, PRECISION);
+    assert(int_to_fp(25, PRECISION) == result);
 }
 
 

@@ -26,6 +26,13 @@ int16_t fp_neg(int16_t x) {
 }
 
 
+int16_t fp_mod(int16_t x, int16_t m, uint16_t precision) {
+    int16_t div = fp_div(x, m, precision);
+    int16_t floorDiv = div & ~((1 << precision) - 1);
+    return fp_add(x, fp_neg(fp_mul(floorDiv, m, precision)));
+}
+
+
 int16_t convert_fp(int16_t x, uint16_t old_precision, uint16_t new_precision) {
     return (x * (1 << new_precision)) / (1 << old_precision);
 }

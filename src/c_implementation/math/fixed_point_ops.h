@@ -11,6 +11,7 @@
     int16_t fp_sub(int16_t x, int16_t y);
     int16_t fp_div(int16_t x, int16_t y, uint16_t precision);
     int16_t fp_neg(int16_t x);
+    int16_t fp_mod(int16_t x, int16_t m, uint16_t precision);
     int16_t fp_exp(int16_t x, uint16_t precision);
     int16_t fp_tanh(int16_t x, uint16_t precision);
     int16_t fp_sigmoid(int16_t x, uint16_t precision);

@@ -18,14 +18,18 @@
     void test_add_two(void);
     void test_add_three(void);
     void test_add_diff(void);
+    void test_add_min_dims(void);
     void test_add_wrong_dims(void);
     void test_mult_two(void);
     void test_mult_three(void);
     void test_mult_diff(void);
     void test_mult_vec(void);
     void test_mult_wrong_dims(void);
+    void test_dot_product(void);
+    void test_dot_product_two(void);
     void test_hadamard_two(void);
     void test_hadamard_three(void);
+    void test_hadamard_min_dims(void);
     void test_hadamard_diff(void);
     void test_hadamard_wrong_dims(void);
     void test_scalar_mult(void);
@@ -36,6 +40,7 @@
     void test_replace(void);
     void test_replace_wrong_dims(void);
     void test_argmax(void);
+    void test_argmax_two(void);
     void test_matrix_min(void);
     void test_matrix_sum(void);
 

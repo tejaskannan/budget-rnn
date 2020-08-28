@@ -7,12 +7,13 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    // Buffers for reading inputs
     char *inputs_path = argv[1];
     char *output_path = argv[2];
 
     FILE *inputs_file = fopen(inputs_path, "r");
     FILE *output_file = fopen(output_path, "r");
-    int buffer_size = 500;
+    int buffer_size = NUM_INPUT_FEATURES * SEQ_LENGTH * 6;
     char buffer[buffer_size];
 
     uint16_t outputBufferSize = 10;
@@ -20,165 +21,90 @@ int main(int argc, char **argv) {
 
     // Initialize an buffer for states
     matrix states[SEQ_LENGTH];
-    matrix rnnResults[SEQ_LENGTH];
 
-    int16_t stateData[SEQ_LENGTH][STATE_SIZE];
+    int16_t stateData[SEQ_LENGTH * STATE_SIZE * VECTOR_COLS] = {0};
     for (uint16_t i = 0; i < SEQ_LENGTH; i++) {
         states[i].numRows = STATE_SIZE;
-        states[i].numCols = 1;
-        states[i].data = stateData[i];
+        states[i].numCols = VECTOR_COLS;
+        states[i].data = &stateData[i * STATE_SIZE * VECTOR_COLS];
     }
 
-    // Initialize buffer of weights
-    dtype weights[SEQ_LENGTH];
-
-    // Create a zero state
-    int16_t zeroData[STATE_SIZE];
-    matrix zeroState;
-    zeroState.numRows = STATE_SIZE;
-    zeroState.numCols = 1;
-    zeroState.data = zeroData;
-
     // Initialize an input buffer
-    int16_t data[NUM_INPUT_FEATURES];
+    int16_t data[NUM_INPUT_FEATURES * VECTOR_COLS];
     matrix input;
     input.numRows = NUM_INPUT_FEATURES;
-    input.numCols = 1;
+    input.numCols = VECTOR_COLS;
     input.data = data;
     
-    int16_t numSequences = SEQ_LENGTH / SAMPLES_PER_SEQ;
-
     int16_t output_buffer_size = 5;
     char output_buffer[output_buffer_size];
     
     int time = 0;
 
-    uint16_t levelsToExecute;
-    uint8_t isStopped;
-    uint16_t currentLevel;
-    uint8_t isEnd;
+    ExecutionState execState;
 
-    uint16_t budgetIndex = 3;
-    uint16_t numSamples = 0;
+    // Track test statistics (useful for debugging)
     uint16_t numCorrect = 0;
     uint16_t numLevels = 0;
     int16_t label;
 
-    // Make a result buffer
-    dtype resultData[STATE_SIZE];
-    matrix resultBuffer;
-    resultBuffer.numRows = STATE_SIZE;
-    resultBuffer.numCols = 1;
-    resultBuffer.data = resultData;
-    matrix *result = &resultBuffer;
-
     // TODO: Add an avg power metric by computing the level distribution
-    uint16_t levelCounts[numSequences];
-    for (uint16_t i = 0; i < numSequences; i++) {
+    uint16_t levelCounts[NUM_OUTPUTS];
+    for (uint16_t i = 0; i < NUM_OUTPUTS; i++) {
         levelCounts[i] = 0;
     }
 
     while (fgets(buffer, buffer_size, inputs_file) != NULL) {
      
-        // Zero out the initial state
-        matrix_set(&zeroState, 0);
-   
         // Get the label
         fgets(outputBuffer, outputBufferSize, output_file);
         label = (int16_t) (outputBuffer[0] - '0');
 
         char *token = strtok(buffer, " ");
 
-        // By default, we assume we are using one level
-        levelsToExecute = 0;
-        isStopped = 0;
+        // Initialize the execution state
+        execState.budgetIndex = 0;
+        execState.levelsToExecute = 0;
+        execState.isStopped = 0;
+        execState.isCompleted = 0;
+        execState.prediction = -1;
+        execState.cumulativeUpdateProb = int_to_fp(1, FIXED_POINT_PRECISION);
+
+        #ifdef IS_RNN
+        execState.isStopped = 1;
+        #endif
 
         // Iterate through the sequence elements
-        for (int16_t i = 0; i < SEQ_LENGTH; i++) {
-
-            currentLevel = getCurrentLevel(i);
+        uint16_t i;
+        for (i = 0; i < SEQ_LENGTH; i++) {
 
             // Fetch features for the i-th element
-            for (int j = 0; j < NUM_INPUT_FEATURES; j++) {
-                input.data[j] = atoi(token);
+            uint16_t j;
+            for (j = 0; j < NUM_INPUT_FEATURES; j++) {
+                input.data[j * VECTOR_COLS] = atoi(token);
                 token = strtok(NULL, " ");
             }
 
-            // Don't process samples beyond the stopped level. In general, we wouldn't even capture such samples.
-            // we only capture in this case because samples are read from a text file in a specific order.
-            if (currentLevel > levelsToExecute && isStopped) {
-                continue;
-            }
-
-            // Process the current input
-            matrix currentState;
-            if (i == 0) {
-                currentState = zeroState;;
+            if (should_process(i, &execState)) {
+                process_input(&input, states, i, &execState);
             } else {
-                #ifdef IS_RNN
-                    #ifdef IS_SAMPLE
-                        matrix prevSampleState = (i - numSequences >= 0) ? states[i - numSequences] : zeroState;
-
-                        // The first level does not use a fusion layer
-                        if (currentLevel == 0) {
-                            currentState = prevSampleState;
-                        } else {
-                            matrix prevLevelState = states[i-1];
-                            fuse_states(&currentState, &prevSampleState, &prevLevelState, FIXED_POINT_PRECISION);
-                        }
-                    #else
-                        currentState = states[i-1];
-                    #endif
-                #endif
+                if (i > 0) {
+                    matrix_replace(states + i, states + (i - 1));
+                } else {
+                    matrix_set(states + i, 0);
+                }
             }
 
-            apply_transformation(states + i, &input, &currentState, FIXED_POINT_PRECISION);
-
-            // NBOW models use a weighted average pooling
-            #ifndef IS_RNN
-                weights[i] = compute_aggregation_weight(states + i, FIXED_POINT_PRECISION);
+            #ifdef IS_SKIP_RNN
+            // Update the state update probability
+            int16_t nextUpdateProb = get_state_update_prob(states + i, execState.cumulativeUpdateProb, FIXED_POINT_PRECISION);
+            execState.cumulativeUpdateProb = nextUpdateProb;
             #endif
-
-            #ifdef IS_ADAPTIVE
-                #ifdef IS_SAMPLE
-                    if (i < numSequences) {
-                #else
-                    if ((i+1) % SAMPLES_PER_SEQ == 0) {
-                #endif
-                        // For NBOW SAMPLE models, we compute the stop output using a 'successive' state
-
-                        #ifdef IS_RNN
-                        int16_t stopProb = compute_stop_output(states + i, FIXED_POINT_PRECISION);
-                        #else
-                        pool_states(result, states, weights, i, 0, FIXED_POINT_PRECISION);
-                        int16_t stopProb = compute_stop_output(result, FIXED_POINT_PRECISION);
-                        #endif
-
-                        int16_t threshold = THRESHOLDS[budgetIndex][currentLevel];
-
-                        if (threshold < stopProb) {
-                            levelsToExecute = currentLevel;
-                            isStopped = 1;
-                        }
-                    }
-            #endif
-
-            // If we reach the last element of the highest level, we compute the output.
-            isEnd = isLastSampleInLevel(i, SEQ_LENGTH);
-            if ((currentLevel == levelsToExecute && isStopped && isEnd) || (i == SEQ_LENGTH - 1)) {
-                #ifdef IS_RNN
-                int16_t prediction = compute_prediction(states + i, FIXED_POINT_PRECISION);
-                #else
-                pool_states(result, states, weights, currentLevel, 1, FIXED_POINT_PRECISION);
-                int16_t prediction = compute_prediction(result, FIXED_POINT_PRECISION);
-                #endif
-
-                numCorrect += (uint16_t) (prediction == label);
-                numLevels += levelsToExecute + 1;
-                levelCounts[levelsToExecute] += 1;
-                break;
-            }
         }
+
+        numCorrect += (uint16_t) (execState.prediction == label);
+        numLevels += execState.levelsToExecute + 1;
+        levelCounts[execState.levelsToExecute] += 1;
 
         time += 1;
         if (time % 1000 == 0) {
@@ -190,7 +116,7 @@ int main(int argc, char **argv) {
     printf("Average number of levels: %d / %d\n", numLevels, time);
 
     printf("{ ");
-    for (uint16_t i = 0; i < numSequences; i++) {
+    for (uint16_t i = 0; i < NUM_OUTPUTS; i++) {
         printf("%d ", levelCounts[i]);
     }
     printf("}\n");

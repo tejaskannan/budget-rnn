@@ -1,70 +1,37 @@
 #include "matrix_ops.h"
 
-// Temporary buffer for hash strings
-static char hash_str[100];
-
-
-matrix *matrix_allocate(int8_t numRows, int8_t numCols) {
-    matrix *mat = (matrix *) alloc(sizeof(matrix));
-    if (isNull(mat)) {
-        return NULL_PTR;
-    }
-
-    dtype *data = (dtype *) alloc(numRows * numCols * sizeof(dtype));
-    if (isNull(data)) {
-        dealloc(mat);
-        return NULL_PTR;
-    }
-
-    mat->numRows = numRows;
-    mat->numCols = numCols;
-    mat->data = data;
-    return mat;
-}
-
-
-matrix *matrix_create_from(dtype *data, int8_t numRows, int8_t numCols) {
-    matrix *mat = (matrix *) alloc(sizeof(matrix));
-    if (isNull(mat)) {
-        return NULL_PTR;
-    }
-
-    mat->numRows = numRows;
-    mat->numCols = numCols;
-    mat->data = data;
-    return mat;
-}
-
-
-void matrix_free(matrix *mat) {
-    if (isNull(mat)) {
-        return;
-    }
-
-    if (!isNull(mat->data)) {
-        dealloc(mat->data);
-    }
-
-    dealloc(mat);
-}
-
 
 matrix *matrix_add(matrix *result, matrix *mat1, matrix *mat2) {
     /**
      * Adds two matrices together elementwise.
-     * Result stored in matrix 1.
+     * Result stored stored in the result argument (and returned for convenience).
      */
-    
     // Validate dimensions
-    if ((mat1->numRows != mat2->numRows) || (mat1->numCols != mat2->numCols) ||
-        (result->numRows != mat1->numRows) || (result->numCols != mat2->numCols)) {
+    if ((mat1->numRows != mat2->numRows) || (result->numRows != mat1->numRows)) {
         return NULL_PTR;
     }
     
-    // Compute elementwise sum in place
-    uint16_t i;
-    for (i = mat1->numRows * mat1->numCols; i > 0; i--) {
-        result->data[i - 1] = fp_add(mat1->data[i - 1], mat2->data[i - 1]);
+    uint16_t rows = mat1->numRows;
+    uint16_t cols = mat1->numCols > mat2->numCols ? mat2->numCols : mat1->numCols;
+
+    uint16_t mat1Offset, mat2Offset, resultOffset;
+    uint16_t rowOffset, colOffset;
+
+    // Compute the element-wise sum. We generally add small vectors together, and the LEA
+    // provides little (or negative) benefit due to added overhead.
+    uint16_t i, j;
+    for (i = rows; i > 0; i--) {
+
+        rowOffset = i - 1;
+
+        mat1Offset = rowOffset * mat1->numCols;
+        mat2Offset = rowOffset * mat2->numCols;
+        resultOffset = rowOffset * result->numCols;
+
+        for (j = cols; j > 0; j--) {
+            colOffset = j - 1;
+            result->data[resultOffset + colOffset] = fp_add(mat1->data[mat1Offset + colOffset], mat2->data[mat2Offset + colOffset]);
+        }
     }
 
     return result;
@@ -81,7 +48,8 @@ matrix *matrix_neg(matrix *result, matrix *mat, uint16_t precision) {
 
 matrix *matrix_multiply(matrix *result, matrix *mat1, matrix *mat2, uint16_t precision) {
     /**
-     * Performs matrix multiplication and stores value in given result array
+     * Performs matrix multiplication and stores value in given result array. The implementation
+     * depends on whether or not we are compiling for the MSP430 device.
      */
 
     // Validate dimensions
@@ -90,47 +58,121 @@ matrix *matrix_multiply(matrix *result, matrix *mat1, matrix *mat2, uint16_t pre
     }
 
     // The result will be a [n, p] matrix
-    int8_t n = mat1->numRows;
-    int8_t m = mat1->numCols;
-    int8_t p = mat2->numCols;
+    uint16_t n = mat1->numRows;
+    uint16_t m = mat1->numCols;
+    uint16_t p = mat2->numCols;
+
+    #ifdef IS_MSP
+    // When using the MSP430, we use the LEA for matrix multiplications. Based on profiling,
+    // the LEA can take up to 5x fewer compute cycles than a standard implementation.
+
+    msp_status status;
+    msp_matrix_mpy_q15_params mulParams;
+
+    // Initialze LEA metadata
+    msp_status status;
+    msp_matrix_mpy_q15_params mulParams;
+    mulParams.srcARows = mat1->numRows;
+    mulParams.srcACols = mat1->numCols;
+    mulParams.srcBRows = mat2->numRows;
+    mulParams.srcBCols = mat2->numCols;
+
+    // Perform matrix multiplication using the LEA
+    status = msp_matrix_mpy_q15(&mulParams, mat1->data, mat2->data, result->data);
+    msp_checkStatus(status);
+
+    // Convert back to the original fixed-point precision. The LEA assumes 15 fractional bits.
+    msp_matrix_shift_q15_params shiftParams;
+    shiftParams.rows = result->numRows;
+    shiftParams.cols = result->numCols;
+    shiftParams.shift = 15 - precision;
+
+    // Perform element-wise shift using the LEA
+    if (shiftParams.shift > 0) {
+        status = msp_matrix_shift_q15(&shiftParams, result->data, result->data);
+        msp_checkStatus(status);
+    }
+
+    #else
 
     uint16_t i, j, k;
+    uint16_t outerRow, innerRow, resultRow;
+    int16_t sum, prod;
+
     for (i = n; i > 0; i--) {
-        uint16_t outerRow = (i - 1) * m;  // Offset for the i^th row
+        outerRow = (i - 1) * m;  // Offset for the i^th row
 
         for (j = p; j > 0; j--) {
-            int16_t sum = 0;
+            sum = 0;
 
             for (k = m; k > 0; k--) {
-                uint16_t innerRow = (k - 1) * p;  // Offset for the k^th row
-                
-                int16_t prod = fp_mul(mat1->data[outerRow + (k - 1)], mat2->data[innerRow + (j - 1)], precision);
+                innerRow = (k - 1) * p;  // Offset for the k^th row
+                prod = fp_mul(mat1->data[outerRow + (k - 1)], mat2->data[innerRow + (j - 1)], precision);
                 sum = fp_add(sum, prod);
             }
-     
-            uint16_t resultRow = (i - 1) * p;
+ 
+            resultRow = (i - 1) * p;
             result->data[resultRow + (j - 1)] = sum;
         }
+    }
+    #endif
+
+    return result;
+}
+
+
+int16_t dot_product(matrix *vec1, matrix *vec2, uint16_t precision) {
+    /**
+     * Computes the dot product for the two vectors. If the inputs are not
+     * proper vectors, then we use the first row of vec1 and first column of vec2.
+     */
+    uint16_t i, j;
+    uint16_t vec1Idx, vec2Idx;
+    int16_t result = 0;
+
+    for (i = vec1->numCols; i > 0; i--) {
+        vec1Idx = i - 1;
+        vec2Idx = vec2->numCols * (i - 1);
+
+        result = fp_add(result, fp_mul(vec1->data[vec1Idx], vec2->data[vec2Idx], precision));
     }
 
     return result;
 }
 
 
+
 matrix *matrix_hadamard(matrix* result, matrix *mat1, matrix *mat2, uint16_t precision) {
     /**
-     * Elementwise matrix product. Result stored in matrix 1.
+     * Elementwise matrix product. Result stored in matrix 1. We never use the LEA to avoid
+     * added overhead (we only multiply small vectors).
      */
-    
     // Validate dimensions
-    if ((mat1->numRows != mat2->numRows) || (mat1->numCols != mat2->numCols) ||
-        (result->numRows != mat1->numRows) || (result->numCols != mat1->numCols)) {
+    if ((mat1->numRows != mat2->numRows) || (result->numRows != mat1->numRows)) {
         return NULL_PTR;
     }
+    
+    uint16_t rows = mat1->numRows;
+    uint16_t cols = mat1->numCols > mat2->numCols ? mat2->numCols : mat1->numCols;
 
-    uint16_t i;
-    for (i = mat1->numRows * mat1->numCols; i > 0; i--) {
-        result->data[i - 1] = fp_mul(mat1->data[i - 1], mat2->data[i - 1], precision);
+    uint16_t mat1Offset, mat2Offset, resultOffset;
+    uint16_t rowOffset, colOffset;
+
+    // Compute the element-wise sum. We generally add small vectors together, and the LEA
+    // provides little (or negative) benefit due to added overhead.
+    uint16_t i, j;
+    for (i = rows; i > 0; i--) {
+
+        rowOffset = i - 1;
+
+        mat1Offset = rowOffset * mat1->numCols;
+        mat2Offset = rowOffset * mat2->numCols;
+        resultOffset = rowOffset * result->numCols;
+
+        for (j = cols; j > 0; j--) {
+            colOffset = j - 1;
+            result->data[resultOffset + colOffset] = fp_mul(mat1->data[mat1Offset + colOffset], mat2->data[mat2Offset + colOffset], precision);
+        }
     }
 
     return result;
@@ -188,29 +230,6 @@ matrix *apply_elementwise(matrix *result, matrix *mat, int16_t (*fn)(int16_t, ui
     uint16_t i;
     for (i = mat->numRows * mat->numCols; i > 0; i--) {
         result->data[i - 1] = (*fn)(mat->data[i - 1], precision);
-    }
-
-    return result;
-}
-
-
-matrix *transpose(matrix *result, matrix *mat) {
-    /**
-     * Transposes the given matrix and stores the value
-     * in the given result matrix.
-     */
-    if (mat->numCols != result->numRows || mat->numRows != result->numCols) {
-        return NULL_PTR;
-    }
-
-    int8_t n = mat->numRows;
-    int8_t m = mat->numCols;
-
-    uint16_t i, j;
-    for (i = n; i > 0; i--) {
-        for (j = m; j > 0; j--) {
-            result->data[(j - 1) * n + (i - 1)] = mat->data[(i - 1) * m + (j - 1)];
-        }
     }
 
     return result;
@@ -281,24 +300,29 @@ int16_t matrix_min(matrix *mat) {
 
 
 
-matrix *stack(matrix *result, matrix *vec1, matrix *vec2) {
+matrix *vstack(matrix *result, matrix *mat1, matrix *mat2) {
     /**
-     * Stacks the two vectors into a larger vector.
+     * Stacks the two matrices into a larger matrix. For example, if mat1 is [n, m] and
+     * mat2 is [p, m], the result must be [n + p, m] where mat is placed about mat2.
      */
     // Validate the input shapes.
-    if ((vec1->numRows + vec2->numRows != result->numRows) || (vec1->numCols != 1) ||
-        (vec2->numCols != 1) || (result->numCols != 1)) {
+    if ((mat1->numRows + mat2->numRows != result->numRows) || (mat1->numCols != mat2->numCols) ||
+        (mat1->numCols != result->numCols)) {
         return NULL_PTR;
     }
 
-    int16_t index = 0;
-    for (; index < vec1->numRows; index++) {
-        result->data[index] = vec1->data[index];
+    uint16_t cols = mat1->numCols;
+
+    // Copy in the first matrix
+    uint16_t i;
+    for (i = mat1->numRows * cols; i > 0; i--) {
+        result->data[i-1] = mat1->data[i-1];
     }
 
-    int16_t offset = index;
-    for (; index < result->numRows; index++) {
-        result->data[index] = vec2->data[index - offset];
+    // Copy in the second matrix
+    uint16_t offset = mat1->numRows * cols;
+    for (i = mat2->numRows * cols; i > 0; i--) {
+        result->data[offset + i - 1] = mat2->data[i-1];
     }
 
     return result;
@@ -307,133 +331,27 @@ matrix *stack(matrix *result, matrix *vec1, matrix *vec2) {
 
 int16_t argmax(matrix *vec) {
     /**
-     * Computes the argmax of the 1d vector.
+     * Computes the argmax of the 1d vector. If the input has multiple columns, then
+     * this is the argmax over the 1st column.
      */
-    if (vec->numCols != 1 || vec->numRows <= 0) {
+    if (vec->numRows <= 0) {
         return -1;
     }
+
+    uint16_t numCols = vec->numCols;
 
     int16_t max = vec->data[0];
     int16_t max_index = 0;
 
     uint16_t i;
     int16_t val;
-    for (i = vec->numRows; i > 1; i--) {
-        val = vec->data[i - 1];
+    for (i = vec->numRows - 1; i > 0; i--) {
+        val = vec->data[i * numCols];
         if (val > max) {
-            max_index = i - 1;
+            max_index = i;
             max = val;
         }
     }
 
     return max_index;
 }
-
-
-int8_t threshold_prediction(matrix *logits, int16_t threshold, uint16_t precision, dtype *temp_buffer) {
-    /**
-     * Returns the highest-probability class if the normalized log probability is above the given threshold.
-     * If the threshold is not satisfied, then the function returns -1.
-     */
-    if (logits->numCols != 1) {
-        return -1;
-    }
-
-    // Allocate a temp matrix
-    matrix temp;
-    temp.numRows = logits->numRows;
-    temp.numCols = logits->numCols;
-    temp.data = temp_buffer;
-    matrix *tempMat = &temp;
-
-    tempMat = matrix_replace(tempMat, logits);
-
-    int16_t min_logit = matrix_min(logits);
-    tempMat = scalar_add(tempMat, tempMat, fp_neg(min_logit));
-    
-    int16_t logit_sum = matrix_sum(tempMat);
-    int16_t normalize_factor = fp_div(int_to_fp(1, precision), logit_sum, precision);
-    tempMat = scalar_product(tempMat, tempMat, normalize_factor, precision);
-
-    int16_t max_class = argmax(tempMat);
-    int16_t max_logit = tempMat->data[max_class];
-
-    if (max_logit > threshold) {
-        return max_class;
-    }
-    return -1;
-}
-
-
-matrix *normalize(matrix *vec, const int16_t *mean, const int16_t *std, uint16_t precision) {
-    /**
-     * Normalizes the vector to a standard normal distribution. This operation is in-place,
-     * so the original vector is mutated.
-     */
-    if (vec->numCols != 1) {
-        return NULL_PTR;
-    }
-
-    int16_t shifted;
-    uint16_t i;
-
-    for (i = vec->numRows; i > 0; i--) {
-        shifted = fp_sub(vec->data[i - 1], mean[i - 1]);
-        vec->data[i - 1] = fp_div(shifted, std[i - 1], precision);
-    }
-
-    return vec;
-}
-
-
-matrix *hashed_matrix_vector_product(matrix *result, matrix *mat, matrix *vec, char *seed, uint8_t should_transpose, uint16_t precision) {
-    /**
-     * Computes the matrix vector product using the hashing trick where the matrix is compressed into a vector.
-     */
-    // Validate dimensions.
-    if ((mat->numCols != 1) || (vec->numCols != 1) | (result->numCols != 1)) {
-        return NULL_PTR;
-    }
-    
-    // Get the length of the seed
-    uint16_t n = string_length(seed);
-
-    // Create the hashing seed by pre-prending the given prefix.
-    string_copy(hash_str, seed, n);
-    hash_str[n + 2 * MAX_NUM_DIGITS + 1] = '\0';  // Ensure the string is null-terminated
-
-    // Compute the matrix vector product
-    uint16_t i, j, i_offset, j_offset, mat_index, num_digits;
-    uint16_t first_index, second_index;
-    int8_t sign;
-    for (i = result->numRows; i > 0; i--) {
-        i_offset = i - 1;
-
-        result->data[i_offset] = 0;    
-
-        for (j = vec->numRows; j > 0; j--) {
-            j_offset = j - 1;
-
-            if (should_transpose) {
-                first_index = j_offset;
-                second_index = i_offset;
-            } else {
-                first_index = i_offset;
-                second_index = j_offset;
-            }
-
-            num_digits = append_int_to_str(hash_str + n, first_index);
-            num_digits += append_int_to_str(hash_str + n + num_digits, second_index);
-            hash_str[n + num_digits] = 's';
-            hash_str[n + num_digits + 1] = '\0';
-
-            mat_index = pearson_hash(hash_str, n + num_digits) % mat->numRows;
-            sign = 2 * (pearson_hash(hash_str, n + num_digits + 1) % 2)  - 1;
-
-            result->data[i_offset] = fp_add(sign * fp_mul(mat->data[mat_index], vec->data[j_offset], precision), result->data[i_offset]);
-        }
-    }
-
-    return result;
-}
-

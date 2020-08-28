@@ -5,6 +5,7 @@ int main(void) {
     // Run all tests
     test_mul_basic();
     test_div_basic();
+    test_mod();
     test_exp_basic();
     test_exp_neg();
     test_tanh_basic();
@@ -44,6 +45,24 @@ void test_div_basic(void) {
     assert(two == fp_div(four, two, fixed_point_bits));
     assert(one == fp_div(two, two, fixed_point_bits));
 }
+
+
+void test_mod(void) {
+    uint16_t precision = 10;
+
+    int16_t mod = fp_mod(int_to_fp(11, precision), int_to_fp(2, precision), precision);
+    assert(int_to_fp(1, precision) == mod);
+
+    mod = fp_mod(int_to_fp(11, precision), int_to_fp(4, precision), precision);
+    assert(int_to_fp(3, precision) == mod);
+
+    mod = fp_mod(float_to_fp(7.6, precision), float_to_fp(3.5, precision), precision);
+    assert(float_to_fp(0.6, precision) == mod);
+
+    mod = fp_mod(int_to_fp(-11, precision), int_to_fp(4, precision), precision);
+    assert(int_to_fp(1, precision) == mod);
+}
+
 
 void test_exp_basic(void) {
     int fixed_point_bits = 5;

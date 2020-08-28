@@ -7,8 +7,8 @@
 #include "neural_network.h"
 #include "utils/neural_network_utils.h"
 #include "math/matrix_ops.h"
-#include "memory.h"
 #include "controller/pid_control.h"
+#include "neural_network_parameters.h"
 
 #ifndef MAIN_GUARD
 #define MAIN_GUARD
