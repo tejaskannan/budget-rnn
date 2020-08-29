@@ -12,7 +12,7 @@ from layers.output_layers import OutputType, compute_binary_classification_outpu
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.misc import sample_sequence_batch, batch_sample_noise
-from utils.tfutils import get_activation, successive_pooling, make_tf_rnn_cell, apply_noise, apply_noise
+from utils.tfutils import get_activation, successive_pooling, apply_noise
 from utils.sequence_model_utils import SequenceModelType
 from utils.constants import ACCURACY, OUTPUT, INPUTS, LOSS, PREDICTION, LOGITS, SMALL_NUMBER, LEAK_RATE, PHASE_GATES
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, DROPOUT_KEEP_RATE, MODEL, NUM_CLASSES, ACTIVATION_NOISE
