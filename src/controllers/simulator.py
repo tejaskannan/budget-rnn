@@ -9,7 +9,7 @@ from scipy import integrate
 from typing import Tuple, List, Union, Optional, Dict, Any
 
 from controllers.runtime_system import RuntimeSystem, SystemType
-from controllers.controller_utils import execute_adaptive_model, execute_standard_model, concat_model_results
+from controllers.controller_utils import execute_adaptive_model, execute_standard_model, concat_model_results, LOG_FILE_FMT
 from controllers.controller_utils import save_test_log, execute_skip_rnn_model, ModelResults, execute_phased_rnn_model
 from controllers.noise_generators import get_noise_generator, NoiseGenerator
 from models.base_model import Model
@@ -24,7 +24,6 @@ from utils.constants import SMALL_NUMBER, METADATA_PATH, HYPERS_PATH, SEQ_LENGTH
 from utils.loading_utils import restore_neural_network
 
 
-LOG_FILE_FMT = 'model-{0}-{1}.jsonl.gz'
 SimulationResult = namedtuple('SimulationResult', ['accuracy', 'power', 'target_budgets'])
 
 
@@ -77,8 +76,8 @@ def plot_and_save(sim_results: Dict[str, SimulationResult],
         # We compute the validation accuracy for this budget for the adaptive models.
         # This allows us to choose which backend model to select at testing time.
         if system.system_type == SystemType.ADAPTIVE:
-            valid_accuracy, valid_power = system.estimate_validation_results(budget=budget + noise_generator.loc,
-                                                                             max_time=max_time)
+            valid_accuracy = system.estimate_validation_results(budget=budget,
+                                                                max_time=max_time)
         else:
             valid_accuracy = None
 

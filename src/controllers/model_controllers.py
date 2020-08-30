@@ -11,7 +11,7 @@ from utils.file_utils import save_pickle_gz, read_pickle_gz, extract_model_name
 from utils.loading_utils import restore_neural_network
 from controllers.power_distribution import PowerDistribution
 from controllers.power_utils import get_avg_power_multiple, get_avg_power, get_weighted_avg_power
-from controllers.controller_utils import execute_adaptive_model, get_budget_index
+from controllers.controller_utils import execute_adaptive_model, get_budget_index, ModelResults
 
 
 CONTROLLER_PATH = 'model-controller-{0}.pkl.gz'
@@ -352,6 +352,14 @@ class AdaptiveController(Controller):
                                                  patience=patience,
                                                  max_iter=max_iter)
 
+    @property
+    def thresholds(self) -> np.ndarray:
+        return self._thresholds
+
+    @property
+    def budgets(self) -> np.ndarray:
+        return self._budgets
+
     def fit(self, series: DataSeries):
         train_results = execute_adaptive_model(self._model, self._dataset, series=series)
         test_results = execute_adaptive_model(self._model, self._dataset, series=DataSeries.TEST)
@@ -462,6 +470,28 @@ class AdaptiveController(Controller):
 
         # By default, we return the top level
         return self._num_levels - 1, get_avg_power(self._seq_length, self._seq_length)
+
+    def get_accuracy(self, budget: float, model_results: ModelResults) -> float:
+        assert self._thresholds is not None, 'Must call fit() first'
+
+        max_time = model_results.stop_probs.shape[0]
+
+        thresholds = np.expand_dims(self.get_thresholds(budget=budget), axis=0)  # [1, L]
+        levels = levels_to_execute(probs=model_results.stop_probs,
+                                   thresholds=thresholds)  # [1, N]
+        predictions = classification_for_levels(model_correct=model_results.predictions,
+                                                levels=levels)  # [1, N]
+        predictions = predictions.reshape(-1, 1).astype(int)  # [N, 1]
+        correct = (predictions == model_results.labels).astype(float)  # [N]
+        accuracy = np.average(correct)
+
+        avg_power = get_avg_power_multiple(num_samples=np.squeeze(levels + 1, axis=0),
+                                           seq_length=self._seq_length,
+                                           multiplier=int(self._seq_length / self._num_levels))
+        time_steps = min(int((budget * max_time) / avg_power), max_time)
+        adjusted_accuracy = (accuracy * time_steps) / max_time
+
+        return float(adjusted_accuracy)
 
     def as_dict(self):
         return {

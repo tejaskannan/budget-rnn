@@ -14,6 +14,7 @@ from dataset.dataset import DataSeries, Dataset
 from models.adaptive_model import AdaptiveModel
 from models.tf_model import TFModel
 from utils.file_utils import extract_model_name
+from utils.loading_utils import get_hyperparameters
 from utils.constants import INPUTS, OUTPUT, SEQ_LENGTH, NUM_CLASSES, SEQ_LENGTH, SMALL_NUMBER
 
 
@@ -107,6 +108,7 @@ class RuntimeSystem:
 
         # Results from the validation set. These are used by a few controllers
         # to select the model or model level
+        self._valid_results = valid_results
         self._valid_accuracy = valid_results.accuracy  # [L]
         self._valid_predictions = valid_results.predictions  # [N, L]
         self._valid_stop_probs = valid_results.stop_probs  # [N, L]
@@ -114,7 +116,13 @@ class RuntimeSystem:
 
         self._budget_controller = None
 
-        self._name = '{0} {1}'.format(model_name.split('-')[0], system_type.name)
+        model_type = model_name.split('-')[0]
+        if model_type.lower().startswith('sample'):
+            hypers = get_hyperparameters(model_path)
+            stride_length = hypers.model_params['stride_length']
+            model_type = '{0}({1})'.format(model_type, stride_length)
+
+        self._name = '{0} {1}'.format(model_type, system_type.name)
 
         # For some systems, we can load the controller now. Otherwise, we wait until later
         if self._system_type == SystemType.ADAPTIVE:
@@ -251,22 +259,8 @@ class RuntimeSystem:
             if is_end_of_window:
                 self._budget_step = budget_step
 
-    def estimate_validation_results(self, budget: float, max_time: int) -> Tuple[float, float]:
+    def estimate_validation_results(self, budget: float, max_time: int) -> float:
         assert self._controller is not None, 'Must have an internal controller'
+        assert isinstance(self._controller, AdaptiveController), 'Can only estimate validation results for adaptive controllers'
 
-        thresholds = np.expand_dims(self._controller.get_thresholds(budget=budget), axis=0)  # [1, L]
-        levels = levels_to_execute(probs=self._valid_stop_probs,
-                                   thresholds=thresholds)  # [1, N]
-        predictions = classification_for_levels(model_correct=self._valid_predictions,
-                                                levels=levels)  # [1, N]
-        predictions = predictions.reshape(-1, 1).astype(int)  # [N, 1]
-        valid_correct = (predictions == self._valid_labels).astype(float)  # [N]
-        accuracy = np.average(valid_correct)
-
-        avg_power = get_avg_power_multiple(num_samples=np.squeeze(levels + 1, axis=0),
-                                           seq_length=self._seq_length,
-                                           multiplier=int(self._seq_length / self._num_levels))
-        time_steps = min(int((budget * max_time) / avg_power), max_time)
-        adjusted_accuracy = (accuracy * time_steps) / max_time
-
-        return float(adjusted_accuracy), float(avg_power)
+        return self._controller.get_accuracy(budget=budget, model_results=self._valid_results)
