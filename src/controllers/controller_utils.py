@@ -25,7 +25,7 @@ def clip(x: int, bounds: Tuple[int, int]) -> int:
     return x
 
 
-def save_test_log(accuracy: float, power: float, valid_accuracy: Optional[float], budget: float, key: str, output_file: str):
+def save_test_log(accuracy: float, power: float, valid_accuracy: Optional[float], budget: float, system_name: str, key: str, output_file: str):
     test_log: Dict[str, Dict[str, Any]] = dict()
     if os.path.exists(output_file):
         test_log = list(read_by_file_suffix(output_file))[0]
@@ -37,7 +37,8 @@ def save_test_log(accuracy: float, power: float, valid_accuracy: Optional[float]
         'ACCURACY': accuracy,
         'AVG_POWER': power,
         'VALID_ACCURACY': valid_accuracy,
-        'BUDGET': budget
+        'BUDGET': budget,
+        'SYSTEM_NAME': system_name
     }
     budget_str = '{0:.4f}'.format(budget)
     test_log[key][budget_str] = log_value

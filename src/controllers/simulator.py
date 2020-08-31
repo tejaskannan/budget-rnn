@@ -88,6 +88,7 @@ def plot_and_save(sim_results: Dict[str, SimulationResult],
                       valid_accuracy=valid_accuracy,
                       budget=budget,
                       key=str(noise_generator),
+                      system_name=system.name,
                       output_file=log_path)
 
         print('{0} Accuracy: {1:.5f}, {0} Power: {2:.5f}'.format(system_name, sim_result.accuracy[-1], sim_result.power[-1]))
