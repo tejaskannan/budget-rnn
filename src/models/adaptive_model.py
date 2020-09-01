@@ -313,6 +313,8 @@ class AdaptiveModel(TFModel):
                               use_bias=True,
                               name=EMBEDDING_NAME)
 
+        self._ops['embeddings'] = embeddings
+
         # Create the RNN Cell
         rnn_cell_class = CellClass.STANDARD if self.stride_length == 1 else CellClass.SAMPLE
         rnn_cell = make_rnn_cell(cell_class=rnn_cell_class,
@@ -370,6 +372,8 @@ class AdaptiveModel(TFModel):
                                                              dtype=tf.float32,
                                                              scope=TRANSFORM_NAME)
 
+                self._ops['rnn_outputs_{0}'.format(i)] = rnn_outputs
+
                 level_outputs.append(tf.expand_dims(final_state, axis=1))
                 level_stop_states.append(tf.expand_dims(rnn_outputs.output[:, 0, :], axis=1))
 
@@ -379,6 +383,8 @@ class AdaptiveModel(TFModel):
             # Concatenate the outputs and first states from each sub-sequence into [B, L, D] tensors
             transformed = tf.concat(level_outputs, axis=1)
             stop_states = tf.concat(level_stop_states, axis=1)
+
+        self._ops['transformed'] = transformed
 
         # Compute the stop output, Result is a [B, L, 1] tensor.
         stop_output, _ = mlp(inputs=stop_states,
