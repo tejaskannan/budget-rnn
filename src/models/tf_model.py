@@ -359,8 +359,8 @@ class TFModel(Model):
         """
         self.load_metadata(dataset)
 
-        current_date = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
-        name = NAME_FMT.format(self.name, dataset.dataset_name, current_date)
+        current_time = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
+        name = NAME_FMT.format(self.name, dataset.dataset_name, current_time)
 
         # Make Model and Initialize variables
         self.make(is_train=True, is_frozen=False)
@@ -577,8 +577,11 @@ class TFModel(Model):
             # Call garbage collector at the end of each iteration (just to be safe)
             gc.collect()
 
+        # Log the ending time. This tracks the time to train this model
+        ending_time = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
+
         # Save training metrics
-        metrics_dict = dict(loss=loss_dict, accuracy=acc_dict)
+        metrics_dict = dict(loss=loss_dict, accuracy=acc_dict, start_time=current_time, end_time=ending_time)
         log_file = os.path.join(self.save_folder, TRAIN_LOG_PATH.format(name))
         save_by_file_suffix(metrics_dict, log_file)
 
