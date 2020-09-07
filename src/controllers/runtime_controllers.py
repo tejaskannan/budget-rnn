@@ -33,9 +33,9 @@ class PIDController:
         """
         # Only add to error if it is out of the target bounds
         error = 0
-        if y_pred < y_true[0]:
+        if y_pred < y_true[0] - SMALL_NUMBER:
             error = y_true[0] - y_pred
-        elif y_pred > y_true[1]:
+        elif y_pred > y_true[1] + SMALL_NUMBER:
             error = y_true[1] - y_pred
 
         # Append error and clip to window
@@ -96,32 +96,43 @@ class PowerSetpoint:
         self._seq_length = seq_length
         self._window_size = window_size
 
-        # [L] array of power estimates for each level
+        # [L] array of power estimates for each level. This is the prior
+        # distribution.
         self._power_estimates = get_power_estimates(num_levels=num_levels,
                                                     seq_length=seq_length)
 
-        self._observed_power = defaultdict(deque)
+        # [W] queue containing the observed power per sample within this window
+        self._measurements: deque = deque()
 
-    def get_setpoint(self) -> Tuple[float, float]:
+    def get_setpoint(self) -> float:
+        # Compute the measured power. This is the average power per step
+        # over the entire execution.
+        total_count = len(self._measurements)
 
-        measurements: List[float] = []
-        level_counts: List[int] = []
-        for level in range(self._num_levels):
-            measurements.extend(self._observed_power[level])
-            level_counts.append(len(self._observed_power[level]))
+        # [L] array containing the count per level and total power per level
+        level_counts = np.zeros((self._num_levels, ))
+        power_per_level = np.zeros((self._num_levels, ))
 
-        observed_power = np.average(measurements)
+        for (level, power) in self._measurements:
+            level_counts[level] += 1
+            power_per_level[level] += power
 
-        total_count = sum(level_counts)
-        expected_power = sum(((self._power_estimates[level] * level_counts[level]) / total_count  for level in range(self._num_levels)))
+        # Get the measured avg power over the last window
+        measured_power = np.sum(power_per_level / total_count)
 
-        return observed_power, expected_power
+        # Compute the expected power based on the prior measurements
+        expected_power = np.sum((self._power_estimates * level_counts) / total_count)
+
+        print('Expected Power: {0:.4f}, Measured Power: {1:.4f}'.format(expected_power, measured_power))
+
+        return expected_power - measured_power
 
     def update(self, level: int, power: float):
-        self._observed_power[level].append(power)
+        measurement = (level, power)
+        self._measurements.append(measurement)
 
-        while len(self._observed_power[level]) > self._window_size:
-            self._observed_power[level].popleft()
+        if len(self._measurements) > self._window_size:
+            self._measurements.popleft()
 
 
 class BudgetDistribution:
@@ -129,15 +140,45 @@ class BudgetDistribution:
     def __init__(self,
                  prior_counts: Dict[int, np.ndarray],
                  budget: float,
+                 budget_accuracies: Dict[float, float],
+                 budget_power: Dict[float, float],
                  max_time: int,
                  num_levels: int,
                  seq_length: int,
                  num_classes: int):
         self._prior_counts = prior_counts  # key: class index, value: array [L] counts for each level
         self._max_time = max_time
-        self._budget = budget
         self._num_levels = num_levels
         self._num_classes = num_classes
+        self._budget = budget
+
+       # # We set the target budget based on results from the validation set
+       # known_budgets = np.array([b for b in sorted(budget_accuracies.keys())])
+       # budget_accuracy = np.array([budget_accuracies[b] for b in known_budgets])
+       # budget_power_estimates = np.array([budget_power[b] for b in known_budgets])
+
+       # # Get the maximum accuracy for a budget less than (or equal to) the given budget
+       # less_than_mask = (known_budgets <= budget).astype(float)
+       # if (less_than_mask < SMALL_NUMBER).all():
+       #     less_than_idx = 0
+       # else:
+       #     less_than_idx = np.argmax(budget_accuracy * less_than_mask)
+
+       # # Get maximum accuracy for a budget greater than the given budget
+       # greater_than_mask = (known_budgets > budget).astype(float)
+       # if (greater_than_mask < SMALL_NUMBER).all():
+       #     greater_than_idx = -1
+       # else:
+       #     greater_than_idx = np.argmax(budget_accuracy * greater_than_mask)
+
+       # # If the accuracy is highest for a lower budget, then set the budget to this lower
+       # # power level. Otherwise, we keep the given budget because there is room for improvement.
+       # if budget_accuracy[less_than_idx] >= budget_accuracy[greater_than_idx]:
+       #     self._budget = budget_power_estimates[less_than_idx]
+       # else:
+       #     self._budget = budget
+
+        # Initialize variables for budget distribution tracking
         self._level_counts = np.zeros(shape=(num_levels, ))
         self._observed_power = np.zeros(shape=(num_levels, ))
         self._seq_length = seq_length
