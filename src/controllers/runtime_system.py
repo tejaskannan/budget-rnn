@@ -197,19 +197,21 @@ class RuntimeSystem:
                                                     integral_bounds=INTEGRAL_BOUNDS,
                                                     integral_window=INTEGRAL_WINDOW)
             
-            #self._budget_distribution = PowerSetpoint(num_levels=self._num_levels,
-            #                                          seq_length=self._seq_length,
-            #                                          window_size=WINDOW_SIZE)
-
             # Create the power distribution
             thresholds = self._controller.get_thresholds(budget=budget)
             prior_counts = estimate_label_counts(predictions=self._valid_predictions,
                                                  stop_probs=self._valid_stop_probs,
                                                  thresholds=thresholds,
                                                  num_classes=self._num_classes)
+            
+            valid_budget_power: Dict[float, float] = dict()
+            for b in self._controller.budgets:
+                _, pwr = self._controller.evaluate(budget=b, model_results=self._valid_results)
+                valid_budget_power[b] = pwr
 
             self._budget_distribution = BudgetDistribution(prior_counts=prior_counts,
                                                            budget=budget,
+                                                           validation_power=valid_budget_power,
                                                            max_time=max_time,
                                                            num_levels=self._num_levels,
                                                            num_classes=self._num_classes,

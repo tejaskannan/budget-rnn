@@ -1,13 +1,14 @@
 import numpy as np
 from scipy import integrate
 from typing import Tuple, Union, List, Dict
-from collections import deque, defaultdict
+from collections import deque, defaultdict, namedtuple
 
 from controllers.controller_utils import clip
 from controllers.power_utils import get_avg_power, get_power_estimates
 from utils.constants import SMALL_NUMBER
 
 
+ConfidenceBounds = namedtuple('ConfidenceBounds', ['lower', 'upper'])
 SMOOTHING_FACTOR = 1
 POWER_PRIOR_COUNT = 100
 
@@ -138,6 +139,7 @@ class BudgetDistribution:
     def __init__(self,
                  prior_counts: Dict[int, np.ndarray],
                  budget: float,
+                 validation_power: Dict[float, float],
                  max_time: int,
                  num_levels: int,
                  seq_length: int,
@@ -146,33 +148,17 @@ class BudgetDistribution:
         self._max_time = max_time
         self._num_levels = num_levels
         self._num_classes = num_classes
-        self._budget = budget
+       
+        # Get the largest known budget less than the given budget
+        budget_under = 0.0
+        for b in validation_power.keys():
+            if b > budget_under and b <= budget:
+                budget_under = b
 
-       # # We set the target budget based on results from the validation set
-       # known_budgets = np.array([b for b in sorted(budget_accuracies.keys())])
-       # budget_accuracy = np.array([budget_accuracies[b] for b in known_budgets])
-       # budget_power_estimates = np.array([budget_power[b] for b in known_budgets])
+        valid_power = validation_power[budget_under]
 
-       # # Get the maximum accuracy for a budget less than (or equal to) the given budget
-       # less_than_mask = (known_budgets <= budget).astype(float)
-       # if (less_than_mask < SMALL_NUMBER).all():
-       #     less_than_idx = 0
-       # else:
-       #     less_than_idx = np.argmax(budget_accuracy * less_than_mask)
-
-       # # Get maximum accuracy for a budget greater than the given budget
-       # greater_than_mask = (known_budgets > budget).astype(float)
-       # if (greater_than_mask < SMALL_NUMBER).all():
-       #     greater_than_idx = -1
-       # else:
-       #     greater_than_idx = np.argmax(budget_accuracy * greater_than_mask)
-
-       # # If the accuracy is highest for a lower budget, then set the budget to this lower
-       # # power level. Otherwise, we keep the given budget because there is room for improvement.
-       # if budget_accuracy[less_than_idx] >= budget_accuracy[greater_than_idx]:
-       #     self._budget = budget_power_estimates[less_than_idx]
-       # else:
-       #     self._budget = budget
+        self._lower_budget = min(valid_power, budget)
+        self._upper_budget = max(valid_power, budget)
 
         # Initialize variables for budget distribution tracking
         self._level_counts = np.zeros(shape=(num_levels, ))
@@ -193,7 +179,7 @@ class BudgetDistribution:
 
         self._observed_label_counts = np.zeros_like(self._estimated_label_counts)
 
-    def get_budget(self, time: int) -> Tuple[float, float]:
+    def get_budget(self, time: int) -> ConfidenceBounds:
         expected_rest = 0
         variance_rest = 0
         time_delta = self._max_time - time
@@ -224,14 +210,18 @@ class BudgetDistribution:
             expected_rest += power_mean * remaining_fraction
             variance_rest += np.square(class_count_diff[class_idx] / time) * power_var
 
-        expected_power = (1.0 / time) * (self._max_time * self._budget - time_delta * expected_rest)
-        expected_power = clip(expected_power, (power_estimates[0], power_estimates[-1]))  # We clip the power to the feasible range
+        expected_power_lower = (1.0 / time) * (self._max_time * self._lower_budget - time_delta * expected_rest)
+        expected_power_lower = clip(expected_power_lower, (power_estimates[0], power_estimates[-1]))  # We clip the power to the feasible range
+
+        expected_power_upper = (1.0 / time) * (self._max_time * self._upper_budget - time_delta * expected_rest)
+        expected_power_upper = clip(expected_power_upper, (power_estimates[0], power_estimates[-1]))  # We clip the power to the feasible range
 
         estimator_variance = 2 * (1.0 / time) * variance_rest
         estimator_std = np.sqrt(estimator_variance)
 
         # Upper and lower bounds as determined by one std from the mean
-        return expected_power - estimator_std, expected_power + estimator_std
+        return ConfidenceBounds(lower=expected_power_lower - estimator_std,
+                                upper=expected_power_upper + estimator_std)
 
     def update(self, label: int, level: int, power: float):
         self._observed_label_counts[label] += 1
