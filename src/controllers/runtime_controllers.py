@@ -155,7 +155,7 @@ class BudgetDistribution:
             if b > budget_under and b <= budget:
                 budget_under = b
 
-        valid_power = validation_power[budget_under]
+        valid_power = validation_power[budget_under] if budget_under in validation_power else budget
 
         self._lower_budget = min(valid_power, budget)
         self._upper_budget = max(valid_power, budget)
