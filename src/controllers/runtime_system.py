@@ -197,33 +197,23 @@ class RuntimeSystem:
                                                     integral_bounds=INTEGRAL_BOUNDS,
                                                     integral_window=INTEGRAL_WINDOW)
             
-            self._budget_distribution = PowerSetpoint(num_levels=self._num_levels,
-                                                      seq_length=self._seq_length,
-                                                      window_size=WINDOW_SIZE)
+            #self._budget_distribution = PowerSetpoint(num_levels=self._num_levels,
+            #                                          seq_length=self._seq_length,
+            #                                          window_size=WINDOW_SIZE)
 
-            ## Create the power distribution
-            #thresholds = self._controller.get_thresholds(budget=budget)
-            #prior_counts = estimate_label_counts(predictions=self._valid_predictions,
-            #                                     stop_probs=self._valid_stop_probs,
-            #                                     thresholds=thresholds,
-            #                                     num_classes=self._num_classes)
-            
-            #valid_budget_acc: Dict[float, float] = dict()
-            #valid_budget_power: Dict[float, float] = dict()
+            # Create the power distribution
+            thresholds = self._controller.get_thresholds(budget=budget)
+            prior_counts = estimate_label_counts(predictions=self._valid_predictions,
+                                                 stop_probs=self._valid_stop_probs,
+                                                 thresholds=thresholds,
+                                                 num_classes=self._num_classes)
 
-            #for b in self._controller.budgets:
-            #    acc, pwr = self._controller.evaluate(budget=b, model_results=self._valid_results)
-            #    valid_budget_acc[b] = acc
-            #    valid_budget_power[b] = pwr
-
-            #self._budget_distribution = BudgetDistribution(prior_counts=prior_counts,
-            #                                               budget=budget,
-            #                                               budget_accuracies=valid_budget_acc,
-            #                                               budget_power=valid_budget_power,
-            #                                               max_time=max_time,
-            #                                               num_levels=self._num_levels,
-            #                                               num_classes=self._num_classes,
-            #                                               seq_length=self._seq_length)
+            self._budget_distribution = BudgetDistribution(prior_counts=prior_counts,
+                                                           budget=budget,
+                                                           max_time=max_time,
+                                                           num_levels=self._num_levels,
+                                                           num_classes=self._num_classes,
+                                                           seq_length=self._seq_length)
 
         # Apply budget wrapper to the controller
         assert self._controller is not None, 'Must have a valid controller'
@@ -235,7 +225,6 @@ class RuntimeSystem:
                                                 seq_length=self._seq_length,
                                                 budget=budget)
         self._budget_step = 0
-        self._current_step = 0
         self._current_budget = budget
         self._num_correct = []
         self._target_budgets = []
@@ -243,9 +232,9 @@ class RuntimeSystem:
     def step(self, budget: float, power_noise: float, t: int):
         stop_probs = self._stop_probs[t] if self._stop_probs is not None and t < len(self._stop_probs) else None
 
-        current_budget = budget + self._budget_step
+        budget += self._budget_step
         pred, level, power = self._budget_controller.predict_sample(stop_probs=stop_probs,
-                                                                    budget=current_budget,
+                                                                    budget=budget,
                                                                     noise=power_noise,
                                                                     current_time=t)
         label = self._labels[t]
@@ -256,30 +245,26 @@ class RuntimeSystem:
             is_correct = float(abs(label - pred) < SMALL_NUMBER)
 
         self._num_correct.append(is_correct)
-        self._target_budgets.append(current_budget)
+        self._target_budgets.append(budget)
 
         # Update the adaptive controller parameters
         if self._system_type == SystemType.ADAPTIVE:
             if pred is not None:
-                # self._budget_distribution.update(label=pred, level=level, power=power)
-                self._budget_distribution.update(level=level, power=power)
+                self._budget_distribution.update(label=pred, level=level, power=power)
    
-            # is_end_of_window = (t + 1) % WINDOW_SIZE == 0
-            # if is_end_of_window:
-                # self._current_budget = self._budget_distribution.get_budget(t + 1)
-            self._budget_step = self._budget_distribution.get_setpoint();
+            is_end_of_window = (t + 1) % WINDOW_SIZE == 0
+            if is_end_of_window:
+                self._current_budget = self._budget_distribution.get_budget(t + 1)
 
-         #   # We only apply the PID controller after the first budget is set. At the beginning, there is little knowledge
-         #   # about the correct budget
-         #   if t >= WINDOW_SIZE - 1:
-         #       # power_so_far = self._budget_controller.get_consumed_energy() / (t + 1)
-         #       # print('Power So Far: {0}, Setpoint: {1}'.format(power_so_far, self._current_budget))
+            # We only apply the PID controller after the first budget is set. At the beginning, there is little knowledge
+            # about the correct budget
+            if t >= WINDOW_SIZE - 1:
+                power_so_far = self._budget_controller.get_consumed_energy() / (t + 1)
 
-         #       budget_step = self._pid_controller.step(y_true=(self._budget_step, self._budget_step), y_pred=self._current_step, time=t)
-         #       self._budget_step = budget_step
+                budget_step = self._pid_controller.step(y_true=self._current_budget, y_pred=power_so_far, time=t)
 
-         #   if is_end_of_window:
-         #       self._current_budget = budget - self._budget_step
+                if is_end_of_window:
+                    self._budget_step = budget_step
 
     def estimate_validation_results(self, budget: float, max_time: int) -> float:
         assert self._controller is not None, 'Must have an internal controller'

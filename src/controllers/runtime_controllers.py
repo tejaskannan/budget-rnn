@@ -123,8 +123,6 @@ class PowerSetpoint:
         # Compute the expected power based on the prior measurements
         expected_power = np.sum((self._power_estimates * level_counts) / total_count)
 
-        print('Expected Power: {0:.4f}, Measured Power: {1:.4f}'.format(expected_power, measured_power))
-
         return expected_power - measured_power
 
     def update(self, level: int, power: float):
@@ -140,8 +138,6 @@ class BudgetDistribution:
     def __init__(self,
                  prior_counts: Dict[int, np.ndarray],
                  budget: float,
-                 budget_accuracies: Dict[float, float],
-                 budget_power: Dict[float, float],
                  max_time: int,
                  num_levels: int,
                  seq_length: int,
