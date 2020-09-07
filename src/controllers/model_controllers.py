@@ -18,6 +18,7 @@ CONTROLLER_PATH = 'model-controller-{0}.pkl.gz'
 MARGIN = 1000
 MIN_INIT = 0.7
 MAX_INIT = 1.0
+REGULARIZATION_FACTOR = 0.01
 
 
 # HELPER FUNCTIONS
@@ -119,7 +120,11 @@ class BudgetOptimizer:
         self._rand = np.random.RandomState(seed=42)
         self._thresholds = None
 
-    def loss_function(self, thresholds: np.ndarray, model_correct: np.ndarray, stop_probs: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    @property
+    def thresholds(self) -> np.ndarray:
+        return self._thresholds
+
+    def loss_function(self, thresholds: np.ndarray, model_correct: np.ndarray, stop_probs: np.ndarray, reg_factor: float) -> Tuple[np.ndarray, np.ndarray]:
         """
         Evaluates the loss of a given set of thresholds on the model results.
 
@@ -127,6 +132,7 @@ class BudgetOptimizer:
             thresholds: A [S, L] array of thresholds for each budget (S) and model level (L)
             model_correct: A [B, L] array of binary model correct labels for each batch sample (B) and model level (L)
             stop_probs: A [B, L] array of stop probabilities for each batch sample (B) and model level (L)
+            reg_factor: Weight to place on the L1 regularization term
         Returns:
             A tuple of two elements:
                 (1) A [S] array of scores for each budget
@@ -148,7 +154,11 @@ class BudgetOptimizer:
         time_steps = np.minimum(((self._budgets * max_time) / avg_power).astype(int), max_time)  # [S]
         adjusted_accuracy = (accuracy * time_steps) / max_time  # [S]
 
-        return -adjusted_accuracy, avg_power
+        # Add the regularization term
+        reg_term = reg_factor * np.abs(avg_power - self._budgets)
+        loss = -adjusted_accuracy + reg_term
+
+        return loss, avg_power
 
     def fit(self, stop_probs: np.ndarray, model_correct: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -216,7 +226,8 @@ class BudgetOptimizer:
         # The loss is the negative accuracy AFTER accounting for the budget
         loss, _ = self.loss_function(model_correct=model_correct,
                                      stop_probs=stop_probs,
-                                     thresholds=self._thresholds)
+                                     thresholds=self._thresholds,
+                                     reg_factor=0.0)
         return -loss
 
     def fit_single(self, model_correct: np.ndarray, stop_probs: np.ndarray, init_thresholds: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -245,8 +256,6 @@ class BudgetOptimizer:
         early_stopping_counter = 0
         prev_thresholds = np.copy(thresholds)
 
-        print(self._num_levels)
-
         for i in range(self._max_iter):
 
             # Select a random level to optimize. We skip the top-level because it does
@@ -273,7 +282,8 @@ class BudgetOptimizer:
                 # Compute the fitness, both return values are [S] arrays
                 loss, avg_power = self.loss_function(thresholds=thresholds,
                                                      model_correct=model_correct,
-                                                     stop_probs=stop_probs)
+                                                     stop_probs=stop_probs,
+                                                     reg_factor=REGULARIZATION_FACTOR)
 
                 best_t = np.where(loss < best_loss, candidate_values, best_t)
                 best_power = np.where(loss < best_loss, avg_power, best_power)
@@ -299,7 +309,8 @@ class BudgetOptimizer:
 
         final_loss, _ = self.loss_function(thresholds=thresholds,
                                            model_correct=model_correct,
-                                           stop_probs=stop_probs)
+                                           stop_probs=stop_probs,
+                                           reg_factor=REGULARIZATION_FACTOR)
         return thresholds, np.expand_dims(final_loss, axis=-1)
 
 
@@ -471,7 +482,7 @@ class AdaptiveController(Controller):
         # By default, we return the top level
         return self._num_levels - 1, get_avg_power(self._seq_length, self._seq_length)
 
-    def get_accuracy(self, budget: float, model_results: ModelResults) -> float:
+    def evaluate(self, budget: float, model_results: ModelResults) -> Tuple[float, float]:
         assert self._thresholds is not None, 'Must call fit() first'
 
         max_time = model_results.stop_probs.shape[0]
@@ -491,7 +502,7 @@ class AdaptiveController(Controller):
         time_steps = min(int((budget * max_time) / avg_power), max_time)
         adjusted_accuracy = (accuracy * time_steps) / max_time
 
-        return float(adjusted_accuracy)
+        return float(adjusted_accuracy), float(avg_power)
 
     def as_dict(self):
         return {
@@ -613,6 +624,7 @@ class MultiModelController(Controller):
         for counts in sample_counts:
             power = get_weighted_avg_power(counts, seq_length=seq_length)
             model_power.append(power)
+
 
         self._model_power = np.array(model_power).reshape(-1)
         self._model_accuracy = np.array(model_accuracy).reshape(-1)
