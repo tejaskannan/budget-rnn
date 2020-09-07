@@ -1,7 +1,8 @@
 import numpy as np
 import os.path
 from argparse import ArgumentParser
-from typing import List, Optional, Tuple
+from datetime import datetime
+from typing import List, Optional, Tuple, Dict
 
 from dataset.dataset import Dataset, DataSeries
 from models.adaptive_model import AdaptiveModel
@@ -160,7 +161,7 @@ class BudgetOptimizer:
 
         return loss, avg_power
 
-    def fit(self, stop_probs: np.ndarray, model_correct: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def fit(self, stop_probs: np.ndarray, model_correct: np.ndarray, should_print: bool) -> Tuple[np.ndarray, np.ndarray]:
         """
         Fits thresholds to the budgets corresponding to this class.
 
@@ -168,6 +169,7 @@ class BudgetOptimizer:
             stop_probs: A [B, L] array of stop probabilities for each level (L) and sample in the batch (B)
             model_correct: A [B, L] array of binary labels denoting whether the model level is right (1) or wrong (0) for each
                 sample in the batch.
+            should_print: Whether we should print the results
         Returns:
             A tuple of two elements.
                 (1) A [S] array containing thresholds for each budget (S budgets in total)
@@ -183,7 +185,8 @@ class BudgetOptimizer:
         best_loss = np.ones(shape=(self._num_budgets, 1), dtype=float)  # [S, 1]
 
         for t in range(self._trials):
-            print('===== Starting Trial {0} ====='.format(t))
+            if should_print:
+                print('===== Starting Trial {0} ====='.format(t))
 
             # Initialize the thresholds uniformly at random. We sort the thresholds in decreasing
             # order to align with the notion of answer 'confidence'.
@@ -194,12 +197,15 @@ class BudgetOptimizer:
             # Fit the thresholds ([S, L]) and get the corresponding loss ([S, 1])
             thresholds, loss = self.fit_single(model_correct=model_correct,
                                                stop_probs=stop_probs,
-                                               init_thresholds=init_thresholds)
+                                               init_thresholds=init_thresholds,
+                                               should_print=should_print)
 
             # Set the thresholds using the best seen fitness so far
             best_thresholds = np.where(loss < best_loss, thresholds, best_thresholds)
             best_loss = np.where(loss < best_loss, loss, best_loss)
-            print('Completed Trial {0}. Best Loss: {1}'.format(t, best_loss))
+
+            if should_print:
+                print('Completed Trial {0}. Best Loss: {1}'.format(t, best_loss))
 
         # Get the level distribution
         levels = levels_to_execute(probs=stop_probs, thresholds=best_thresholds)
@@ -230,7 +236,7 @@ class BudgetOptimizer:
                                      reg_factor=0.0)
         return -loss
 
-    def fit_single(self, model_correct: np.ndarray, stop_probs: np.ndarray, init_thresholds: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def fit_single(self, model_correct: np.ndarray, stop_probs: np.ndarray, init_thresholds: np.ndarray, should_print: bool) -> Tuple[np.ndarray, np.ndarray]:
         """
         Fits the optimizer to the given predictions of the logistic regression model and neural network model.
 
@@ -239,6 +245,7 @@ class BudgetOptimizer:
                 are 0/1 values indicating if this sample was classified correctly (1) or incorrectly (0)
             stop_probs: A [B, L] array of stop probabilities for each sample (B) and level (L)
             init_thresholds: An [S, L] of initial thresholds for each budget (S) and level (L)
+            should_print: Whether we should print intermediate results
         Returns:
             A tuple of two elements:
             (1) A [S, L] array of thresholds for each budget
@@ -290,9 +297,11 @@ class BudgetOptimizer:
                 best_loss = np.where(loss < best_loss, loss, best_loss)
 
             thresholds[:, level] = best_t  # Set the best thresholds
-            print('Completed Iteration: {0}: level {1}'.format(i, level))
-            print('\tBest Loss: {0}'.format(best_loss))
-            print('\tApprox Power: {0}'.format(best_power))
+            
+            if should_print:
+                print('Completed Iteration: {0}: level {1}'.format(i, level))
+                print('\tBest Loss: {0}'.format(best_loss))
+                print('\tApprox Power: {0}'.format(best_power))
 
             # Detect convergence using the given patience parameter
             if np.isclose(thresholds, prev_thresholds).all():
@@ -301,7 +310,8 @@ class BudgetOptimizer:
                 early_stopping_counter = 0
 
             if early_stopping_counter >= self._patience:
-                print('Converged.')
+                if should_print:
+                    print('Converged.')
                 break
 
             # Copy previous thresholds for convergence detection
@@ -321,7 +331,7 @@ class Controller:
     def fit(self, series: DataSeries):
         pass
 
-    def predict_sample(self, stop_probs: np.ndarray, budget: int) -> int:
+    def predict_sample(self, stop_probs: np.ndarray, budget: int) -> Tuple[int, Optional[float]]:
         raise NotImplementedError()
 
 
@@ -352,6 +362,8 @@ class AdaptiveController(Controller):
         self._max_iter = max_iter
 
         self._thresholds = None
+        self._fit_start_time: Optional[str] = None
+        self._fit_end_time: Optional[str] = None
         self._is_fitted = False
 
         # Create the budget optimizer
@@ -371,7 +383,9 @@ class AdaptiveController(Controller):
     def budgets(self) -> np.ndarray:
         return self._budgets
 
-    def fit(self, series: DataSeries):
+    def fit(self, series: DataSeries, should_print: bool):
+        start_time = datetime.now()
+
         train_results = execute_adaptive_model(self._model, self._dataset, series=series)
         test_results = execute_adaptive_model(self._model, self._dataset, series=DataSeries.TEST)
 
@@ -380,8 +394,12 @@ class AdaptiveController(Controller):
 
         # Fit the thresholds
         self._thresholds, self._avg_level_counts = self._budget_optimizer.fit(model_correct=train_correct,
-                                                                              stop_probs=train_results.stop_probs)
+                                                                              stop_probs=train_results.stop_probs,
+                                                                              should_print=should_print)
 
+        
+        end_time = datetime.now()
+        
         # Evaluate the model optimizer
         train_acc = self._budget_optimizer.evaluate(model_correct=train_correct, stop_probs=train_results.stop_probs)
         test_acc = self._budget_optimizer.evaluate(model_correct=test_correct, stop_probs=test_results.stop_probs)
@@ -389,9 +407,14 @@ class AdaptiveController(Controller):
         print('Train Accuracy: {0}'.format(train_acc))
         print('Test Accuracy: {0}'.format(test_acc))
 
+        self._fit_start_time = start_time.strftime('%Y-%m-%d-%H-%M-%S')
+        self._fit_end_time = end_time.strftime('%Y-%m-%d-%H-%M-%S')
+
         self._is_fitted = True
 
     def get_thresholds(self, budget: int) -> np.ndarray:
+        assert self._thresholds is not None, 'Must call fit() first'
+
         budget_idx = index_of(self._budgets, value=budget)
 
         min_power = get_avg_power(num_samples=1, seq_length=self._seq_length, multiplier=int(self._seq_length / self._num_levels))
@@ -457,7 +480,7 @@ class AdaptiveController(Controller):
 
         return self._avg_level_counts[budget_idx]
 
-    def predict_sample(self, stop_probs: np.ndarray, budget: int) -> int:
+    def predict_sample(self, stop_probs: np.ndarray, budget: int) -> Tuple[int, Optional[float]]:
         """
         Predicts the number of levels given the list of hidden states. The states are assumed to be in order.
 
@@ -465,7 +488,9 @@ class AdaptiveController(Controller):
             stop_probs: An array of [L] stop probabilities, one for each level
             budget: The budget to perform inference under. This controls the employed thresholds.
         Returns:
-            The number of levels to execute.
+            A tuple of two elements:
+                (1) The number of levels to execute
+                (2) The power consumed while executing this number of levels
         """
         assert self._is_fitted, 'Model is not fitted'
 
@@ -515,7 +540,9 @@ class AdaptiveController(Controller):
             'precision': self._precision,
             'patience': self._patience,
             'max_iter': self._max_iter,
-            'avg_level_counts': self._avg_level_counts
+            'avg_level_counts': self._avg_level_counts,
+            'fit_start_time': self._fit_start_time,
+            'fit_end_time': self._fit_end_time
         }
 
     def save(self, output_file: Optional[str] = None):
@@ -554,6 +581,8 @@ class AdaptiveController(Controller):
         controller._thresholds = serialized_info['thresholds']
         controller._avg_level_counts = serialized_info['avg_level_counts']
         controller._is_fitted = serialized_info['is_fitted']
+        controller._fit_start_time = serialized_info.get('fit_start_time')
+        controller._fit_end_time = serialized_info.get('fit_end_time')
 
         return controller
 
@@ -566,7 +595,7 @@ class FixedController(Controller):
     def fit(self, series: DataSeries):
         pass
 
-    def predict_sample(self, stop_probs: np.ndarray, budget: int) -> int:
+    def predict_sample(self, stop_probs: np.ndarray, budget: int) -> Tuple[int, Optional[float]]:
         """
         Predicts the label for the given inputs. This strategy always uses the same index.
         """
@@ -599,7 +628,7 @@ class RandomController(Controller):
 
         self._is_fitted = True
 
-    def predict_sample(self, stop_probs: np.ndarray, budget: int) -> int:
+    def predict_sample(self, stop_probs: np.ndarray, budget: int) -> Tuple[int, Optional[float]]:
         """
         Predicts the number of levels given the list of hidden states. The states are assumed to be in order.
 
@@ -607,7 +636,9 @@ class RandomController(Controller):
             stop_probs: An [L] array of stop probabilities
             budget: The budget to perform inference under. This controls the employed thresholds.
         Returns:
-            The number of levels to execute.
+            A tuple of two elements:
+                (1) The number of levels to execute
+                (2) The power consumed when executing this number of levels
         """
         assert self._is_fitted, 'Model is not fitted'
 
@@ -631,7 +662,7 @@ class MultiModelController(Controller):
         self._max_time = max_time
         self._allow_violations = allow_violations
 
-    def predict_sample(self, stop_probs: np.ndarray, budget: float) -> int:
+    def predict_sample(self, stop_probs: np.ndarray, budget: float) -> Tuple[int, Optional[float]]:
         """
         Predicts the number of levels given the list of hidden states. The states are assumed to be in order.
 
@@ -639,7 +670,9 @@ class MultiModelController(Controller):
             stop_probs: An [L] array of stop probabilities
             budget: The budget to perform inference under. This controls the employed thresholds.
         Returns:
-            The number of levels to execute.
+            A tuple of two elements:
+                (1) The number of levels to execute
+                (2) The power consumed when executing this number of levels
         """
         model_idx = get_budget_index(budget=budget,
                                      valid_accuracy=self._model_accuracy,
@@ -664,7 +697,7 @@ class BudgetWrapper:
         # Save variables corresponding to the budget
         self._max_time = max_time
         self._energy_sum = 0.0
-        self._power = []
+        self._power: List[float] = []
         self._energy_margin = 0.05  # Small margin to prevent going over the budget unknowingly
 
     def predict_sample(self, stop_probs: np.ndarray, current_time: int, budget: int, noise: float) -> Tuple[Optional[int], int, float]:
@@ -691,18 +724,19 @@ class BudgetWrapper:
         if not should_use_controller:
             pred = None
             level = 0
-            power = 0
+            power = 0.0
         else:
             # If not acting randomly, we use the neural network to perform the classification.
-            level, power = self._controller.predict_sample(stop_probs=stop_probs, budget=budget)
-            pred = self._model_predictions[current_time, level]
+            level, model_power = self._controller.predict_sample(stop_probs=stop_probs, budget=budget)
 
-            # Add to power results. If no power is given, we default to using the known
-            # power estimates. This gives the controllers a chance to override the power readings.
-            if power is None:
+            # If no power is given, we default to using the known power estimates.
+            if model_power is None:
                 power = get_avg_power(level + 1, seq_length=self._seq_length, multiplier=int(self._seq_length / self._num_levels))
+            else:
+                power = model_power
 
             power = power + noise
+            pred = self._model_predictions[current_time, level]
 
         # If this inference pushes the system over budget, we actually cannot complete it. We thus clip
         # the energy and clear the prediction.
@@ -737,6 +771,7 @@ if __name__ == '__main__':
     parser.add_argument('--trials', type=int, default=1)
     parser.add_argument('--patience', type=int, default=15)
     parser.add_argument('--max-iter', type=int, default=100)
+    parser.add_argument('--should-print', action='store_true')
     args = parser.parse_args()
 
     for model_path in args.model_paths:
@@ -752,5 +787,5 @@ if __name__ == '__main__':
                                         max_iter=args.max_iter)
 
         # Fit the model on the validation set
-        controller.fit(series=DataSeries.VALID)
+        controller.fit(series=DataSeries.VALID, should_print=args.should_print)
         controller.save()
