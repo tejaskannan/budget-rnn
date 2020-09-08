@@ -19,7 +19,6 @@ CONTROLLER_PATH = 'model-controller-{0}.pkl.gz'
 MARGIN = 1000
 MIN_INIT = 0.7
 MAX_INIT = 1.0
-REGULARIZATION_FACTOR = 0.01
 
 
 # HELPER FUNCTIONS
@@ -125,7 +124,7 @@ class BudgetOptimizer:
     def thresholds(self) -> np.ndarray:
         return self._thresholds
 
-    def loss_function(self, thresholds: np.ndarray, model_correct: np.ndarray, stop_probs: np.ndarray, reg_factor: float) -> Tuple[np.ndarray, np.ndarray]:
+    def loss_function(self, thresholds: np.ndarray, model_correct: np.ndarray, stop_probs: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
         Evaluates the loss of a given set of thresholds on the model results.
 
@@ -133,7 +132,6 @@ class BudgetOptimizer:
             thresholds: A [S, L] array of thresholds for each budget (S) and model level (L)
             model_correct: A [B, L] array of binary model correct labels for each batch sample (B) and model level (L)
             stop_probs: A [B, L] array of stop probabilities for each batch sample (B) and model level (L)
-            reg_factor: Weight to place on the L1 regularization term
         Returns:
             A tuple of two elements:
                 (1) A [S] array of scores for each budget
@@ -155,20 +153,19 @@ class BudgetOptimizer:
         time_steps = np.minimum(((self._budgets * max_time) / avg_power).astype(int), max_time)  # [S]
         adjusted_accuracy = (accuracy * time_steps) / max_time  # [S]
 
-        # Add the regularization term
-        reg_term = reg_factor * np.abs(avg_power - self._budgets)
-        loss = -adjusted_accuracy + reg_term
+        loss = -adjusted_accuracy
 
         return loss, avg_power
 
-    def fit(self, stop_probs: np.ndarray, model_correct: np.ndarray, should_print: bool) -> Tuple[np.ndarray, np.ndarray]:
+    def fit(self, stop_probs: np.ndarray, model_correct: np.ndarray, batch_size: int, should_print: bool) -> Tuple[np.ndarray, np.ndarray]:
         """
         Fits thresholds to the budgets corresponding to this class.
 
         Args:
-            stop_probs: A [B, L] array of stop probabilities for each level (L) and sample in the batch (B)
+            stop_probs: A [B, L] array of stop probabilities for each level (L) and sample (B)
             model_correct: A [B, L] array of binary labels denoting whether the model level is right (1) or wrong (0) for each
-                sample in the batch.
+                sample.
+            batch_size: Size of batches used during optimization. This makes the optimization more efficient.
             should_print: Whether we should print the results
         Returns:
             A tuple of two elements.
@@ -198,6 +195,7 @@ class BudgetOptimizer:
             thresholds, loss = self.fit_single(model_correct=model_correct,
                                                stop_probs=stop_probs,
                                                init_thresholds=init_thresholds,
+                                               batch_size=batch_size,
                                                should_print=should_print)
 
             # Set the thresholds using the best seen fitness so far
@@ -232,11 +230,10 @@ class BudgetOptimizer:
         # The loss is the negative accuracy AFTER accounting for the budget
         loss, _ = self.loss_function(model_correct=model_correct,
                                      stop_probs=stop_probs,
-                                     thresholds=self._thresholds,
-                                     reg_factor=0.0)
+                                     thresholds=self._thresholds)
         return -loss
 
-    def fit_single(self, model_correct: np.ndarray, stop_probs: np.ndarray, init_thresholds: np.ndarray, should_print: bool) -> Tuple[np.ndarray, np.ndarray]:
+    def fit_single(self, model_correct: np.ndarray, stop_probs: np.ndarray, init_thresholds: np.ndarray, batch_size: int,should_print: bool) -> Tuple[np.ndarray, np.ndarray]:
         """
         Fits the optimizer to the given predictions of the logistic regression model and neural network model.
 
@@ -245,6 +242,7 @@ class BudgetOptimizer:
                 are 0/1 values indicating if this sample was classified correctly (1) or incorrectly (0)
             stop_probs: A [B, L] array of stop probabilities for each sample (B) and level (L)
             init_thresholds: An [S, L] of initial thresholds for each budget (S) and level (L)
+            batch_size: Size of batches to use during optimization
             should_print: Whether we should print intermediate results
         Returns:
             A tuple of two elements:
@@ -263,6 +261,9 @@ class BudgetOptimizer:
         early_stopping_counter = 0
         prev_thresholds = np.copy(thresholds)
 
+        # [B] array of indices for each sample
+        sample_idx = np.arange(model_correct.shape[0])
+
         for i in range(self._max_iter):
 
             # Select a random level to optimize. We skip the top-level because it does
@@ -279,6 +280,11 @@ class BudgetOptimizer:
             end_values = np.minimum(fp_init + int((MARGIN + 1) / 2), fp_one)  # Clip to one
             start_values = np.maximum(end_values - MARGIN, 0)
 
+            # Create the batch for this iteration
+            batch_idx = self._rand.choice(sample_idx, size=(batch_size, ), replace=False)
+            batch_correct = model_correct[batch_idx, :]
+            batch_probs = stop_probs[batch_idx, :]
+
             # Select best threshold over the (discrete) search space
             for offset in range(MARGIN):
 
@@ -288,9 +294,8 @@ class BudgetOptimizer:
 
                 # Compute the fitness, both return values are [S] arrays
                 loss, avg_power = self.loss_function(thresholds=thresholds,
-                                                     model_correct=model_correct,
-                                                     stop_probs=stop_probs,
-                                                     reg_factor=REGULARIZATION_FACTOR)
+                                                     model_correct=batch_correct,
+                                                     stop_probs=batch_probs)
 
                 best_t = np.where(loss < best_loss, candidate_values, best_t)
                 best_power = np.where(loss < best_loss, avg_power, best_power)
@@ -319,8 +324,8 @@ class BudgetOptimizer:
 
         final_loss, _ = self.loss_function(thresholds=thresholds,
                                            model_correct=model_correct,
-                                           stop_probs=stop_probs,
-                                           reg_factor=REGULARIZATION_FACTOR)
+                                           stop_probs=stop_probs)
+
         return thresholds, np.expand_dims(final_loss, axis=-1)
 
 
@@ -383,7 +388,7 @@ class AdaptiveController(Controller):
     def budgets(self) -> np.ndarray:
         return self._budgets
 
-    def fit(self, series: DataSeries, should_print: bool):
+    def fit(self, series: DataSeries, batch_size: int, should_print: bool):
         start_time = datetime.now()
 
         train_results = execute_adaptive_model(self._model, self._dataset, series=series)
@@ -395,6 +400,7 @@ class AdaptiveController(Controller):
         # Fit the thresholds
         self._thresholds, self._avg_level_counts = self._budget_optimizer.fit(model_correct=train_correct,
                                                                               stop_probs=train_results.stop_probs,
+                                                                              batch_size=batch_size,
                                                                               should_print=should_print)
 
         
@@ -769,8 +775,9 @@ if __name__ == '__main__':
     parser.add_argument('--budgets', type=float, nargs='+', required=True)
     parser.add_argument('--precision', type=int, required=True)
     parser.add_argument('--trials', type=int, default=1)
-    parser.add_argument('--patience', type=int, default=15)
+    parser.add_argument('--patience', type=int, default=25)
     parser.add_argument('--max-iter', type=int, default=100)
+    parser.add_argument('--batch-size', type=int, default=256)
     parser.add_argument('--should-print', action='store_true')
     args = parser.parse_args()
 
@@ -787,5 +794,5 @@ if __name__ == '__main__':
                                         max_iter=args.max_iter)
 
         # Fit the model on the validation set
-        controller.fit(series=DataSeries.VALID, should_print=args.should_print)
+        controller.fit(series=DataSeries.VALID, batch_size=args.batch_size, should_print=args.should_print)
         controller.save()
