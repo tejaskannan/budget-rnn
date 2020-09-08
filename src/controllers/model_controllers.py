@@ -157,7 +157,7 @@ class BudgetOptimizer:
 
         return loss, avg_power
 
-    def fit(self, stop_probs: np.ndarray, model_correct: np.ndarray, batch_size: int, should_print: bool) -> Tuple[np.ndarray, np.ndarray]:
+    def fit(self, stop_probs: np.ndarray, model_correct: np.ndarray, should_print: bool) -> Tuple[np.ndarray, np.ndarray]:
         """
         Fits thresholds to the budgets corresponding to this class.
 
@@ -165,7 +165,6 @@ class BudgetOptimizer:
             stop_probs: A [B, L] array of stop probabilities for each level (L) and sample (B)
             model_correct: A [B, L] array of binary labels denoting whether the model level is right (1) or wrong (0) for each
                 sample.
-            batch_size: Size of batches used during optimization. This makes the optimization more efficient.
             should_print: Whether we should print the results
         Returns:
             A tuple of two elements.
@@ -195,7 +194,6 @@ class BudgetOptimizer:
             thresholds, loss = self.fit_single(model_correct=model_correct,
                                                stop_probs=stop_probs,
                                                init_thresholds=init_thresholds,
-                                               batch_size=batch_size,
                                                should_print=should_print)
 
             # Set the thresholds using the best seen fitness so far
@@ -233,7 +231,7 @@ class BudgetOptimizer:
                                      thresholds=self._thresholds)
         return -loss
 
-    def fit_single(self, model_correct: np.ndarray, stop_probs: np.ndarray, init_thresholds: np.ndarray, batch_size: int,should_print: bool) -> Tuple[np.ndarray, np.ndarray]:
+    def fit_single(self, model_correct: np.ndarray, stop_probs: np.ndarray, init_thresholds: np.ndarray, should_print: bool) -> Tuple[np.ndarray, np.ndarray]:
         """
         Fits the optimizer to the given predictions of the logistic regression model and neural network model.
 
@@ -242,7 +240,6 @@ class BudgetOptimizer:
                 are 0/1 values indicating if this sample was classified correctly (1) or incorrectly (0)
             stop_probs: A [B, L] array of stop probabilities for each sample (B) and level (L)
             init_thresholds: An [S, L] of initial thresholds for each budget (S) and level (L)
-            batch_size: Size of batches to use during optimization
             should_print: Whether we should print intermediate results
         Returns:
             A tuple of two elements:
@@ -261,9 +258,6 @@ class BudgetOptimizer:
         early_stopping_counter = 0
         prev_thresholds = np.copy(thresholds)
 
-        # [B] array of indices for each sample
-        sample_idx = np.arange(model_correct.shape[0])
-
         for i in range(self._max_iter):
 
             # Select a random level to optimize. We skip the top-level because it does
@@ -280,22 +274,17 @@ class BudgetOptimizer:
             end_values = np.minimum(fp_init + int((MARGIN + 1) / 2), fp_one)  # Clip to one
             start_values = np.maximum(end_values - MARGIN, 0)
 
-            # Create the batch for this iteration
-            batch_idx = self._rand.choice(sample_idx, size=(batch_size, ), replace=False)
-            batch_correct = model_correct[batch_idx, :]
-            batch_probs = stop_probs[batch_idx, :]
-
             # Select best threshold over the (discrete) search space
             for offset in range(MARGIN):
-
+                
                 # Compute the predictions using the threshold on the logistic regression model
                 candidate_values = np.minimum((start_values + offset) / fp_one, 1)  # [S]
                 thresholds[:, level] = candidate_values
 
                 # Compute the fitness, both return values are [S] arrays
                 loss, avg_power = self.loss_function(thresholds=thresholds,
-                                                     model_correct=batch_correct,
-                                                     stop_probs=batch_probs)
+                                                     model_correct=model_correct,
+                                                     stop_probs=stop_probs)
 
                 best_t = np.where(loss < best_loss, candidate_values, best_t)
                 best_power = np.where(loss < best_loss, avg_power, best_power)
@@ -333,7 +322,7 @@ class BudgetOptimizer:
 
 class Controller:
     
-    def fit(self, series: DataSeries):
+    def fit(self, series: DataSeries, should_print: bool):
         pass
 
     def predict_sample(self, stop_probs: np.ndarray, budget: int) -> Tuple[int, Optional[float]]:
@@ -388,7 +377,7 @@ class AdaptiveController(Controller):
     def budgets(self) -> np.ndarray:
         return self._budgets
 
-    def fit(self, series: DataSeries, batch_size: int, should_print: bool):
+    def fit(self, series: DataSeries, should_print: bool):
         start_time = datetime.now()
 
         train_results = execute_adaptive_model(self._model, self._dataset, series=series)
@@ -400,7 +389,6 @@ class AdaptiveController(Controller):
         # Fit the thresholds
         self._thresholds, self._avg_level_counts = self._budget_optimizer.fit(model_correct=train_correct,
                                                                               stop_probs=train_results.stop_probs,
-                                                                              batch_size=batch_size,
                                                                               should_print=should_print)
 
         
@@ -598,9 +586,6 @@ class FixedController(Controller):
     def __init__(self, model_index: int):
         self._model_index = model_index
 
-    def fit(self, series: DataSeries):
-        pass
-
     def predict_sample(self, stop_probs: np.ndarray, budget: int) -> Tuple[int, Optional[float]]:
         """
         Predicts the label for the given inputs. This strategy always uses the same index.
@@ -623,7 +608,7 @@ class RandomController(Controller):
         self._rand = np.random.RandomState(seed=62)
         self._is_fitted = False
 
-    def fit(self, series: DataSeries):
+    def fit(self, series: DataSeries, should_print: bool = False):
         # Fit a weighted average for each budget
         thresholds: List[np.ndarray] = []
         power_array = np.array([get_avg_power(i+1, self._seq_length, self._power_multiplier) for i in range(self._num_levels)])
@@ -777,7 +762,6 @@ if __name__ == '__main__':
     parser.add_argument('--trials', type=int, default=1)
     parser.add_argument('--patience', type=int, default=25)
     parser.add_argument('--max-iter', type=int, default=100)
-    parser.add_argument('--batch-size', type=int, default=256)
     parser.add_argument('--should-print', action='store_true')
     args = parser.parse_args()
 
@@ -794,5 +778,5 @@ if __name__ == '__main__':
                                         max_iter=args.max_iter)
 
         # Fit the model on the validation set
-        controller.fit(series=DataSeries.VALID, batch_size=args.batch_size, should_print=args.should_print)
+        controller.fit(series=DataSeries.VALID, should_print=args.should_print)
         controller.save()
