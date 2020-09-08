@@ -157,8 +157,8 @@ class BudgetDistribution:
 
         valid_power = validation_power[budget_under] if budget_under in validation_power else budget
 
-        self._lower_budget = min(valid_power, budget)
-        self._upper_budget = max(valid_power, budget)
+        self._lower_budget = budget
+        self._upper_budget = budget
 
         # Initialize variables for budget distribution tracking
         self._level_counts = np.zeros(shape=(num_levels, ))
