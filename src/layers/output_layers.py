@@ -18,6 +18,10 @@ class OutputType(Enum):
     REGRESSION = auto()
 
 
+def is_classification(output_type: OutputType) -> bool:
+    return output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION)
+
+
 def compute_binary_classification_output(model_output: tf.Tensor, labels: tf.Tensor) -> ClassificationOutput:
     """
     Uses the model output and expected output to compute the classification output values for the

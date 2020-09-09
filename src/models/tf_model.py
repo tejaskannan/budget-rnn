@@ -10,7 +10,7 @@ from sklearn.preprocessing import StandardScaler
 
 from models.base_model import Model
 from dataset.dataset import Dataset, DataSeries
-from layers.output_layers import OutputType
+from layers.output_layers import OutputType, is_classification
 from utils.hyperparameters import HyperParameters
 from utils.tfutils import get_optimizer, variables_for_loss_op
 from utils.file_utils import read_by_file_suffix, save_by_file_suffix, make_dir
@@ -29,10 +29,8 @@ class TFModel(Model):
 
         self._sess = tf.Session(graph=tf.Graph())
 
-        self._optimizers: Dict[str, tf.train.Optimizer] = dict()  # Map from optimizer op name to optimizer instance
         self._ops: Dict[str, tf.Tensor] = dict()
         self._placeholders: Dict[str, tf.Tensor] = dict()
-        self._global_steps: Dict[str, tf.Variable] = dict()  # Map from op name to counter for weight decay
         self._is_made = False
 
         # Get the model output type
@@ -50,24 +48,20 @@ class TFModel(Model):
         return self._placeholders
 
     @property
-    def optimizer_op_names(self) -> List[str]:
-        return [OPTIMIZER_OP]
+    def optimizer_op_name(self) -> str:
+        return OPTIMIZER_OP
 
     @property
-    def loss_op_names(self) -> List[str]:
-        return [LOSS]
+    def loss_op_name(self) -> str:
+        return LOSS
 
     @property
-    def accuracy_op_names(self) -> List[str]:
-        return [ACCURACY]
+    def accuracy_op_name(self) -> str:
+        return ACCURACY
 
     @property
-    def output_ops(self) -> List[str]:
+    def output_op_name(self) -> str:
         raise NotImplementedError()
-
-    @property
-    def global_step_op_names(self) -> List[str]:
-        return [GLOBAL_STEP]
 
     @property
     def sess(self) -> tf.Session:
@@ -246,23 +240,19 @@ class TFModel(Model):
         if self.is_made:
             return  # Prevent building twice
 
-        n_global_steps, n_optimizer_ops = len(self.global_step_op_names), len(self.optimizer_op_names)
-        assert n_global_steps == n_optimizer_ops, 'Must have the same number of optimizer ops ({0}) as global step ops ({1}).'.format(n_optimizer_ops, n_global_steps)
-
         with self.sess.graph.as_default():
             self.make_placeholders(is_frozen=is_frozen)
             self.make_model(is_train=is_train)
 
-            # self._global_step = tf.Variable(0, trainable=False)
+            # Create the global step variable for learning rate decay
+            self._global_step = tf.Variable(0, trainable=False)
 
-            for global_step_name, optimizer_op_name in zip(self.global_step_op_names, self.optimizer_op_names):
-                self._global_steps[global_step_name] = tf.Variable(0, trainable=False)
-
-                self._optimizers[optimizer_op_name] = get_optimizer(name=self.hypers.optimizer,
-                                                                    learning_rate=self.hypers.learning_rate,
-                                                                    learning_rate_decay=self.hypers.learning_rate_decay,
-                                                                    global_step=self._global_steps[global_step_name],
-                                                                    decay_steps=self.hypers.decay_steps)
+            # Create the gradient descent optimizer
+            self._optimizer = get_optimizer(name=self.hypers.optimizer,
+                                            learning_rate=self.hypers.learning_rate,
+                                            learning_rate_decay=self.hypers.learning_rate_decay,
+                                            global_step=self._global_step,
+                                            decay_steps=self.hypers.decay_steps)
 
             # The loss and optimization criteria are only
             # guaranteed to be defined when the model is built for training
@@ -275,35 +265,28 @@ class TFModel(Model):
     def make_training_step(self):
         """
         Creates the training step for this model. Gradients are clipped
-        for better numerical stability.
-
-        Args:
-            loss_ops: Optional dictionary mapping loss operations to a list of trainable variables.
-                The learning rates can be individually scaled for each variable.
+        for stability.
         """
-        assert len(self.optimizer_op_names) == len(self.loss_op_names), 'Must have the same number of loss ops ({0}) as optimizer ops ({1])'.format(len(self.loss_op_names), len(self.optimizer_op_names))
-        optimizer_ops = []
         trainable_vars = self.trainable_vars
 
-        # Compute gradients for each loss operation
-        for loss_op, optimizer_op_name, global_step_name in zip(self.loss_op_names, self.optimizer_op_names, self.global_step_op_names):
-            gradients = tf.gradients(self._ops[loss_op], trainable_vars)
+        # Compute the gradients
+        gradients = tf.gradients(self._ops[self.loss_op_name], trainable_vars)
 
-            # Clip Gradients
-            clipped_gradients, _ = tf.clip_by_global_norm(gradients, self.hypers.gradient_clip)
+        # Clip Gradients
+        clipped_gradients, _ = tf.clip_by_global_norm(gradients, self.hypers.gradient_clip)
 
-            # Prune None values from the set of gradients and apply gradient weights
-            pruned_gradients = [(grad, var) for grad, var in zip(clipped_gradients, trainable_vars) if grad is not None]
+        # Prune None values from the set of gradients and apply gradient weights
+        pruned_gradients = [(grad, var) for grad, var in zip(clipped_gradients, trainable_vars) if grad is not None]
 
-            # Apply clipped gradients
-            optimizer_op = self._optimizers[optimizer_op_name].apply_gradients(pruned_gradients)
+        # Apply clipped gradients
+        optimizer_op = self._optimizer.apply_gradients(pruned_gradients)
 
-            # Increment global step counter
-            global_step_op = tf.assign_add(self._global_steps[global_step_name], 1)
+        # Increment global step counter
+        global_step_op = tf.assign_add(self._global_step, 1)
 
-            # Add operations. By coupling the optimizer and the global step ops, we don't need
-            # to worry about applying these operations separately.
-            self._ops[optimizer_op_name] = tf.group(optimizer_op, global_step_op)
+        # Add operations. By coupling the optimizer and the global step ops, we don't need
+        # to worry about applying these operations separately.
+        self._ops[self.optimizer_op_name] = tf.group(optimizer_op, global_step_op)
 
     def execute(self, feed_dict: Dict[tf.Tensor, List[Any]], ops: Optional[List[str]] = None) -> Dict[str, Any]:
         """
@@ -324,34 +307,31 @@ class TFModel(Model):
             op_results = self._sess.run(ops_to_run, feed_dict=feed_dict)
             return op_results
 
-    def freeze(self, outputs: List[str]):
+    def freeze(self):
         """
         Freezes the Tensorflow computation graph by converting all variables to constants.
-
-        Args:
-            outputs: List of high-level operations representing the model outputs
         """
         # We need to convert the high-level output names to the corresponding Tensorflow nodes
         # This operation is done by (1) getting output variables and (2) finding the nodes
         # for which these variables are the outputs
-        output_names = [self.ops[op].name for op in outputs]
 
         output_nodes: List[str] = []
         for op in self.sess.graph.get_operations():
             for output_name in map(lambda t: t.name, op.outputs):
-                if output_name in output_names:
+                if output_name == self.output_op_name:
                     output_nodes.append(op.name)
 
         # Freeze the corresponding graph
         with self.sess.graph.as_default():
             tf.graph_util.convert_variables_to_constants(self.sess, self.sess.graph.as_graph_def(), output_nodes)
 
-    def train(self, dataset: Dataset, drop_incomplete_batches: bool = False) -> str:
+    def train(self, dataset: Dataset, should_print: bool, drop_incomplete_batches: bool = False) -> str:
         """
         Trains the model on the given dataset.
 
         Args:
             dataset: Dataset object containing training, validation and testing partitions
+            should_print: Whether we should print results to stdout
             drop_incomplete_minibatches: Whether to drop incomplete batches
         Returns:
             The name of the training run. Training results are logged to a pickle file with the name
@@ -366,37 +346,20 @@ class TFModel(Model):
         self.make(is_train=True, is_frozen=False)
         self.init()
 
-        print(f'Created model with {self.count_parameters()} trainable parameters.')
+        print('Created model with {0} trainable parameters.'.format(self.count_parameters()))
 
+        # Variables for early stopping
+        best_valid_metric = 0.0 if is_classification(self.output_type) else BIG_NUMBER
+        num_not_improved = 0
+
+        # Lists for logging training results
         loss_dict: DefaultDict[str, List[float]] = defaultdict(list)
         acc_dict: DefaultDict[str, List[float]] = defaultdict(list)
 
-        # Initialize dictionary to hold metrics to measure improvement
-        init_metric_value = BIG_NUMBER if self.output_type == OutputType.REGRESSION else -BIG_NUMBER
-        best_valid_metric_dict: DefaultDict[str, float] = defaultdict(lambda: init_metric_value)
-
-        # Create dictionary to map accuracy operations to loss operations
-        accuracy_loss_dict: Dict[str, str] = dict()
-        assert len(self.accuracy_op_names) == len(self.loss_op_names) or len(self.loss_op_names) == 1, f'Misaligned accuracy and loss operations.'
-        if len(self.loss_op_names) == 1:
-            accuracy_loss_dict = {acc_op: self.loss_op_names[0] for acc_op in self.accuracy_op_names}
-        else:
-            accuracy_loss_dict = {acc_op: loss_op for acc_op, loss_op in zip(self.accuracy_op_names, self.loss_op_names)}
-
-        # Create dictionary mapping each loss operation to the set of corresponding trainable variables. This mapping does not change
-        # after graph construction, so we create if before starting training.
-        loss_var_dict: Dict[str, tf.Variable] = dict()
-        with self.sess.graph.as_default():
-            for loss_op in self.loss_op_names:
-                loss_var_dict[loss_op] = [v.name for v in variables_for_loss_op(self.trainable_vars, self.ops[loss_op])]
-
-        # Dictionary to track whether to continue training variables for each loss operations
-        num_not_improved: Dict[str, int] = {loss_op: 0 for loss_op in self.loss_op_names}
-        has_stopped: Dict[str, bool] = {loss_op: False for loss_op in self.loss_op_names}
-
         # Execute training and validation epochs
         for epoch in range(self.hypers.epochs):
-            print(f'-------- Epoch {epoch} --------')
+            if should_print:
+                print('-------- Epoch {0} --------'.format(epoch))
 
             train_generator = dataset.minibatch_generator(DataSeries.TRAIN,
                                                           batch_size=self.hypers.batch_size,
@@ -404,178 +367,113 @@ class TFModel(Model):
                                                           should_shuffle=True,
                                                           drop_incomplete_batches=drop_incomplete_batches)
 
-            epoch_train_loss: DefaultDict[str, float] = defaultdict(float)
-            epoch_train_acc: DefaultDict[str, float] = defaultdict(float)
+            # Collect the training operations. For classification tasks, we also include the accuracy.
+            train_ops = [self.loss_op_name, self.optimizer_op_name, self.accuracy_op_name]
 
-            # Collect the training operations
-            train_ops_to_run = list(optimizer_op for optimizer_op, loss_op in zip(self.optimizer_op_names, self.loss_op_names) if not has_stopped[loss_op])
-            train_ops_to_run += list(loss_op for loss_op, stopped_status in has_stopped.items() if not stopped_status)
+            train_accuracy = 0.0
+            train_loss = 0.0
+            train_samples = 0
 
-            if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
-                train_ops_to_run += self.accuracy_op_names
-
-            train_batch_counter = 1
-            for batch in train_generator:
+            for batch_idx, batch in enumerate(train_generator):
                 feed_dict = self.batch_to_feed_dict(batch, is_train=True, epoch_num=epoch)
 
+                batch_size = len(batch[OUTPUT])
+
                 # Run the training operations
-                train_results = self.execute(feed_dict, train_ops_to_run)
+                train_results = self.execute(feed_dict, train_ops)
 
-                batch_loss = 0.0
-                for loss_op_name in self.loss_op_names:
-                    if loss_op_name in train_results:
-                        avg_batch_loss = np.average(train_results[loss_op_name])
-                        batch_loss += avg_batch_loss
-                        epoch_train_loss[loss_op_name] += avg_batch_loss
+                # Aggregate the loss and average accuracy
+                train_loss += train_results[self.loss_op_name] * batch_size
+                train_accuracy += train_results.get(self.accuracy_op_name, 0.0) * batch_size
+                train_samples += batch_size
 
-                train_loss_agg = np.average(list(epoch_train_loss.values()))
-                avg_train_loss_so_far = train_loss_agg / train_batch_counter
+                avg_loss_so_far = train_loss / train_samples
+                avg_acc_so_far = train_accuracy / train_samples
 
-                for acc_op_name in self.accuracy_op_names:
-                    epoch_train_acc[acc_op_name] += train_results.get(acc_op_name, 0.0)
+                if should_print:
+                    if is_classification(self.output_type):
+                        print('Train Batch {0}. Avg loss so far: {1:.4f}, Avg accuracy so far: {2:.4f}'.format(batch_idx, avg_loss_so_far, avg_acc_so_far), end='\r')
+                    else:
+                        print('Train Batch {0}. Avg loss so far: {1:.4f}'.format(batch_idx, avg_loss_so_far), end='\r')
 
-                train_acc_agg = 0.0
-                train_acc_values = list(epoch_train_acc.values())
-                if len(train_acc_values) > 0:
-                    train_acc_agg = np.average(train_acc_values)
+            if should_print:
+                print()  # Clear the line
 
-                avg_train_acc_so_far = train_acc_agg / train_batch_counter
+            avg_train_loss = train_loss / train_samples
+            avg_train_acc = train_accuracy / train_samples
 
-                if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
-                    print(f'Train Batch {train_batch_counter}. Avg loss so far: {avg_train_loss_so_far:.4f}, Avg accuracy so far: {avg_train_acc_so_far:.4f}', end='\r')
-                else:
-                    print(f'Train Batch {train_batch_counter}. Avg loss so far: {avg_train_loss_so_far:.4f}', end='\r')
+            loss_dict[TRAIN].append(avg_train_loss)
+            acc_dict[TRAIN].append(avg_train_acc)
 
-                train_batch_counter += 1
-            print()
-
-            # Perform validation
             valid_generator = dataset.minibatch_generator(DataSeries.VALID,
                                                           batch_size=self.hypers.batch_size,
                                                           metadata=self.metadata,
-                                                          should_shuffle=False,
+                                                          should_shuffle=True,
                                                           drop_incomplete_batches=drop_incomplete_batches)
 
-            epoch_valid_loss: DefaultDict[str, float] = defaultdict(float)  # Map from loss_op -> average epoch loss
-            epoch_valid_acc: DefaultDict[str, float] = defaultdict(float)  # Map from accuracy op -> epoch accuracy
+            # Collect the training operations. For classification tasks, we also include the accuracy.
+            valid_ops = [self.loss_op_name, self.accuracy_op_name]
 
-            # Collect the validation ops
-            valid_ops_to_run = list(loss_op for loss_op, stopped_status in has_stopped.items() if not stopped_status)
-            if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
-                valid_ops_to_run += self.accuracy_op_names
+            valid_accuracy = 0.0
+            valid_loss = 0.0
+            valid_samples = 0
 
-            valid_batch_counter = 1
-            for batch in valid_generator:
+            for batch_idx, batch in enumerate(valid_generator):
                 feed_dict = self.batch_to_feed_dict(batch, is_train=False, epoch_num=epoch)
 
-                # Run the validation operations
-                valid_results = self.execute(feed_dict, valid_ops_to_run)
+                batch_size = len(batch[OUTPUT])
 
-                batch_loss = 0.0
-                for loss_op_name in self.loss_op_names:
-                    if loss_op_name in valid_results:
-                        avg_batch_loss = np.average(valid_results[loss_op_name])
-                        batch_loss += avg_batch_loss
-                        epoch_valid_loss[loss_op_name] += avg_batch_loss
+                # Run the training operations
+                valid_results = self.execute(feed_dict, valid_ops)
 
-                valid_loss_agg = np.average(list(epoch_valid_loss.values()))
-                avg_valid_loss_so_far = valid_loss_agg / valid_batch_counter
+                # Aggregate the loss and average accuracy
+                valid_loss += valid_results[self.loss_op_name] * batch_size
+                valid_accuracy += valid_results.get(self.accuracy_op_name, 0.0) * batch_size
+                valid_samples += batch_size
 
-                # Compute accuracy
-                for acc_op_name in self.accuracy_op_names:
-                    epoch_valid_acc[acc_op_name] += valid_results.get(acc_op_name, 0.0)
+                avg_loss_so_far = valid_loss / valid_samples
+                avg_acc_so_far = valid_accuracy / valid_samples
 
-                valid_acc_agg = 0.0
-                valid_acc_values = list(epoch_valid_acc.values())
-                if len(valid_acc_values) > 0:
-                    valid_acc_agg = np.average(valid_acc_values)
+                if should_print:
+                    if is_classification(self.output_type):
+                        print('Validation Batch {0}. Avg loss so far: {1:.4f}, Avg accuracy so far: {2:.4f}'.format(batch_idx, avg_loss_so_far, avg_acc_so_far), end='\r')
+                    else:
+                        print('Validation Batch {0}. Avg loss so far: {1:.4f}'.format(batch_idx, avg_loss_so_far), end='\r')
 
-                avg_valid_acc_so_far = valid_acc_agg / valid_batch_counter
+            if should_print:
+                print()  # Clear the line
 
-                if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
-                    print(f'Valid Batch {valid_batch_counter}. Avg loss so far: {avg_valid_loss_so_far:.4f}, Avg accuracy so far: {avg_valid_acc_so_far:.4f}', end='\r')
-                else:
-                    print(f'Valid Batch {valid_batch_counter}. Avg loss so far: {avg_valid_loss_so_far:.4f}', end='\r')
+            avg_valid_loss = valid_loss / valid_samples
+            avg_valid_accuracy = valid_accuracy / valid_samples
 
-                valid_batch_counter += 1
-            print()
+            loss_dict[VALID].append(avg_valid_loss)
+            acc_dict[VALID].append(avg_valid_accuracy)
 
-            # Log train and validation metrics for each epoch
-            loss_dict[TRAIN].append(np.average(list(epoch_train_loss.values())) / train_batch_counter)
-            loss_dict[VALID].append(np.average(list(epoch_valid_loss.values())) / valid_batch_counter)
-            acc_dict[TRAIN].append(np.average(list(epoch_train_acc.values())) / train_batch_counter)
-            acc_dict[VALID].append(np.average(list(epoch_valid_acc.values())) / valid_batch_counter)
-
-            # Collect loss operation to save
-            metric_ops = self.loss_op_names if self.output_type == OutputType.REGRESSION else self.accuracy_op_names
-            has_improved: Dict[str, bool] = {loss_op: False for loss_op in self.loss_op_names}
-            loss_ops_to_save: Set[str] = set()
-
-            # When there is a single loss op, we always use the average loss / accuracy
-            if len(self.loss_op_names) == 1:
-                loss_op_name = self.loss_op_names[0]
-
-                # For regression tasks, we want to minimize loss
-                if self.output_type == OutputType.REGRESSION:
-                    valid_loss = np.average(list(epoch_valid_loss.values()))
-                    if valid_loss < best_valid_metric_dict[loss_op_name]:
-                        loss_ops_to_save.add(loss_op_name)
-                        best_valid_metric_dict[loss_op_name] = valid_loss
-                        has_improved[loss_op_name] = True
-                else:
-                    # For classification tasks, we want to maximize accuracy
-                    valid_acc = np.average(list(epoch_valid_acc.values()))
-                    if valid_acc > best_valid_metric_dict[ACCURACY]:
-                        loss_ops_to_save.add(loss_op_name)
-                        best_valid_metric_dict[ACCURACY] = valid_acc
-                        has_improved[loss_op_name] = True
+            # Detect improvement using the validation set
+            has_improved = False
+            if is_classification(self.output_type):
+                if avg_valid_accuracy > best_valid_metric:
+                    best_valid_metric = avg_valid_accuracy
+                    has_improved = True
             else:
-                # For some models, we have many independent loss operations. This helps train multiple models in parallel.
-                # In this case, we treat each loss operation as a separate model for early stopping.
-                for op_name in metric_ops:
-                    # For regression tasks, we want to minimize loss
-                    if self.output_type == OutputType.REGRESSION:
-                        valid_loss = epoch_valid_loss[op_name]
-                        if valid_loss < best_valid_metric_dict[op_name]:
-                            loss_ops_to_save.add(op_name)
-                            best_valid_metric_dict[op_name] = valid_loss
-                            has_improved[op_name] = True
+                if avg_valid_loss < best_valid_metric:
+                    best_valid_metric = avg_valid_loss
+                    has_improved = True
 
-                    # For classification tasks, we want to maximize accuracy
-                    if self.output_type in (OutputType.BINARY_CLASSIFICATION, OutputType.MULTI_CLASSIFICATION):
-                        valid_acc = epoch_valid_acc[op_name]
+            # Save the model upon improvement
+            if has_improved:
+                if should_print:
+                    print('Saving model...')
 
-                        if valid_acc > best_valid_metric_dict[op_name]:
-                            # Save the corresponding loss operation
-                            loss_op_name = accuracy_loss_dict[op_name]
-                            loss_ops_to_save.add(loss_op_name)
+                self.save(name=name, data_folders=dataset.data_folders)
+                num_not_improved = 0
+            else:
+                num_not_improved += 1
 
-                            best_valid_metric_dict[op_name] = valid_acc
-                            has_improved[loss_op_name] = True
-
-            # Save model if necessary
-            loss_ops_list = list(sorted(loss_ops_to_save))
-            if len(loss_ops_list) > 0:
-                print('Saving model for operations: {0}'.format(','.join(loss_ops_list)))
-                self.save(name=name, data_folders=dataset.data_folders, loss_ops=loss_ops_list, loss_var_dict=loss_var_dict)
-
-            # Increment the improvement counter
-            for loss_op, improved_status in has_improved.items():
-                if improved_status:
-                    num_not_improved[loss_op] = 0
-                else:
-                    num_not_improved[loss_op] += 1
-
-                if num_not_improved[loss_op] >= self.hypers.patience:
-                    has_stopped[loss_op] = True
-
-            # Exit of all loss operations have stopped
-            if all(has_stopped.values()):
-                print('Exiting due to Early Stopping')
+            if num_not_improved >= self.hypers.patience:
+                if should_print:
+                    print('Terminating due to early stopping.')
                 break
-
-            # Call garbage collector at the end of each iteration (just to be safe)
-            gc.collect()
 
         # Log the ending time. This tracks the time to train this model
         ending_time = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
@@ -587,19 +485,17 @@ class TFModel(Model):
 
         return name
 
-    def save(self, name: str, data_folders: Dict[DataSeries, str], loss_ops: Optional[List[str]], loss_var_dict: Dict[str, List[str]]):
+    def save(self, name: str, data_folders: Dict[DataSeries, str]):
         """
         Save model weights, hyper-parameters, and metadata
 
         Args:
             name: Name of the model
             data_folders: Data folders used for training and validation
-            loss_ops: Loss operations for which to save variables. None value indicates that ALL variables
-                are to be saved
         """
         # Save hyperparameters
         params_path = os.path.join(self.save_folder, HYPERS_PATH.format(name))
-        save_by_file_suffix(self.hypers.__dict__(), params_path)
+        save_by_file_suffix(self.hypers.as_dict(), params_path)
 
         # Save metadata
         data_folders_dict = {series.name: path for series, path in data_folders.items()}
@@ -613,25 +509,6 @@ class TFModel(Model):
             trainable_vars = self.trainable_vars
             vars_to_save = {var.name: var for var in trainable_vars}
             vars_dict = self.sess.run(vars_to_save)
-
-            # Save only variables with existing gradients
-            if loss_ops is not None:
-                # Load existing variables
-                saved_vars: Dict[str, np.ndarray] = dict()
-                if os.path.exists(model_path):
-                    saved_vars = read_by_file_suffix(model_path)
-
-                # Get variables to save
-                for loss_op in loss_ops:
-                    # Fetch the corresponding trainable variables
-                    valid_vars = loss_var_dict[loss_op]
-                    valid_vars_dict = {v: vars_dict[v] for v in valid_vars}
-
-                    # Update values for the valid variables
-                    saved_vars.update(valid_vars_dict)
-
-                # Write the updated dictionary
-                vars_dict = saved_vars
 
             # Save results
             save_by_file_suffix(vars_dict, model_path)
@@ -674,4 +551,4 @@ class TFModel(Model):
             self.sess.run(assign_ops)
 
         if is_frozen:
-            self.freeze(self.output_ops)
+            self.freeze()

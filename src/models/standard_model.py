@@ -41,20 +41,12 @@ class StandardModel(TFModel):
         return self.metadata[SEQ_LENGTH]
 
     @property
-    def prediction_ops(self) -> List[str]:
-        return [PREDICTION]
+    def prediction_op_name(self) -> str:
+        return PREDICTION
 
     @property
-    def accuracy_op_names(self) -> List[str]:
-        return [ACCURACY]
-
-    @property
-    def loss_op_names(self) -> List[str]:
-        return [LOSS]
-
-    @property
-    def output_ops(self) -> List[str]:
-        return self.prediction_ops
+    def output_op_name(self) -> str:
+        return self.prediction_op_name
 
     @property
     def num_output_features(self) -> int:
@@ -327,7 +319,7 @@ class StandardModel(TFModel):
         labels_list: List[np.ndarray] = []
         skip_gates_list: List[np.ndarray] = []  # Only used for Skip RNN models
 
-        ops_to_run = [PREDICTION, SKIP_GATES]
+        ops_to_run = [self.prediction_op_name, SKIP_GATES]
 
         for batch_num, batch in enumerate(test_batch_generator):
             if max_num_batches is not None and batch_num >= max_num_batches:
@@ -336,7 +328,7 @@ class StandardModel(TFModel):
             feed_dict = self.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
             batch_result = self.execute(ops=ops_to_run, feed_dict=feed_dict)
 
-            prediction = batch_result[PREDICTION]
+            prediction = batch_result[self.prediction_op_name]
 
             if batch_result.get(SKIP_GATES) is not None:
                 skip_gates_list.append(batch_result[SKIP_GATES])

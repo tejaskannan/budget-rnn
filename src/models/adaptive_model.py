@@ -53,32 +53,16 @@ class AdaptiveModel(TFModel):
         return self.metadata[NUM_OUTPUT_FEATURES]
 
     @property
-    def accuracy_op_names(self) -> List[str]:
-        return [ACCURACY]
+    def prediction_op_name(self) -> str:
+        return PREDICTION
 
     @property
-    def prediction_ops(self) -> List[str]:
-        return [PREDICTION]
+    def logit_op_name(self) -> str:
+        return LOGITS
 
     @property
-    def logit_op_names(self) -> List[str]:
-        return [LOGITS]
-
-    @property
-    def output_ops(self) -> List[str]:
-        return self.prediction_ops
-
-    @property
-    def loss_op_names(self) -> List[str]:
-        return [LOSS]
-
-    @property
-    def optimizer_op_names(self) -> List[str]:
-        return [OPTIMIZER_OP]
-
-    @property
-    def global_step_op_names(self) -> List[str]:
-        return [GLOBAL_STEP]
+    def output_op_name(self) -> str:
+        return self.prediction_op_name
 
     def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool, epoch_num: int) -> Dict[tf.Tensor, np.ndarray]:
         dropout = self.hypers.dropout_keep_rate if is_train else 1.0
@@ -165,9 +149,9 @@ class AdaptiveModel(TFModel):
                 break
 
             feed_dict = self.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
-            results = self.execute(ops=self.prediction_ops, feed_dict=feed_dict)
+            results = self.execute(ops=[self.prediction_op_name], feed_dict=feed_dict)
 
-            predictions.append(results[PREDICTION])
+            predictions.append(results[self.prediction_op_name])
             labels.append(np.vstack(batch[OUTPUT]))
 
         predictions_array = np.vstack(predictions).astype(int)  # [N, L]
@@ -385,6 +369,7 @@ class AdaptiveModel(TFModel):
             stop_states = tf.concat(level_stop_states, axis=1)
 
         self._ops['transformed'] = transformed
+        self._ops['stop_states'] = stop_states
 
         # Compute the stop output, Result is a [B, L, 1] tensor.
         stop_output, _ = mlp(inputs=stop_states,

@@ -25,7 +25,7 @@ class HyperParameters:
         self.dataset_type = parameters.get('dataset_type', 'standard')
         self.seq_length = parameters.get('seq_length')
 
-    def __dict__(self) -> Dict[str, Any]:
+    def as_dict(self) -> Dict[str, Any]:
         return {
             'epochs': self.epochs,
             'patience': self.patience,
@@ -45,7 +45,7 @@ class HyperParameters:
         }
 
     def __str__(self) -> str:
-        return str(self.__dict__())
+        return str(self.as_dict())
 
     @classmethod
     def create_from_file(cls, params_file: str):
