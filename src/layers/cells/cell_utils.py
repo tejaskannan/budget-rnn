@@ -16,8 +16,8 @@ def ugrnn(inputs: tf.Tensor, state: tf.Tensor, W_transform: tf.Tensor, b_transfo
     Returns:
         A [B, D] tensor containing the next state
     """
-    input_state_concat = tf.concat([state, inputs], axis=-1)  # [B, 2 * D]
-    transformed = tf.matmul(input_state_concat, W_transform) + b_transform  # [B, 2 * D]
+    state_input_concat = tf.concat([state, inputs], axis=-1)  # [B, 2 * D]
+    transformed = tf.matmul(state_input_concat, W_transform) + b_transform  # [B, 2 * D]
 
     update, candidate = tf.split(transformed, num_or_size_splits=2, axis=-1)  # Pair of [B, D]
 
@@ -26,5 +26,3 @@ def ugrnn(inputs: tf.Tensor, state: tf.Tensor, W_transform: tf.Tensor, b_transfo
 
     next_state = update_gate * state + (1.0 - update_gate) * candidate_state
     return next_state
-
-

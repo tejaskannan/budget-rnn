@@ -29,15 +29,15 @@ def time_gate(time: tf.Tensor, shift: tf.Tensor, on_fraction: tf.Tensor, period:
 
     half_on_fraction = ONE_HALF * on_fraction
 
-    mask_1 = tf.cast(phi_t < half_on_fraction, dtype=tf.float32)
-    mask_2 = tf.cast(tf.logical_and(phi_t >= half_on_fraction, phi_t < on_fraction), dtype=tf.float32)
-    mask_3 = tf.cast(phi_t >= on_fraction, dtype=tf.float32)
+    mask_1 = tf.cast(tf.less_equal(phi_t, half_on_fraction), dtype=tf.float32)
+    mask_2 = tf.cast(tf.logical_and(tf.less(half_on_fraction, phi_t), tf.less(phi_t, on_fraction)), dtype=tf.float32)
+    mask_3 = tf.cast(tf.greater_equal(phi_t, on_fraction), dtype=tf.float32)
 
-    linear_1 = 2 * phi_t / on_fraction
-    linear_2 = 2 - linear_1
-    linear_3 = leak_rate * phi_t
+    term_1 = tf.multiply(mask_1, 2 * phi_t / on_fraction)
+    term_2 = tf.multiply(mask_2, 2 - 2 * phi_t / on_fraction)
+    term_3 = tf.multiply(mask_3, leak_rate * phi_t)
 
-    return mask_1 * linear_1 + mask_2 * linear_2 + mask_3 * linear_3
+    return term_1 + term_2 + term_3
 
 
 class PhasedUGRNNCell(tf.nn.rnn_cell.RNNCell):
@@ -66,6 +66,12 @@ class PhasedUGRNNCell(tf.nn.rnn_cell.RNNCell):
                                            shape=[1, 2 * units],
                                            trainable=True)
 
+        # The original Phased LSTM uses a [D] dimensional time gate. This gates each dimension
+        # of the hidden state using a different period and shift (though it potentially uses the
+        # same on fraction). Using different periods for each dimension saves computation, but
+        # the lack of alignment means that we still may process all inputs. We target applications
+        # in which capturing inputs is expensive, so we need to align the time gate across all dimensions
+        # to ensure that entire inputs are skipped.
         self.period = tf.get_variable(name='{0}-period'.format(name),
                                       initializer=tf.random_uniform_initializer(minval=0.0, maxval=period_init, dtype=tf.float32),
                                       shape=[],

@@ -15,7 +15,7 @@ from .cell_utils import ugrnn
 
 
 SkipUGRNNStateTuple = namedtuple('SkipUGRNNStateTuple', ['state', 'cumulative_state_update'])
-SkipUGRNNOutputTuple = namedtuple('SkipUGRNNOutputTuple', ['output', 'state_update_gate'])
+SkipUGRNNOutputTuple = namedtuple('SkipUGRNNOutputTuple', ['output', 'state_update_gate', 'gate_value'])
 
 SkipGRUStateTuple = namedtuple('SkipGRUStateTuple', ['state', 'cumulative_state_update'])
 SkipGRUOutputTuple = namedtuple('SkipGRUOutputTuple', ['output', 'state_update_gate'])
@@ -64,7 +64,7 @@ class SkipUGRNNCell(tf.nn.rnn_cell.RNNCell):
 
     @property
     def output_size(self) -> SkipUGRNNOutputTuple:
-        return SkipUGRNNOutputTuple(self._units, 1)
+        return SkipUGRNNOutputTuple(self._units, 1, 1)
 
     def get_initial_state(self, inputs: Optional[tf.Tensor], batch_size: Optional[int], dtype: Any) -> SkipUGRNNStateTuple:
         """
@@ -115,7 +115,7 @@ class SkipUGRNNCell(tf.nn.rnn_cell.RNNCell):
             cum_state_update_prob = state_update_gate * delta_state_update_prob + (1 - state_update_gate) * cum_prob_candidate
 
             skip_state = SkipUGRNNStateTuple(next_state, cum_state_update_prob)
-            skip_output = SkipUGRNNOutputTuple(next_state, state_update_gate)
+            skip_output = SkipUGRNNOutputTuple(next_state, state_update_gate, delta_state_update_prob)
 
         return skip_output, skip_state
 

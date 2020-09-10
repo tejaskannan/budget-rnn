@@ -318,8 +318,9 @@ class StandardModel(TFModel):
         predictions_list: List[np.ndarray] = []
         labels_list: List[np.ndarray] = []
         skip_gates_list: List[np.ndarray] = []  # Only used for Skip RNN models
+        phase_gates_list: List[np.ndarray] = []  # Only used for Phased RNN models
 
-        ops_to_run = [self.prediction_op_name, SKIP_GATES]
+        ops_to_run = [self.prediction_op_name, SKIP_GATES, PHASE_GATES]
 
         for batch_num, batch in enumerate(test_batch_generator):
             if max_num_batches is not None and batch_num >= max_num_batches:
@@ -332,6 +333,10 @@ class StandardModel(TFModel):
 
             if batch_result.get(SKIP_GATES) is not None:
                 skip_gates_list.append(batch_result[SKIP_GATES])
+
+            if batch_result.get(PHASE_GATES) is not None:
+                phase_gates_list.append(batch_result[PHASE_GATES])
+                print(batch_result[PHASE_GATES])
 
             labels_list.append(np.vstack(batch[OUTPUT]))
             predictions_list.append(np.vstack(prediction))
@@ -355,11 +360,17 @@ class StandardModel(TFModel):
             # Add in the average number of updates for Skip RNNs. These always have one output, so
             # we only need this case in the has_single_output == True case.
             if self.model_type == SequenceModelType.SKIP_RNN:
-                skip_gates = np.concatenate(skip_gates_list, axis=0)  # [B, T] if model is a Skip RNN
-                num_updates = np.sum(skip_gates, axis=-1)
+                skip_gates = np.concatenate(skip_gates_list, axis=0)  # [B, T]
+                num_updates = np.sum(skip_gates, axis=-1)  # [B]
 
                 result[PREDICTION]['AVG_UPDATES'] = float(np.average(num_updates))
                 result[PREDICTION]['STD_UPDATES'] = float(np.std(num_updates))
+            
+            if self.model_type == SequenceModelType.PHASED_RNN:
+                phase_gates = np.concatenate(phase_gates_list, axis=0)  # [B, T]
+                num_updates = np.count_nonzero(phase_gates, axis=-1)  # [B]
+
+                result[PREDICTION]['AVG_UPDATES'] = float(np.average(num_updates))
         else:
             for i in range(self.metadata[SEQ_LENGTH]):
                 level_name = '{0}_{1}'.format(PREDICTION, i)

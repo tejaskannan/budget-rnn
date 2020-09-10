@@ -93,6 +93,64 @@ def mask_last_element(values: tf.Tensor) -> tf.Tensor:
     return values * mask
 
 
+def pool_predictions(pred: tf.Tensor, states: tf.Tensor, seq_length: int, W: tf.Variable, b: tf.Variable, activation_noise: tf.Tensor, name: str) -> tf.Tensor:
+    """
+    Pools the given predictions using (trainable) weighted averages derived from the states.
+
+    Args:
+        pred: [B, L, K] tensor of predictions for each class
+        states: [B, L, D] tensor of final states from each sequence element
+        seq_length: The sequence length (L)
+        W: [D * 2, 1] tensor containing the transformation weights
+        b: [1, 1] tensor containing the transformation bias
+        activation_noise: The noise to apply to the transformation result
+        name: Name prefix to use for trainable variables.
+    Returns:
+        [B, L, K] of pooled log probabilities.
+    """
+    # Create results array to hold L tensors, each of dimension [B, K]
+    results = tf.TensorArray(size=seq_length, dtype=tf.float32, clear_after_read=True, name='{0}-results'.format(name))
+
+    def body(index: tf.Tensor, pred: tf.Tensor, states: tf.Tensor, results_array: tf.TensorArray):
+        current_state = tf.gather(states, index, axis=1)  # [B, D]
+        current_state = tf.tile(tf.expand_dims(current_state, axis=1), multiples=(1, seq_length, 1))  # [B, L, D]
+
+        states_concat = tf.concat([states, current_state], axis=-1)  # [B, L, 2 * D]
+
+        weights = tf.math.sigmoid(tf.matmul(states_concat, W) + b)  # [B, L, 1]
+        weights = apply_noise(weights, scale=activation_noise)
+        
+        index_mask = tf.cast(tf.less_equal(tf.range(start=0, limit=seq_length), index), tf.float32)  # [L]
+        index_mask = tf.reshape(index_mask, (1, -1, 1))  # [1, L, 1]
+
+        masked_weights = index_mask * weights  # [B, L, 1]
+        weight_sum = tf.maximum(tf.reduce_sum(masked_weights, axis=1, keepdims=True), SMALL_NUMBER)  # [B, 1, 1]
+        normalized_weights = masked_weights / weight_sum  # [B, L, 1]
+
+        pooled = tf.reduce_sum(pred * normalized_weights, axis=1)  # [B, K]
+
+        results_array = results_array.write(value=pooled, index=index)
+
+        return [index + 1, pred, states, results_array]
+
+    def cond(index, _1, _2, _3):
+        return index < seq_length
+
+    # Execute the while loop
+    index = tf.constant(1, dtype=tf.int32)
+    _, _, _, pooled_results = tf.while_loop(cond=cond,
+                                            body=body,
+                                            loop_vars=[index, pred, states, results],
+                                            maximum_iterations=seq_length,
+                                            name=name)
+
+    # Store the first sequence element into the results array. There is no pooling here because there are no "previous" elements.
+    pooled_results = pooled_results.write(value=tf.gather(pred, 0, axis=1), index=0)
+
+    results = pooled_results.stack()  # [L, B, D]
+    return tf.transpose(results, perm=[1, 0, 2])  # [B, L, D]
+
+
 def successive_pooling(inputs: tf.Tensor, aggregation_weights: tf.Tensor, seq_length: int, name: str) -> tf.Tensor:
     """
     Successively pools the input tensor over the time dimension.

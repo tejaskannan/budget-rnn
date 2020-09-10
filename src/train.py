@@ -12,7 +12,7 @@ from typing import Optional, Dict, List
 from test import test
 
 
-def train(data_folder: str, save_folder: str, hypers: HyperParameters, max_epochs: Optional[int] = None) -> str:
+def train(data_folder: str, save_folder: str, hypers: HyperParameters, should_print: bool, max_epochs: Optional[int] = None) -> str:
     model = get_model(hypers, save_folder=save_folder, is_train=True)
 
     # Create dataset
@@ -22,7 +22,7 @@ def train(data_folder: str, save_folder: str, hypers: HyperParameters, max_epoch
         hypers.epochs = max_epochs
 
     # Train the model
-    train_label = model.train(dataset=dataset)
+    train_label = model.train(dataset=dataset, should_print=should_print)
 
     # Close the dataset files
     dataset.close()
@@ -36,6 +36,7 @@ if __name__ == '__main__':
     parser.add_argument('--save-folder', type=str, required=True)
     parser.add_argument('--params-files', type=str, nargs='+')
     parser.add_argument('--trials', type=int, default=1)
+    parser.add_argument('--should-print', action='store_true')
     parser.add_argument('--testrun', action='store_true')
     args = parser.parse_args()
 
@@ -99,6 +100,7 @@ if __name__ == '__main__':
                 name = train(data_folder=data_folder,
                              save_folder=save_folder,
                              hypers=hypers,
+                             should_print=args.should_print,
                              max_epochs=max_epochs)
 
                 print('==========')

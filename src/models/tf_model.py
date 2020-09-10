@@ -109,13 +109,12 @@ class TFModel(Model):
         input_shape = first_sample.shape[1:]  # Skip the sequence length
         seq_length = len(input_samples[0]) if self.hypers.seq_length is None else self.hypers.seq_length
 
-        input_scaler = None
-        if self.hypers.model_params['normalize_inputs']:
-            assert len(input_shape) == 1
-            input_samples = np.vstack(input_samples)
-            input_scaler = StandardScaler()
+        # Normalize the inputs
+        assert len(input_shape) == 1
+        input_samples = np.vstack(input_samples)
+        input_scaler = StandardScaler()
 
-            input_scaler.fit(input_samples)
+        input_scaler.fit(input_samples)
 
         output_scaler = None
         num_output_features = len(output_samples[0])

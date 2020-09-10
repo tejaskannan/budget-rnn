@@ -9,7 +9,7 @@ from layers.cells.cell_factory import make_rnn_cell, CellClass, CellType
 from layers.output_layers import OutputType, compute_binary_classification_output, compute_multi_classification_output
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
-from utils.tfutils import mask_last_element, successive_pooling, apply_noise
+from utils.tfutils import mask_last_element, successive_pooling, apply_noise, pool_predictions
 from utils.constants import SMALL_NUMBER, BIG_NUMBER, ACCURACY, OUTPUT, INPUTS, LOSS, OPTIMIZER_OP
 from utils.constants import DROPOUT_KEEP_RATE, MODEL, NUM_CLASSES, GLOBAL_STEP, PREDICTION, LOGITS
 from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_NOISE, STOP_LOSS_WEIGHT
@@ -397,21 +397,38 @@ class AdaptiveModel(TFModel):
                         dropout_keep_rate=dropout_keep_rate,
                         name=OUTPUT_LAYER_NAME)
 
-        # Add optional output pooling layer
-        if self.hypers.model_params.get('pool_outputs', False):
-            # Compute output weights, [B, L, 1]
-            output_weights, _ = dense(inputs=transformed,
-                                      units=1,
-                                      activation='sigmoid',
-                                      use_bias=True,
-                                      activation_noise=activation_noise,
-                                      name=AGGREGATION_NAME)
+        # Apply the pooling layer to mix outputs from each level.
+        pool_W = tf.get_variable(name='{0}-kernel'.format(AGGREGATION_NAME),
+                                 shape=[state_size * 2, 1],
+                                 initializer=tf.initializers.glorot_uniform(),
+                                 trainable=True)
+        pool_b = tf.get_variable(name='{0}-bias'.format(AGGREGATION_NAME),
+                                 shape=[1, 1],
+                                 initializer=tf.initializers.random_uniform(minval=-0.7, maxval=0.7),
+                                 trainable=True)
+        output = pool_predictions(pred=output,
+                                  states=transformed,
+                                  W=pool_W,
+                                  b=pool_b,
+                                  seq_length=self.num_outputs,
+                                  activation_noise=activation_noise,
+                                  name=AGGREGATION_NAME)
 
-            # Successively pool the logits, [B, L, K]
-            output = successive_pooling(inputs=output,
-                                        aggregation_weights=output_weights,
-                                        seq_length=self.num_outputs,
-                                        name=AGGREGATION_NAME)
+        # Add optional output pooling layer
+        #if self.hypers.model_params.get('pool_outputs', False):
+        #    # Compute output weights, [B, L, 1]
+        #    output_weights, _ = dense(inputs=transformed,
+        #                              units=1,
+        #                              activation='sigmoid',
+        #                              use_bias=True,
+        #                              activation_noise=activation_noise,
+        #                              name=AGGREGATION_NAME)
+
+        #    # Successively pool the logits, [B, L, K]
+        #    output = successive_pooling(inputs=output,
+        #                                aggregation_weights=output_weights,
+        #                                seq_length=self.num_outputs,
+        #                                name=AGGREGATION_NAME)
 
         # Reshape to [B, 1, 1]
         expected_output = tf.expand_dims(self._placeholders[OUTPUT], axis=-1)

@@ -86,12 +86,13 @@ class Model:
         """
         pass
 
-    def train(self, dataset: Dataset, drop_incomplete_batches: bool = False) -> str:
+    def train(self, dataset: Dataset, should_print: bool, drop_incomplete_batches: bool = False) -> str:
         """
         Trains the model on the given dataset.
 
         Args:
             dataset: Dataset object containing training, validation and testing partitions
+            should_print: Whether we should log intermediate results to stdout
             drop_incomplete_minibatches: Whether to drop incomplete batches
         Returns:
             The name of the training run. Training results are logged to a pickle file with the name
@@ -99,15 +100,13 @@ class Model:
         """
         pass
 
-    def save(self, name: str, data_folders: Dict[DataSeries, str], loss_ops: Optional[List[str]], loss_var_dict: Dict[str, List[str]]):
+    def save(self, name: str, data_folders: Dict[DataSeries, str]):
         """
         Save model weights, hyper-parameters, and metadata
 
         Args:
             name: Name of the model
             data_folders: Data folders used for training and validation
-            loss_ops: Loss operations for which to save variables. None value indicates that ALL variables
-                are to be saved
         """
         pass
 
