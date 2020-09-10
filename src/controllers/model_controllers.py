@@ -1,6 +1,7 @@
 import numpy as np
 import os.path
 from argparse import ArgumentParser
+from collections import namedtuple
 from datetime import datetime
 from typing import List, Optional, Tuple, Dict
 
@@ -19,6 +20,9 @@ CONTROLLER_PATH = 'model-controller-{0}.pkl.gz'
 MARGIN = 1000
 MIN_INIT = 0.7
 MAX_INIT = 1.0
+
+
+ThresholdData = namedtuple('ThresholdData', ['stop_probs', 'model_correct'])
 
 
 # HELPER FUNCTIONS
@@ -106,7 +110,17 @@ def get_level_counts(levels: np.ndarray, num_levels: int) -> np.ndarray:
 
 class BudgetOptimizer:
 
-    def __init__(self, num_levels: int, budgets: np.ndarray, seq_length: int, precision: int, trials: int, max_iter: int, patience: int):
+    def __init__(self, 
+                 num_levels: int,
+                 budgets: np.ndarray,
+                 seq_length: int,
+                 precision: int,
+                 trials: int,
+                 max_iter: int,
+                 patience: int,
+                 train_frac: float):
+        assert train_frac > 0.0 and train_frac < 1.0, 'Training Fraction must be in (0, 1)'
+
         self._num_levels = num_levels
         self._num_budgets = budgets.shape[0]
         self._budgets = budgets
@@ -116,6 +130,8 @@ class BudgetOptimizer:
         self._patience = patience
         self._seq_length = seq_length
         self._power_multiplier = int(self._seq_length / self._num_levels)
+        self._train_frac = train_frac
+        self._valid_frac = 1.0 - train_frac
 
         self._rand = np.random.RandomState(seed=42)
         self._thresholds = None
@@ -180,19 +196,32 @@ class BudgetOptimizer:
         best_thresholds = np.ones(shape=(self._num_budgets, self._num_levels))  # [S, L]
         best_loss = np.ones(shape=(self._num_budgets, 1), dtype=float)  # [S, 1]
 
+        # Randomly split data into training and validation folds
+        num_samples = stop_probs.shape[0]
+        split_point = int(self._train_frac * num_samples)
+        
+        sample_idx = np.arange(num_samples)
+        self._rand.shuffle(sample_idx)
+        train_idx, valid_idx = sample_idx[:split_point], sample_idx[split_point:]
+        
+        train_data = ThresholdData(model_correct=model_correct[train_idx, :],
+                                   stop_probs=stop_probs[train_idx, :])
+        valid_data = ThresholdData(model_correct=model_correct[valid_idx, :],
+                                   stop_probs=stop_probs[valid_idx, :])
+
         for t in range(self._trials):
             if should_print:
                 print('===== Starting Trial {0} ====='.format(t))
 
             # Initialize the thresholds uniformly at random. We sort the thresholds in decreasing
-            # order to align with the notion of answer 'confidence'.
+            # order to align with the notion of answer 'confidence'. This is a heuristic.
             init_thresholds = self._rand.uniform(low=MIN_INIT, high=MAX_INIT, size=(self._num_budgets, self._num_levels))
             init_thresholds = round_to_precision(init_thresholds, self._precision)
             init_thresholds = np.flip(np.sort(init_thresholds, axis=-1), axis=-1)  # [S, L]
 
             # Fit the thresholds ([S, L]) and get the corresponding loss ([S, 1])
-            thresholds, loss = self.fit_single(model_correct=model_correct,
-                                               stop_probs=stop_probs,
+            thresholds, loss = self.fit_single(train_data=train_data,
+                                               valid_data=valid_data,
                                                init_thresholds=init_thresholds,
                                                should_print=should_print)
 
@@ -231,14 +260,18 @@ class BudgetOptimizer:
                                      thresholds=self._thresholds)
         return -loss
 
-    def fit_single(self, model_correct: np.ndarray, stop_probs: np.ndarray, init_thresholds: np.ndarray, should_print: bool) -> Tuple[np.ndarray, np.ndarray]:
+    def fit_single(self, train_data: ThresholdData, valid_data: ThresholdData, init_thresholds: np.ndarray, should_print: bool) -> Tuple[np.ndarray, np.ndarray]:
         """
         Fits the optimizer to the given predictions of the logistic regression model and neural network model.
 
         Args:
-            model_correct: A [B, L] array of results for each sample (B) and level (L) in the neural network. The results
-                are 0/1 values indicating if this sample was classified correctly (1) or incorrectly (0)
-            stop_probs: A [B, L] array of stop probabilities for each sample (B) and level (L)
+            train_data: A pair of arrays representing the inputs and outputs for threshold training. This pair has the following
+                structure:
+                    (1) model_correct: A [B, L] array of results for each sample (B) and level (L) in the neural network. The results
+                        are 0/1 values indicating if this sample was classified correctly (1) or incorrectly (0)
+                    (2) stop_probs: A [B, L] array of stop probabilities for each sample (B) and level (L)
+            valid_data: A pair of arrays holding the inputs and outputs for threshold validation. Uses the same structure
+                as train_data
             init_thresholds: An [S, L] of initial thresholds for each budget (S) and level (L)
             should_print: Whether we should print intermediate results
         Returns:
@@ -254,9 +287,11 @@ class BudgetOptimizer:
         # The number 1 in fixed point representation with the specific precision
         fp_one = 1 << self._precision
 
-        # Variables to detect convergence
-        early_stopping_counter = 0
-        prev_thresholds = np.copy(thresholds)
+        # Variables to detect convergence based on validation results
+        best_thresholds = np.copy(thresholds)  # [S, L]
+        best_validation_loss = np.ones((self._num_budgets, ))  # [S]
+        has_converged = np.zeros((self._num_budgets, ))  # [S]
+        early_stopping_counter = np.zeros((self._num_budgets, ))  # [S]
 
         for i in range(self._max_iter):
 
@@ -283,39 +318,48 @@ class BudgetOptimizer:
 
                 # Compute the fitness, both return values are [S] arrays
                 loss, avg_power = self.loss_function(thresholds=thresholds,
-                                                     model_correct=model_correct,
-                                                     stop_probs=stop_probs)
+                                                     model_correct=train_data.model_correct,
+                                                     stop_probs=train_data.stop_probs)
+                
+                has_improved = np.logical_and(loss < best_loss, np.logical_not(has_converged))
 
-                best_t = np.where(loss < best_loss, candidate_values, best_t)
-                best_power = np.where(loss < best_loss, avg_power, best_power)
-                best_loss = np.where(loss < best_loss, loss, best_loss)
+                best_t = np.where(has_improved, candidate_values, best_t)
+                best_power = np.where(has_improved, avg_power, best_power)
+                best_loss = np.where(has_improved, loss, best_loss)
 
-            thresholds[:, level] = best_t  # Set the best thresholds
-            
+            thresholds[:, level] = best_t  # Set the best thresholds based on the training data
+
+            # Evaluate the thresholds on the validation set, return values are [S] arrays
+            validation_loss, _ = self.loss_function(thresholds=thresholds,
+                                                    model_correct=valid_data.model_correct,
+                                                    stop_probs=valid_data.stop_probs)
+
+            # Set validation thresholds and best loss based on improvement on the validation set
+            loss_comparison = np.logical_and(validation_loss < best_validation_loss, np.logical_not(has_converged))  # [S]
+
+            best_thresholds = np.where(np.expand_dims(loss_comparison, axis=1), thresholds, best_thresholds)  # [S, L]
+            best_validation_loss = np.where(loss_comparison, validation_loss, best_validation_loss)  # [S]
+
+            early_stopping_counter = np.where(loss_comparison, 0, np.minimum(early_stopping_counter + 1, self._patience))
+            has_converged = np.logical_or(early_stopping_counter >= self._patience, has_converged).astype(int)
+
             if should_print:
                 print('Completed Iteration: {0}: level {1}'.format(i, level))
-                print('\tBest Loss: {0}'.format(best_loss))
-                print('\tApprox Power: {0}'.format(best_power))
+                print('\tBest Train Loss: {0}'.format(best_loss))
+                print('\tApprox Train Power: {0}'.format(best_power))
+                print('\tBest Valid Loss: {0}'.format(best_validation_loss))
 
-            # Detect convergence using the given patience parameter
-            if np.isclose(thresholds, prev_thresholds).all():
-                early_stopping_counter += 1
-            else:
-                early_stopping_counter = 0
-
-            if early_stopping_counter >= self._patience:
+            # Terminate early if all budgets have converged
+            if has_converged.all():
                 if should_print:
                     print('Converged.')
                 break
 
-            # Copy previous thresholds for convergence detection
-            prev_thresholds = np.copy(thresholds)
+        final_loss, _ = self.loss_function(thresholds=best_thresholds,
+                                           model_correct=valid_data.model_correct,
+                                           stop_probs=valid_data.stop_probs)
 
-        final_loss, _ = self.loss_function(thresholds=thresholds,
-                                           model_correct=model_correct,
-                                           stop_probs=stop_probs)
-
-        return thresholds, np.expand_dims(final_loss, axis=-1)
+        return best_thresholds, np.expand_dims(final_loss, axis=-1)
 
 
 # Model Controllers
@@ -337,7 +381,8 @@ class AdaptiveController(Controller):
                  budgets: List[float],
                  trials: int,
                  patience: int,
-                 max_iter: int):
+                 max_iter: int,
+                 train_frac: float):
         self._model_path = model_path
         self._dataset_folder = dataset_folder
 
@@ -354,6 +399,7 @@ class AdaptiveController(Controller):
         self._trials = trials
         self._patience = patience
         self._max_iter = max_iter
+        self._train_frac = train_frac
 
         self._thresholds = None
         self._fit_start_time: Optional[str] = None
@@ -367,7 +413,8 @@ class AdaptiveController(Controller):
                                                  precision=self._precision,
                                                  trials=self._trials,
                                                  patience=patience,
-                                                 max_iter=max_iter)
+                                                 max_iter=max_iter,
+                                                 train_frac=train_frac)
 
     @property
     def thresholds(self) -> np.ndarray:
@@ -534,6 +581,7 @@ class AdaptiveController(Controller):
             'precision': self._precision,
             'patience': self._patience,
             'max_iter': self._max_iter,
+            'train_frac': self._train_frac,
             'avg_level_counts': self._avg_level_counts,
             'fit_start_time': self._fit_start_time,
             'fit_end_time': self._fit_end_time
@@ -569,7 +617,8 @@ class AdaptiveController(Controller):
                                         budgets=serialized_info['budgets'],
                                         trials=serialized_info['trials'],
                                         patience=serialized_info.get('patience', 10),
-                                        max_iter=serialized_info.get('max_iter', 100))
+                                        max_iter=serialized_info.get('max_iter', 100),
+                                        train_frac=serialized_info.get('train_frac', 0.7))
 
         # Set remaining fields
         controller._thresholds = serialized_info['thresholds']
@@ -762,6 +811,7 @@ if __name__ == '__main__':
     parser.add_argument('--trials', type=int, default=1)
     parser.add_argument('--patience', type=int, default=25)
     parser.add_argument('--max-iter', type=int, default=100)
+    parser.add_argument('--train-frac', type=float, default=0.7)
     parser.add_argument('--should-print', action='store_true')
     args = parser.parse_args()
 
@@ -775,7 +825,8 @@ if __name__ == '__main__':
                                         budgets=args.budgets,
                                         trials=args.trials,
                                         patience=args.patience,
-                                        max_iter=args.max_iter)
+                                        max_iter=args.max_iter,
+                                        train_frac=args.train_frac)
 
         # Fit the model on the validation set
         controller.fit(series=DataSeries.VALID, should_print=args.should_print)
