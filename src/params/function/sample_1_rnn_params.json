@@ -25,6 +25,7 @@
         "normalize_inputs": true,
         "stop_loss_weight": 0.01,
         "stop_output_activation": "leaky_relu",
-        "stop_output_hidden_units": [4]
+        "stop_output_hidden_units": [4],
+        "pool_outputs": true
 	}
 }

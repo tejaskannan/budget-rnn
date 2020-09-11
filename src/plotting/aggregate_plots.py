@@ -16,10 +16,10 @@ from plotting.plotting_utils import rename_dataset
 NormalizedResult = namedtuple('NormalizedResult', ['mean', 'std', 'median', 'first', 'third'])
 
 
-WIDTH = 0.45
+WIDTH = 0.35
 STRIDE = 2
 Y_MARGIN = 0.01
-X_MARGIN = 0.25
+X_MARGIN = 0.15
 
 
 def aggregate_and_normalize(model_results: DefaultDict[float, Dict[str, List[ModelResult]]], baseline_name: str) -> Dict[str, NormalizedResult]:
@@ -64,13 +64,17 @@ def flatten_datasets(dataset_results: Dict[str, Dict[str, NormalizedResult]], to
     flattened: DefaultDict[str, List[NormalizedResult]] = defaultdict(list)
     datasets: List[str] = []
 
-    fixed_rnn = 'FIXED_{0} RNN'.format(baseline_mode.upper())
-    fixed_skip_rnn = 'FIXED_{0} SKIP_RNN'.format(baseline_mode.upper())
+    fixed_rnn = 'RNN FIXED_{0}'.format(baseline_mode.upper())
+    fixed_skip_rnn = 'SKIP_RNN FIXED_{0}'.format(baseline_mode.upper())
+    fixed_phased_rnn = 'PHASED_RNN FIXED_{0}'.format(baseline_mode.upper())
+    fixed_sample_rnn = 'SAMPLE_RNN FIXED_{0}'.format(baseline_mode.upper())
+    adaptive_sample_rnn = 'SAMPLE_RNN ADAPTIVE'
+    randomized_sample_rnn = 'SAMPLE_RNN RANDOMIZED'
 
     for dataset, model_results in sorted(dataset_results.items()):  # By sorting, we keep the lists in a consistent order
 
         for model_name, normalized_results in model_results.items():
-            if to_keep[dataset] in model_name or model_name in (fixed_rnn, fixed_skip_rnn):
+            if model_name in (fixed_rnn, fixed_skip_rnn, fixed_phased_rnn, fixed_sample_rnn, adaptive_sample_rnn, randomized_sample_rnn):
                 renamed_model = rename_system(model_name)
                 flattened[renamed_model].append(normalized_results)
 
@@ -182,14 +186,15 @@ if __name__ == '__main__':
                                 model_type=args.model_type,
                                 baseline_mode=args.baseline_mode)
 
-    baseline_name = 'FIXED_{0} {1}'.format(args.baseline_mode, model_type).upper()
-    best_adaptive_models = {dataset_name: select_adaptive_system(results, baseline_name) for dataset_name, results in model_results.items()}
-    print(best_adaptive_models)
+    baseline_name = '{0} FIXED_{1}'.format(model_type, args.baseline_mode).upper()
 
     # Track the name of the dataset
     dataset_name = None
 
     # Summarize the results over all budgets
+    for dataset_name, results in model_results.items():
+        aggregate_and_normalize(results, baseline_name)
+
     normalized_results = {dataset_name: aggregate_and_normalize(results, baseline_name) for dataset_name, results in model_results.items()}
 
     # Plot the results
@@ -200,5 +205,5 @@ if __name__ == '__main__':
          shift=noise_generator.loc,
          show_errorbars=args.show_errorbars,
          add_annotations=args.add_annotations,
-         best_adaptive_models=best_adaptive_models,
+         best_adaptive_models=dict(),
          baseline_mode=args.baseline_mode)

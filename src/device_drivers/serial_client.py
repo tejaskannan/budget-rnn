@@ -5,7 +5,7 @@ from argparse import ArgumentParser
 from typing import Optional, Iterable, List
 
 
-def read_input_data(data_path: str, num_features: int, precision: int) -> Iterable[List[str]]:
+def read_input_data(data_path: str, num_features: int) -> Iterable[List[str]]:
     with open(data_path, 'r') as data_file:
         for line in data_file:
             tokens = line.split()
@@ -14,11 +14,8 @@ def read_input_data(data_path: str, num_features: int, precision: int) -> Iterab
             
             fixed_point_features: List[str] = []
             for feature_vector in features:
-                # Convert the feature vector to floating point values
-                fp_vec = [int(float(x) * (1 << precision)) for x in feature_vector]
-
                 # Convert features to a space-separated string and end with a newline
-                fixed_point_features.append(' '.join(map(str, fp_vec)) + '\n')
+                fixed_point_features.append(' '.join(map(str, feature_vector)) + '\n')
             
             yield fixed_point_features
 
@@ -29,7 +26,11 @@ def read_output_data(data_path: str) -> Iterable[int]:
             yield int(line.strip())
 
 
-def execute_client(input_data_path: str, output_data_path: str, port: str, num_features: int, precision: int, num_sequences: int, num_levels: int, delay: float, max_num_samples: Optional[int]):
+def execute_client(input_data_path: str, output_data_path: str, port: str, num_features: int, num_sequences: int, num_levels: int, max_num_samples: Optional[int]):
+
+    # Fetch the input and output data
+    input_data = list(read_input_data(input_data_path, num_features))
+    output_data = list(read_output_data(output_data_path))
 
     # Initialize client. Baudrate aligns with that of the bluetooth device.
     ser = serial.Serial()
@@ -38,26 +39,40 @@ def execute_client(input_data_path: str, output_data_path: str, port: str, num_f
     ser.open()
 
     try:
+        # Step 1: Send the start message
+        ser.write('B'.encode('ascii'))
+
+        # Features is a list of feature vectors for the current sequence, output is the label (not sent over the link)
         num_correct = 0
-        for index, (features, output) in enumerate(zip(read_input_data(input_data_path, num_features, precision), read_output_data(output_data_path))):
+        seq_index = 0
+        for index, (features, label) in enumerate(zip(input_data, output_data)):
 
-            # Send all features
-            num_written = 0
-            for feature_index, feature_vec in enumerate(features):
-                if feature_index % num_levels < num_sequences:
+            # Step 2: Receive a 'pull' data request from the device. This request comes in two forms.
+            #   Option 1 -> A message of the type SX where X is the sequence index to send (encoded as an unsigned byte).
+            #               The server responds with the corresponding data features
+            #   Option 2 -> A message of the type PY where Y is the predicted class index. In this case, the server responds
+            #               with the first element of the NEXT sequence. This behavior is implicit to limit communication,
+            #               as all models always process the first sample
+            should_stop = False
+            while not should_stop:
+                # Wait on a pull message
+                pull_message = ser.read(2).decode()
+
+                # Extract the message components
+                command = pull_message[0]
+                val = int(ord(pull_message[1]))
+
+                print('Command: {0}, Val: {1}'.format(command, val))
+
+                # Detect the message type and perform the corresponding action
+                if command == 'P':
+                    print('Predicted Class: {0}, True Label: {1}'.format(val, label))
+                    should_stop = True
+                    num_correct += int(val == label)
+                else:
+                    feature_vec = features[val]
+                    print(feature_vec, end='')
                     ser.write(feature_vec.encode('ascii'))
-                    num_written += 1
-                    print('Wrote {0} features.'.format(num_written), end='\r')
-
-                # Always sleep to simulate the same sampling rate regardless of the number
-                # of captured sequences
-                time.sleep(delay)
-
-            result = int(ser.read(1).decode())
-            num_correct += 1 if result == output else 0
-
-            print('\nResult: {0}. Expected: {1}'.format(result, output))
-            print('========')
 
             if max_num_samples is not None and (index + 1) >= max_num_samples:
                 break
@@ -71,22 +86,17 @@ if __name__ == '__main__':
     parser.add_argument('--output-data-file', type=str, required=True)
     parser.add_argument('--port', type=str, required=True)
     parser.add_argument('--num-features', type=int, required=True)
-    parser.add_argument('--precision', type=int, required=True)
     parser.add_argument('--num-sequences', type=int, required=True)
     parser.add_argument('--num-levels', type=int, required=True)
-    parser.add_argument('--delay', type=float, default=1)
     parser.add_argument('--max-num-samples', type=int)
     args = parser.parse_args()
 
-    assert args.delay > 0, 'Delay must be positive'
     assert args.max_num_samples is None or args.max_num_samples > 0, 'Max num samples must be positive'
     
     execute_client(input_data_path=args.input_data_file,
                    output_data_path=args.output_data_file,
                    port=args.port,
                    num_features=args.num_features,
-                   precision=args.precision,
                    num_sequences=args.num_sequences,
                    num_levels=args.num_levels,
-                   delay=args.delay,
                    max_num_samples=args.max_num_samples)

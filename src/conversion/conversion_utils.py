@@ -18,6 +18,10 @@ STATIC_VAR_FORMAT = 'static {0} {1} = {2};'
 VARIABLE_REGEX = re.compile(r'model\/([^_-]+[_-][^_-]+)-([^:]+):0')
 
 
+def should_use_lea_ram(mat: np.ndarray) -> bool:
+    return mat.shape[0] > 1 and mat.shape[1] > 1
+
+
 def parse_variable_name(variable_name: str) -> Tuple[str, str]:
     match = VARIABLE_REGEX.match(variable_name)
     assert match is not None, 'Could not parse {0}'.format(variable_name)
@@ -46,7 +50,7 @@ def float_to_fixed_point(x: float, precision: int) -> int:
     max_val = (1 << (width - 1)) - 1
     min_val = -max_val
 
-    fp_val = int(x * multiplier)
+    fp_val = int(round(x * multiplier))
 
     if fp_val > max_val:
         print('WARNING: Observed positive overflow')
@@ -71,17 +75,22 @@ def tensor_to_fixed_point(tensor: Union[List[float], np.ndarray], precision: int
         return list(map(fixed_point_converter, tensor))
 
 
-def create_constant(name: str, value: Optional[int]) -> str:
+def create_constant(name: str, value: Optional[int], should_add_newline: bool = True) -> str:
     if value is None:
-        return '#define {0}\n'.format(name)
-    return '#define {0} {1}\n'.format(name, value)
+        const = '#define {0}'.format(name)
+    else:
+        const = '#define {0} {1}'.format(name, value)
+
+    if should_add_newline:
+        return const + '\n'
+    return const
 
 
 def create_static_variable(name: str, dtype: str, value: str) -> str:
     return STATIC_VAR_FORMAT.format(dtype, name, value)
 
 
-def create_matrix(name: str, mat: np.ndarray) -> str:
+def create_matrix(name: str, mat: np.ndarray, is_msp: bool) -> str:
     """
     Creates a variables associated with a weight matrix. Each matrix
     is composed of three variables:
@@ -95,6 +104,8 @@ def create_matrix(name: str, mat: np.ndarray) -> str:
         mat: A 1d or 2d array containing the model parameters. For consistency,
             all 1d arrays are given a column size of 1 and reshaped to 2d arrays.
             The number of rows must be even for compatibility with the Low-Energy Accelerator.
+        is_msp: Whether to define the variables for the MSP device. This entails specifying the
+            memory location for the data matrix.
     Returns:
         The four variable definitions in a single newline-separated string.
     """
@@ -107,24 +118,35 @@ def create_matrix(name: str, mat: np.ndarray) -> str:
 
     dim0, dim1 = mat.shape
 
-    # 1) Create the weight matrix array. We package everything into 1d arrays
+    declarations: List[str] = []
+
+    # 1) Create the weight matrix array. We package everything into 1d arrays.
+    # As a note, we only place matrices with dimensions > 1 into LEA RAM. The
+    # operations for these matrices are done without the LEA to avoid overhead.
+    if is_msp and should_use_lea_ram(mat):
+        fram_pragma = 'DSPLIB_DATA({0}, 4)'.format(name)
+        declarations.append(fram_pragma)
+
     matrix_string = array_to_string(mat.reshape(-1))
     weight_mat_variable = create_static_variable(name='{0}[{1}]'.format(name, dim0 * dim1),
                                                  dtype='dtype',
                                                  value=matrix_string)
+    declarations.append(weight_mat_variable)
 
     # 2) Create the matrix struct. We initialze this variable through unpacking.
     matrix_variable_name = '{0}_{1}_VAR'.format(name, MATRIX)
     matrix_variable = create_static_variable(name=matrix_variable_name,
                                              dtype='matrix',
                                              value='{{ {0}, {1}, {2} }}'.format(name, dim0, dim1))
+    declarations.append(matrix_variable)
 
     # 3) Create the matrix pointer
     ptr_variable = create_static_variable(name='{0}_{1}'.format(name, MATRIX),
                                           dtype='matrix *',
                                           value='&{0}'.format(matrix_variable_name))
+    declarations.append(ptr_variable)
 
-    return '\n'.join([weight_mat_variable, matrix_variable, ptr_variable])
+    return '\n'.join(declarations)
 
 
 def create_array(array: Union[List[float], np.ndarray], name: str, dtype: str) -> str:

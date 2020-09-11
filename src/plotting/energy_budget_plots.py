@@ -10,7 +10,7 @@ from utils.testing_utils import ClassificationMetric
 from utils.constants import SMALL_NUMBER
 
 
-OPT_TEST_LOG_REGEX = re.compile('.*model-optimized-greedy-power-([0-9]+)-test-log-([^-]+)-([^-]+)-.*jsonl\.gz')
+OPT_TEST_LOG_REGEX = re.compile('.*model-optimized-logistic-power-([0-9]+)-test-log-([^-]+)-([^-]+)-.*jsonl\.gz')
 TEST_LOG_REGEX = re.compile('.*model-test-log-([^-]+)-([^-]+)-.*jsonl\.gz')
 
 POWER = [24.085, 32.776, 37.897, 43.952, 48.833, 50.489, 54.710, 57.692, 59.212, 59.251]

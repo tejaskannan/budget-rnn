@@ -35,6 +35,12 @@ def rename_dataset(dataset_name: str) -> str:
     return DATASET_MAP[dataset_name.lower()]
 
 
+def normalize_dataset_name(dataset_name: str) -> str:
+    dataset_name = dataset_name.replace('_', '-')
+    dataset_name = dataset_name.replace(' ', '-')
+    return dataset_name.lower()
+
+
 def to_label(name: str) -> str:
     space_separated = name.replace('_', ' ').replace('-', ' ')
     tokens = space_separated.split()
@@ -111,15 +117,14 @@ def get_results(input_folders: List[str], noise_generator: NoiseGenerator, model
 
             system_type, model_name, dataset_name = model_info 
 
-            # Initialize new datasets
+            # Initialize new dataset entry
+            dataset_name = normalize_dataset_name(dataset_name)
             if dataset_name not in model_results:
                 model_results[dataset_name] = defaultdict(dict)
 
             # Skip all systems which don't match the criteria
             if system_type.lower() not in ('adaptive', fixed_type, 'randomized'):
                 continue
-
-            system_name = '{0} {1}'.format(system_type, model_name).upper()
 
             # Read the test log and get the accuracy for each budget matching the provided shift
             test_log = list(read_by_file_suffix(file_name))[0]
@@ -134,6 +139,8 @@ def get_results(input_folders: List[str], noise_generator: NoiseGenerator, model
                 power = log_entry['AVG_POWER']
                 valid_accuracy = log_entry.get('VALID_ACCURACY')
                 model_result = ModelResult(power=power, accuracy=accuracy, validation_accuracy=valid_accuracy)
+
+                system_name = log_entry.get('SYSTEM_NAME', '{0} {1}'.format(system_type, model_name)).upper()
 
                 # Append accuracy to the adaptive model results
                 if system_name not in model_results[dataset_name][budget]:

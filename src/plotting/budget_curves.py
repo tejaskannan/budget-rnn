@@ -58,6 +58,7 @@ if __name__ == '__main__':
     parser.add_argument('--noise-type', type=str, required=True)
     parser.add_argument('--noise-period', type=int)
     parser.add_argument('--noise-amplitude', type=int)
+    parser.add_argument('--baseline-mode', type=str, required=True, choices=['under_budget', 'max_accuracy'])
     parser.add_argument('--model-type', choices=['rnn', 'nbow'], required=True)
     args = parser.parse_args()
 
@@ -68,11 +69,11 @@ if __name__ == '__main__':
                                            noise_amplitude=args.noise_amplitude)
 
     model_type = args.model_type.upper()
-    model_results = get_results([args.input_folder], noise_generator)
+    model_results = get_results([args.input_folder], noise_generator, model_type=args.model_type, baseline_mode=args.baseline_mode)
 
     dataset_name = list(model_results.keys())[0]
 
-   # Plot the collected results
+    # Plot the collected results
     plot_curves(model_results=model_results[dataset_name],
                 shift=noise_generator._loc,
                 dataset_name=dataset_name,

@@ -47,7 +47,6 @@ def translate_ugrnn(W_update: np.ndarray,
     state_mat = np.hstack([W_update, W_candidate])  # [D, 2*D]
     input_mat = np.hstack([U_update, U_candidate])  # [D, 2*D]
     W = np.vstack([state_mat, input_mat])  # [2 * D, 2 * D]
-    print(W.shape)
 
     b = np.vstack([b_update, b_candidate]).reshape(1, -1)  # [1, 2 * D]
     return W, b
@@ -140,7 +139,7 @@ def translate_skip_or_phased_model(model_file: str) -> Dict[str, np.ndarray]:
 
     W_candidate = model_parameters[NAME_FORMAT.format('transform-layer-W', KERNEL)]
     U_candidate = model_parameters[NAME_FORMAT.format('transform-layer-U', KERNEL)]
-    b_candidate = model_parameters[NAME_FORMAT.format('transformed-layer-b', KERNEL)]
+    b_candidate = model_parameters[NAME_FORMAT.format('transform-layer-b', BIAS)]
 
     W, b = translate_ugrnn(W_update=W_update,
                            U_update=U_update,
@@ -159,6 +158,10 @@ def translate_skip_or_phased_model(model_file: str) -> Dict[str, np.ndarray]:
     if W_state_name in model_parameters:
         new_W_state_name = 'model/{0}-W-state:0'.format(RNN_CELL_NAME)
         result[new_W_state_name] = model_parameters[W_state_name]
+
+        b_state_name = NAME_FORMAT.format('transform-layer-b-state', BIAS)
+        new_b_state_name = 'model/{0}-b-state:0'.format(RNN_CELL_NAME)
+        result[new_b_state_name] = model_parameters[b_state_name]
 
     return result
 
