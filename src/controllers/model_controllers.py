@@ -173,7 +173,7 @@ class BudgetOptimizer:
 
         return loss, avg_power
 
-    def fit(self, stop_probs: np.ndarray, model_correct: np.ndarray, should_print: bool) -> Tuple[np.ndarray, np.ndarray]:
+    def fit(self, stop_probs: np.ndarray, model_correct: np.ndarray, should_print: bool) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Fits thresholds to the budgets corresponding to this class.
 
@@ -183,9 +183,10 @@ class BudgetOptimizer:
                 sample.
             should_print: Whether we should print the results
         Returns:
-            A tuple of two elements.
+            A tuple of three elements.
                 (1) A [S] array containing thresholds for each budget (S budgets in total)
                 (2) A [S, L] array of the normalized level counts for each budget
+                (3) A [S] array containing the final generalization accuracy for each budget
         """
         # Validate shapes of input arrays
         assert stop_probs.shape[1] == self._num_levels, 'Stop Probs array has wrong number of levels ({0}). Expected {1}'.format(stop_probs.shape[1], self._num_levels)
@@ -238,7 +239,7 @@ class BudgetOptimizer:
         avg_level_counts = level_counts / (np.sum(level_counts, axis=-1, keepdims=True) + SMALL_NUMBER)
 
         self._thresholds = best_thresholds
-        return best_thresholds, avg_level_counts
+        return best_thresholds, avg_level_counts, -best_loss.reshape(-1)
 
     def evaluate(self, model_correct: np.ndarray, stop_probs: np.ndarray) -> np.ndarray:
         """
@@ -402,6 +403,7 @@ class AdaptiveController(Controller):
         self._train_frac = train_frac
 
         self._thresholds = None
+        self._est_accuracy = None
         self._fit_start_time: Optional[str] = None
         self._fit_end_time: Optional[str] = None
         self._is_fitted = False
@@ -424,6 +426,17 @@ class AdaptiveController(Controller):
     def budgets(self) -> np.ndarray:
         return self._budgets
 
+    def get_estimated_accuracy(self, budget: float) -> float:
+        """
+        Returns the estimated accuracy for the given budget based on the results of threshold fitting.
+        """
+        budget_idx = index_of(self.budgets, budget)
+
+        assert budget_idx >= 0, 'Unknown budget: {0}'.format(budget)
+        assert self._est_accuracy is not None, 'Must call fit() first'
+
+        return self._est_accuracy[budget_idx]
+
     def fit(self, series: DataSeries, should_print: bool):
         start_time = datetime.now()
 
@@ -434,11 +447,10 @@ class AdaptiveController(Controller):
         test_correct = test_results.predictions == test_results.labels  # [M, L]
 
         # Fit the thresholds
-        self._thresholds, self._avg_level_counts = self._budget_optimizer.fit(model_correct=train_correct,
-                                                                              stop_probs=train_results.stop_probs,
-                                                                              should_print=should_print)
+        self._thresholds, self._avg_level_counts, self._est_accuracy = self._budget_optimizer.fit(model_correct=train_correct,
+                                                                                                  stop_probs=train_results.stop_probs,
+                                                                                                  should_print=should_print)
 
-        
         end_time = datetime.now()
         
         # Evaluate the model optimizer
@@ -583,6 +595,7 @@ class AdaptiveController(Controller):
             'max_iter': self._max_iter,
             'train_frac': self._train_frac,
             'avg_level_counts': self._avg_level_counts,
+            'est_accuracy': self._est_accuracy,
             'fit_start_time': self._fit_start_time,
             'fit_end_time': self._fit_end_time
         }
@@ -626,6 +639,7 @@ class AdaptiveController(Controller):
         controller._is_fitted = serialized_info['is_fitted']
         controller._fit_start_time = serialized_info.get('fit_start_time')
         controller._fit_end_time = serialized_info.get('fit_end_time')
+        controller._est_accuracy = serialized_info.get('est_accuracy')
 
         return controller
 
