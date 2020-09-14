@@ -12,7 +12,7 @@ from utils.constants import OUTPUT, BIG_NUMBER, SMALL_NUMBER, INPUTS, SEQ_LENGTH
 from utils.file_utils import save_pickle_gz, read_pickle_gz, extract_model_name
 from utils.loading_utils import restore_neural_network
 from controllers.power_distribution import PowerDistribution
-from controllers.power_utils import get_avg_power_multiple, get_avg_power, get_weighted_avg_power
+from controllers.power_utils import get_avg_power_multiple, get_avg_power, get_weighted_avg_power, get_power_estimates
 from controllers.controller_utils import execute_adaptive_model, get_budget_index, ModelResults
 
 
@@ -215,11 +215,34 @@ class BudgetOptimizer:
             if should_print:
                 print('===== Starting Trial {0} ====='.format(t))
 
-            # Initialize the thresholds uniformly at random. We sort the thresholds in decreasing
-            # order to align with the notion of answer 'confidence'. This is a heuristic.
-            init_thresholds = self._rand.uniform(low=MIN_INIT, high=MAX_INIT, size=(self._num_budgets, self._num_levels))
-            init_thresholds = round_to_precision(init_thresholds, self._precision)
-            init_thresholds = np.flip(np.sort(init_thresholds, axis=-1), axis=-1)  # [S, L]
+            # We use two different initialization strategies: fixed and random. We use
+            # the first strategy on the first trial and the random on remaining trials.
+            if t == 0:
+                init_thresholds = np.ones(shape=(self._num_budgets, self._num_levels))
+                
+                power_estimates = get_power_estimates(self._num_levels, self._seq_length)
+
+                fixed_idx: List[int] = []
+                budget_idx = np.arange(self._num_budgets)
+
+                for b in self._budgets:
+                    power_comparison = (power_estimates <= b).astype(int)
+
+                    if np.any(power_comparison):
+                        fixed_idx.append(np.sum(power_comparison) - 1)
+                    else:
+                        fixed_idx.append(0)
+
+                init_thresholds[budget_idx, fixed_idx] = 0
+            else:
+                # Initialize the thresholds uniformly at random. We sort the thresholds in decreasing
+                # order to align with the notion of answer 'confidence'. This is a heuristic.
+                init_thresholds = self._rand.uniform(low=MIN_INIT, high=MAX_INIT, size=(self._num_budgets, self._num_levels))
+                init_thresholds = round_to_precision(init_thresholds, self._precision)
+                init_thresholds = np.flip(np.sort(init_thresholds, axis=-1), axis=-1)  # [S, L]
+
+            print(self._budgets)
+            print(init_thresholds)
 
             # Fit the thresholds ([S, L]) and get the corresponding loss ([S, 1])
             thresholds, loss = self.fit_single(train_data=train_data,
@@ -303,8 +326,14 @@ class BudgetOptimizer:
 
             # [S] array of threshold values for the select values
             best_t = np.copy(thresholds[:, level])  # The 'best' are the current thresholds at this level
-            best_loss = np.ones(shape=(self._num_budgets, ), dtype=float)  # [S]
-            best_power = np.zeros_like(best_loss)
+
+            # Set best loss and best power to the values given by the previous thresholds
+            best_loss, best_power = self.loss_function(thresholds=thresholds,
+                                                       model_correct=train_data.model_correct,
+                                                       stop_probs=train_data.stop_probs)
+
+            # best_loss = np.ones(shape=(self._num_budgets, ), dtype=float)  # [S]
+            # best_power = np.zeros_like(best_loss)
 
             # Create the start values to enable a interval of size [MARGIN] within [0, 1]
             fp_init = (best_t * fp_one).astype(int)  # Convert to fixed point
@@ -334,13 +363,6 @@ class BudgetOptimizer:
 
             thresholds[:, level] = best_t  # Set the best thresholds based on the training data
 
-            # We zero out all thresholds which are preceded by a zero. This does not change the
-            # correctness, but it does help prevent unwanted behavior when interpolating to new budgets
-            is_zero = np.expand_dims(np.isclose(best_t, 0), axis=1)  # [S, 1]
-            level_indices = np.expand_dims(np.arange(thresholds.shape[1]), axis=0)  # [1, L]
-            threshold_mask = np.where(is_zero, (level_indices < level).astype(float), np.ones(shape=(1, thresholds.shape[1])))
-            thresholds = thresholds * threshold_mask
-
             # Evaluate the thresholds on the validation set, return values are [S] arrays
             validation_loss, _ = self.loss_function(thresholds=thresholds,
                                                     model_correct=valid_data.model_correct,
@@ -366,6 +388,17 @@ class BudgetOptimizer:
                 if should_print:
                     print('Converged.')
                 break
+
+        # We zero out the thresholds at all points after the first zero. This does not
+        # change the correctness but prevents mistakes during interpolation.
+        zero_comparison = np.isclose(best_thresholds, 0)  # [S, L]
+
+        level_idx = np.expand_dims(np.arange(best_thresholds.shape[1]), axis=0)  # [1, L]
+        masked_indices = (1.0 - zero_comparison) * BIG_NUMBER + level_idx  # [S, L]
+        mask_index = np.where(np.any(zero_comparison, axis=-1), np.argmin(masked_indices, axis=-1), best_thresholds.shape[1])  # [S]
+
+        threshold_mask = (level_idx < np.expand_dims(mask_index, axis=1)).astype(float)  # [S, L]
+        best_thresholds = best_thresholds * threshold_mask
 
         final_loss, _ = self.loss_function(thresholds=best_thresholds,
                                            model_correct=valid_data.model_correct,
