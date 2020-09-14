@@ -20,6 +20,7 @@ CONTROLLER_PATH = 'model-controller-{0}.pkl.gz'
 MARGIN = 1000
 MIN_INIT = 0.7
 MAX_INIT = 1.0
+REG_NOISE = 0.001
 
 
 ThresholdData = namedtuple('ThresholdData', ['stop_probs', 'model_correct'])
@@ -310,9 +311,12 @@ class BudgetOptimizer:
             end_values = np.minimum(fp_init + int((MARGIN + 1) / 2), fp_one)  # Clip to one
             start_values = np.maximum(end_values - MARGIN, 0)
 
+            # Use unbiased noise as a simple form of regularization, [B, L]
+            stop_prob_noise = self._rand.normal(loc=0.0, scale=REG_NOISE, size=train_data.stop_probs.shape)
+
             # Select best threshold over the (discrete) search space
             for offset in range(MARGIN):
-                
+
                 # Compute the predictions using the threshold on the logistic regression model
                 candidate_values = np.minimum((start_values + offset) / fp_one, 1)  # [S]
                 thresholds[:, level] = candidate_values
@@ -320,8 +324,8 @@ class BudgetOptimizer:
                 # Compute the fitness, both return values are [S] arrays
                 loss, avg_power = self.loss_function(thresholds=thresholds,
                                                      model_correct=train_data.model_correct,
-                                                     stop_probs=train_data.stop_probs)
-                
+                                                     stop_probs=train_data.stop_probs + stop_prob_noise)
+
                 has_improved = np.logical_and(loss < best_loss, np.logical_not(has_converged))
 
                 best_t = np.where(has_improved, candidate_values, best_t)
@@ -329,6 +333,13 @@ class BudgetOptimizer:
                 best_loss = np.where(has_improved, loss, best_loss)
 
             thresholds[:, level] = best_t  # Set the best thresholds based on the training data
+
+            # We zero out all thresholds which are preceded by a zero. This does not change the
+            # correctness, but it does help prevent unwanted behavior when interpolating to new budgets
+            is_zero = np.expand_dims(np.isclose(best_t, 0), axis=1)  # [S, 1]
+            level_indices = np.expand_dims(np.arange(thresholds.shape[1]), axis=0)  # [1, L]
+            threshold_mask = np.where(is_zero, (level_indices < level).astype(float), np.ones(shape=(1, thresholds.shape[1])))
+            thresholds = thresholds * threshold_mask
 
             # Evaluate the thresholds on the validation set, return values are [S] arrays
             validation_loss, _ = self.loss_function(thresholds=thresholds,
