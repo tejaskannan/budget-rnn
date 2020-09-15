@@ -206,10 +206,10 @@ class BudgetOptimizer:
         self._rand.shuffle(sample_idx)
         train_idx, valid_idx = sample_idx[:split_point], sample_idx[split_point:]
         
-        train_data = ThresholdData(model_correct=model_correct[train_idx, :],
-                                   stop_probs=stop_probs[train_idx, :])
-        valid_data = ThresholdData(model_correct=model_correct[valid_idx, :],
-                                   stop_probs=stop_probs[valid_idx, :])
+        train_data = ThresholdData(model_correct=model_correct,
+                                   stop_probs=stop_probs)
+        valid_data = ThresholdData(model_correct=model_correct,
+                                   stop_probs=stop_probs)
 
         for t in range(self._trials):
             if should_print:
@@ -241,9 +241,6 @@ class BudgetOptimizer:
                 init_thresholds = round_to_precision(init_thresholds, self._precision)
                 init_thresholds = np.flip(np.sort(init_thresholds, axis=-1), axis=-1)  # [S, L]
 
-            print(self._budgets)
-            print(init_thresholds)
-
             # Fit the thresholds ([S, L]) and get the corresponding loss ([S, 1])
             thresholds, loss = self.fit_single(train_data=train_data,
                                                valid_data=valid_data,
@@ -258,7 +255,7 @@ class BudgetOptimizer:
                 print('Completed Trial {0}. Best Loss: {1}'.format(t, best_loss))
 
         # Get the level distribution
-        levels = levels_to_execute(probs=stop_probs, thresholds=best_thresholds)
+        levels = levels_to_execute(probs=valid_data.stop_probs, thresholds=best_thresholds)
         level_counts = get_level_counts(levels=levels, num_levels=self._num_levels)  # [S, L]
         avg_level_counts = level_counts / (np.sum(level_counts, axis=-1, keepdims=True) + SMALL_NUMBER)
 
@@ -568,6 +565,11 @@ class AdaptiveController(Controller):
 
         # Create thresholds
         thresholds = lower_thresh * (1 - z) + upper_thresh * z
+
+        #print('Lower Budget: {0}, Lower Thresh: {1}'.format(lower_budget, lower_thresh))
+        #print('Upper Budget: {0}, Upper Thresh: {1}'.format(upper_budget, upper_thresh))
+        #print(thresholds)
+        #print('Budget: {0}, Weight: {1}'.format(budget, z))
 
         return thresholds
 
