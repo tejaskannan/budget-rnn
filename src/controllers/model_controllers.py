@@ -278,11 +278,6 @@ class BudgetOptimizer:
         # The number 1 in fixed point representation with the specific precision
         fp_one = 1 << self._precision
 
-        # Variables to detect convergence based on validation results
-        best_thresholds = np.copy(thresholds)  # [S, L]
-        best_validation_loss = 1
-        early_stopping_counter = 0
-
         for i in range(self._max_iter):
 
             # Select a random level to optimize. We skip the top-level because it does
@@ -329,48 +324,49 @@ class BudgetOptimizer:
             thresholds[:, level] = best_t  # Set the best thresholds based on the training data
 
             # We evaluate the ability for these thresholds to generalize to new budgets.
-            interpolated_budgets: List[float] = []
-            interpolated_thresholds: List[np.ndarray] = []
+            #interpolated_budgets: List[float] = []
+            #interpolated_thresholds: List[np.ndarray] = []
 
-            for budget_idx in range(len(self._budgets) - 1):
-                b = (self._budgets[budget_idx] + self._budgets[budget_idx + 1]) / 2
+            #for budget_idx in range(len(self._budgets) - 1):
+            #    b = (self._budgets[budget_idx] + self._budgets[budget_idx + 1]) / 2
 
-                # Interpolation weight
-                z = (b - self._budgets[budget_idx]) / (self._budgets[budget_idx + 1] - self._budgets[budget_idx])
+            #    # Interpolation weight
+            #    z = (b - self._budgets[budget_idx]) / (self._budgets[budget_idx + 1] - self._budgets[budget_idx])
 
-                # Apply the interpolation weight
-                lower_t, upper_t = thresholds[budget_idx, :], thresholds[budget_idx + 1, :]
-                new_t = lower_t * (1 - z) + upper_t * z
+            #    # Apply the interpolation weight
+            #    lower_t, upper_t = thresholds[budget_idx, :], thresholds[budget_idx + 1, :]
+            #    new_t = lower_t * (1 - z) + upper_t * z
 
-                interpolated_budgets.append(b)
-                interpolated_thresholds.append(new_t)
+            #    interpolated_budgets.append(b)
+            #    interpolated_thresholds.append(new_t)
 
-            # Evaluate the thresholds on the validation budgets, return values are [S-1] arrays
-            validation_loss, _ = self.loss_function(thresholds=np.array(interpolated_thresholds),
-                                                    budgets=np.array(interpolated_budgets),
-                                                    model_correct=train_data.model_correct,
-                                                    stop_probs=train_data.stop_probs)
+            ## Evaluate the thresholds on the validation budgets, return values are [S-1] arrays
+            #validation_loss, _ = self.loss_function(thresholds=np.array(interpolated_thresholds),
+            #                                        budgets=np.array(interpolated_budgets),
+            #                                        model_correct=train_data.model_correct,
+            #                                        stop_probs=train_data.stop_probs)
 
-            avg_validation_loss = np.average(validation_loss)
+            #avg_validation_loss = np.average(validation_loss)
 
-            if avg_validation_loss < best_validation_loss:
-                best_thresholds = np.copy(thresholds)
-                best_validation_loss = avg_validation_loss
-                early_stopping_counter = 0
-            else:
-                early_stopping_counter += 1
+            #if avg_validation_loss < best_validation_loss:
+            #    best_thresholds = np.copy(thresholds)
+            #    best_validation_loss = avg_validation_loss
+            #    early_stopping_counter = 0
+            #else:
+            #    early_stopping_counter += 1
 
             if should_print:
                 print('Completed Iteration: {0}: level {1}'.format(i, level))
                 print('\tBest Train Loss: {0}'.format(best_loss))
                 print('\tApprox Train Power: {0}'.format(best_power))
-                print('\tBest Valid Loss: {0:.4f}'.format(best_validation_loss))
 
             # Terminate early if all budgets have converged
-            if early_stopping_counter >= self._patience:
-                if should_print:
-                    print('Converged.')
-                break
+            #if early_stopping_counter >= self._patience:
+            #    if should_print:
+            #        print('Converged.')
+            #    break
+
+        best_thresholds = np.copy(thresholds)
 
         # We zero out the thresholds at all points after the first zero. This does not
         # change the correctness but prevents mistakes during interpolation.
