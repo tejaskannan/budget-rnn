@@ -222,8 +222,6 @@ class BudgetOptimizer:
                 upper_thresholds = np.flip(np.sort(upper_thresholds))
                 upper_budget = budget
 
-                # init_thresholds = np.flip(np.sort(init_thresholds, axis=-1), axis=-1)  # [S, L]
-
                 # Fit the thresholds ([S, L]) and get the corresponding loss ([S, 1])
                 t, loss = self.fit_single(train_data=train_data,
                                           valid_data=valid_data,
@@ -388,7 +386,7 @@ class BudgetOptimizer:
 
             if avg_valid_loss < best_valid_loss:
                 best_valid_loss = avg_valid_loss
-                best_thresholds[level] = best_t
+                best_thresholds = np.copy(upper_thresholds)
                 early_stopping_counter = 0
             else:
                 early_stopping_counter += 1
