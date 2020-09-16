@@ -215,8 +215,11 @@ class BudgetOptimizer:
                     lower_thresholds = thresholds[i-1]
                     lower_budget = self._budgets[i-1]
 
+                # We randomly initialize new thresholds which are bounded below by the lower threshold vector.
+                # This property means the upper thresholds are initialized to use more power.
                 upper_thresholds = self._rand.uniform(low=lower_thresholds, high=1.0, size=(self._num_levels, ))
                 upper_thresholds = round_to_precision(upper_thresholds, self._precision)
+                upper_thresholds = np.flip(np.sort(upper_thresholds))
                 upper_budget = budget
 
                 # init_thresholds = np.flip(np.sort(init_thresholds, axis=-1), axis=-1)  # [S, L]
@@ -315,6 +318,9 @@ class BudgetOptimizer:
         # The number 1 in fixed point representation with the specific precision
         fp_one = 1 << self._precision
 
+        # Track previous level to avoid duplicates (wasted work)
+        prev_level = None
+
         for i in range(self._max_iter):
 
             # Select a random level to optimize. We skip the top-level because it does
@@ -325,6 +331,11 @@ class BudgetOptimizer:
                 level = self._rand.randint(low=0, high=self._num_levels - 1)
             else:
                 level = self._rand.randint(low=0, high=min(first_zero_idx + 1, self._num_levels - 1))
+
+            # Avoid duplicate levels
+            if prev_level is not None and level == prev_level:
+                level -= 1
+                level = level if level > 0 else self._num_levels - 2
 
             # Best threshold values for the selected level, and initialize best loss
             best_t = upper_thresholds[level]
@@ -354,7 +365,7 @@ class BudgetOptimizer:
                                                  budgets=budgets,
                                                  model_correct=train_data.model_correct,
                                                  stop_probs=train_data.stop_probs + stop_prob_noise,
-                                                 reg_factor=0.1)
+                                                 reg_factor=0.01)
                 avg_loss = np.average(loss)
 
                 if avg_loss < best_loss:
@@ -372,7 +383,7 @@ class BudgetOptimizer:
                                                budgets=budgets,
                                                model_correct=valid_data.model_correct,
                                                stop_probs=valid_data.stop_probs,
-                                               reg_factor=0.1)
+                                               reg_factor=0.01)
             avg_valid_loss = np.average(valid_loss)
 
             if avg_valid_loss < best_valid_loss:
@@ -387,6 +398,9 @@ class BudgetOptimizer:
                 print('\tBest Train Loss: {0}'.format(best_loss))
                 print('\tApprox Train Power: {0}'.format(best_power))
                 print('\tBest Valid loss: {0}'.format(best_valid_loss))
+
+            # Set the previous level variable to avoid duplicates
+            prev_level = level
 
             # Terminate early if all budgets have converged
             if early_stopping_counter >= self._patience:
