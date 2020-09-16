@@ -302,8 +302,10 @@ class BudgetOptimizer:
             (1) A [L] array of thresholds corresponding to the upper budget
             (2) The average validation loss over the budget range.
         """
-        # [S] array containing the budgets to use within this range.
-        budgets = np.linspace(start=lower_budget, stop=upper_budget, num=num_divisions, endpoint=True)
+        # [S] array containing the budgets to use within this range. We skip the lower budget because it has already been
+        # evaluated.
+        budgets = np.linspace(start=lower_budget, stop=upper_budget, num=num_divisions + 1, endpoint=True)  # [S + 1]
+        budgets = budgets[1:]  # [S]
 
         # Set the last threshold to zero because there is no decision to make once inference reaches the top level.
         upper_thresholds[-1] = 0
@@ -363,7 +365,7 @@ class BudgetOptimizer:
                                                  budgets=budgets,
                                                  model_correct=train_data.model_correct,
                                                  stop_probs=train_data.stop_probs + stop_prob_noise,
-                                                 reg_factor=0.01)
+                                                 reg_factor=0.00)
                 avg_loss = np.average(loss)
 
                 if avg_loss < best_loss:
@@ -381,7 +383,7 @@ class BudgetOptimizer:
                                                budgets=budgets,
                                                model_correct=valid_data.model_correct,
                                                stop_probs=valid_data.stop_probs,
-                                               reg_factor=0.01)
+                                               reg_factor=0.00)
             avg_valid_loss = np.average(valid_loss)
 
             if avg_valid_loss < best_valid_loss:
