@@ -414,7 +414,7 @@ class AdaptiveModel(TFModel):
                                   activation_noise=activation_noise,
                                   name=AGGREGATION_NAME)
 
-        # Add optional output pooling layer
+        ## Add optional output pooling layer
         #if self.hypers.model_params.get('pool_outputs', False):
         #    # Compute output weights, [B, L, 1]
         #    output_weights, _ = dense(inputs=transformed,

@@ -3,7 +3,7 @@ from typing import Dict, Optional, List, Callable, Union, Tuple
 from collections import namedtuple
 from functools import partial
 
-from utils.constants import SMALL_NUMBER
+from utils.constants import SMALL_NUMBER, BIG_NUMBER
 
 
 def get_optimizer(name: str, learning_rate: float, learning_rate_decay: float, global_step: tf.Variable, decay_steps: int = 100000, momentum: Optional[float] = None):
@@ -117,15 +117,21 @@ def pool_predictions(pred: tf.Tensor, states: tf.Tensor, seq_length: int, W: tf.
 
         states_concat = tf.concat([states, current_state], axis=-1)  # [B, L, 2 * D]
 
-        weights = tf.math.sigmoid(tf.matmul(states_concat, W) + b)  # [B, L, 1]
+        weights = tf.matmul(states_concat, W) + b  # [B, L, 1]
         weights = apply_noise(weights, scale=activation_noise)
         
         index_mask = tf.cast(tf.less_equal(tf.range(start=0, limit=seq_length), index), tf.float32)  # [L]
+        index_mask = (1.0 - index_mask) * BIG_NUMBER  # [L]
         index_mask = tf.reshape(index_mask, (1, -1, 1))  # [1, L, 1]
 
-        masked_weights = index_mask * weights  # [B, L, 1]
-        weight_sum = tf.maximum(tf.reduce_sum(masked_weights, axis=1, keepdims=True), SMALL_NUMBER)  # [B, 1, 1]
-        normalized_weights = masked_weights / weight_sum  # [B, L, 1]
+        masked_weights = weights - index_mask  # [B, L, 1]
+        masked_weights = tf.squeeze(masked_weights, axis=-1)  # [B, L]
+
+        normalized_weights = tf.contrib.sparsemax.sparsemax(masked_weights)  # [B, L]
+        normalized_weights = tf.expand_dims(normalized_weights, axis=-1)  # [B, L, 1]
+        
+        #weight_sum = tf.maximum(tf.reduce_sum(masked_weights, axis=1, keepdims=True), SMALL_NUMBER)  # [B, 1, 1]
+        #normalized_weights = masked_weights / weight_sum  # [B, L, 1]
 
         pooled = tf.reduce_sum(pred * normalized_weights, axis=1)  # [B, K]
 
