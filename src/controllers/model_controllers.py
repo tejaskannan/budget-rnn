@@ -174,9 +174,9 @@ class BudgetOptimizer:
         time_steps = np.minimum(((budgets * max_time) / avg_power).astype(int), max_time)  # [S]
         adjusted_accuracy = (accuracy * time_steps) / max_time  # [S]
 
-        # Calculate the L1 regularization factor
-        power_diff = np.abs(avg_power - budgets)
-        reg_term = power_diff * reg_factor
+        # Calculate the regularization factor to create increasing accuracy
+        power_diff = np.maximum(avg_power[:-1] - avg_power[1:], 0.0)
+        reg_term = np.sum(power_diff) * reg_factor
 
         loss = -adjusted_accuracy + reg_term
 
@@ -234,6 +234,8 @@ class BudgetOptimizer:
                 thresholds.append(t)
                 losses.append(loss)
 
+                print('----------')
+
             # Set the thresholds using the best seen loss so far
             avg_loss = np.average(losses)
             if avg_loss < best_loss:
@@ -241,7 +243,7 @@ class BudgetOptimizer:
                 best_thresholds = np.array(thresholds)
 
             if should_print:
-                print('Completed Trial {0}. Best Loss: {1}'.format(t, best_loss))
+                print('Completed Trial {0}. Best Loss: {1}'.format(best_thresholds, best_loss))
 
         # Get the level distribution
         levels = levels_to_execute(probs=valid_data.stop_probs, thresholds=best_thresholds)
@@ -304,8 +306,11 @@ class BudgetOptimizer:
         """
         # [S] array containing the budgets to use within this range. We skip the lower budget because it has already been
         # evaluated.
-        budgets = np.linspace(start=lower_budget, stop=upper_budget, num=num_divisions + 1, endpoint=True)  # [S + 1]
-        budgets = budgets[1:]  # [S]
+        budgets = np.linspace(start=lower_budget, stop=upper_budget, num=num_divisions, endpoint=True)  # [S]
+        # budgets = budgets[1:]  # [S]
+
+        print(lower_thresholds)
+        print(upper_thresholds)
 
         # Set the last threshold to zero because there is no decision to make once inference reaches the top level.
         upper_thresholds[-1] = 0
@@ -365,10 +370,14 @@ class BudgetOptimizer:
                                                  budgets=budgets,
                                                  model_correct=train_data.model_correct,
                                                  stop_probs=train_data.stop_probs + stop_prob_noise,
-                                                 reg_factor=0.00)
+                                                 reg_factor=0.0)
                 avg_loss = np.average(loss)
 
-                if avg_loss < best_loss:
+                # Only save results for which the power profile is increasing. This ensures that
+                # the interpolation is working as designed
+                is_increasing = (power[1:] - power[:-1] >= 0).all()
+
+                if avg_loss < best_loss and is_increasing:
                     best_t = candidate
                     best_power = power
                     best_loss = avg_loss
@@ -383,7 +392,7 @@ class BudgetOptimizer:
                                                budgets=budgets,
                                                model_correct=valid_data.model_correct,
                                                stop_probs=valid_data.stop_probs,
-                                               reg_factor=0.00)
+                                               reg_factor=0.0)
             avg_valid_loss = np.average(valid_loss)
 
             if avg_valid_loss < best_valid_loss:
