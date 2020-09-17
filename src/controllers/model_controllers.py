@@ -478,9 +478,9 @@ class AdaptiveController(Controller):
                                    stop_probs=train_results.stop_probs[valid_idx, :])
 
         # Fit the thresholds
-        self._thresholds, self._avg_level_counts, self._est_accuracy = self._budget_optimizer.fit(train_data=train_data,
-                                                                                                  valid_data=valid_data,
-                                                                                                  should_print=should_print)
+        self._thresholds, self._avg_level_counts, _ = self._budget_optimizer.fit(train_data=train_data,
+                                                                                 valid_data=valid_data,
+                                                                                 should_print=should_print)
         end_time = datetime.now()
         
         # Evaluate the model optimizer
@@ -497,6 +497,8 @@ class AdaptiveController(Controller):
 
         self._fit_start_time = start_time.strftime('%Y-%m-%d-%H-%M-%S')
         self._fit_end_time = end_time.strftime('%Y-%m-%d-%H-%M-%S')
+
+        self._est_accuracy = valid_acc  # Set the estimated accuracy to the validation accuracy
 
         self._is_fitted = True
 
