@@ -175,14 +175,16 @@ class BudgetOptimizer:
 
         return loss, avg_power
 
-    def fit(self, stop_probs: np.ndarray, model_correct: np.ndarray, should_print: bool) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def fit(self, train_data: ThresholdData, valid_data: ThresholdData, should_print: bool) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Fits thresholds to the budgets corresponding to this class.
 
         Args:
-            stop_probs: A [B, L] array of stop probabilities for each level (L) and sample (B)
-            model_correct: A [B, L] array of binary labels denoting whether the model level is right (1) or wrong (0) for each
-                sample.
+            train_data: A tuple of the following two elements. The given data is used for threshold fitting.
+                (1) stop_probs: A [B, L] array of stop probabilities for each level (L) and sample (B)
+                (2) model_correct: A [B, L] array of binary labels denoting whether the model level is right (1) or wrong (0)
+                                   for each sample.
+            valid_data: A tuple of the same structure as train_data. The data is used to detect convergence.
             should_print: Whether we should print the results
         Returns:
             A tuple of three elements.
@@ -190,17 +192,9 @@ class BudgetOptimizer:
                 (2) A [S, L] array of the normalized level counts for each budget
                 (3) A [S] array containing the final generalization accuracy for each budget
         """
-        # Validate shapes of input arrays
-        assert stop_probs.shape[1] == self._num_levels, 'Stop Probs array has wrong number of levels ({0}). Expected {1}'.format(stop_probs.shape[1], self._num_levels)
-        assert model_correct.shape[1] == self._num_levels, 'Model Correct array has wrong number of levels ({0}). Expected {1}'.format(model_correct.shape[1], self._num_levels)
-        assert stop_probs.shape[0] == model_correct.shape[0], 'Stop Probs ({0}) and Model Correct ({1}) must have same first dimension'.format(stop_probs.shape[0], model_correct.shape[0])
-
         # Arrays to keep track of the best thresholds per budget
         best_thresholds = np.ones(shape=(self._num_budgets, self._num_levels))  # [S, L]
         best_loss = np.ones(shape=(self._num_budgets, 1), dtype=float)  # [S, 1]
-
-        train_data = ThresholdData(model_correct=model_correct,
-                                   stop_probs=stop_probs)
 
         for t in range(self._trials):
             if should_print:
@@ -214,6 +208,7 @@ class BudgetOptimizer:
 
             # Fit the thresholds ([S, L]) and get the corresponding loss ([S, 1])
             thresholds, loss = self.fit_single(train_data=train_data,
+                                               valid_data=valid_data,
                                                init_thresholds=init_thresholds,
                                                should_print=should_print)
 
@@ -225,7 +220,7 @@ class BudgetOptimizer:
                 print('Completed Trial {0}. Best Loss: {1}'.format(t, best_loss))
 
         # Get the level distribution
-        levels = levels_to_execute(probs=stop_probs, thresholds=best_thresholds)
+        levels = levels_to_execute(probs=valid_data.stop_probs, thresholds=best_thresholds)
         level_counts = get_level_counts(levels=levels, num_levels=self._num_levels)  # [S, L]
         avg_level_counts = level_counts / (np.sum(level_counts, axis=-1, keepdims=True) + SMALL_NUMBER)
 
@@ -253,7 +248,7 @@ class BudgetOptimizer:
                                      thresholds=self._thresholds)
         return -loss
 
-    def fit_single(self, train_data: ThresholdData, init_thresholds: np.ndarray, should_print: bool) -> Tuple[np.ndarray, np.ndarray]:
+    def fit_single(self, train_data: ThresholdData, valid_data: ThresholdData, init_thresholds: np.ndarray, should_print: bool) -> Tuple[np.ndarray, np.ndarray]:
         """
         Fits the optimizer to the given predictions of the logistic regression model and neural network model.
 
@@ -263,6 +258,7 @@ class BudgetOptimizer:
                     (1) model_correct: A [B, L] array of results for each sample (B) and level (L) in the neural network. The results
                         are 0/1 values indicating if this sample was classified correctly (1) or incorrectly (0)
                     (2) stop_probs: A [B, L] array of stop probabilities for each sample (B) and level (L)
+            valid_data: A pair of arrays containing the validation set. Same structure as train_data.
             init_thresholds: An [S, L] of initial thresholds for each budget (S) and level (L)
             should_print: Whether we should print intermediate results
         Returns:
@@ -275,14 +271,26 @@ class BudgetOptimizer:
         thresholds = np.copy(init_thresholds)
         thresholds[:, -1] = 0
 
+        # Variables to track convergence and best overall result
+        best_thresholds = np.copy(thresholds)  # [S, L]
+        early_stopping_counter = np.zeros(thresholds.shape[0])  # [S]
+        has_converged = np.zeros(thresholds.shape[0])  # [S]
+        best_valid_loss = np.ones(thresholds.shape[0])  # [S]
+
         # The number 1 in fixed point representation with the specific precision
         fp_one = 1 << self._precision
+
+        prev_level = None
 
         for i in range(self._max_iter):
 
             # Select a random level to optimize. We skip the top-level because it does
             # not correspond to a trainable threshold.
             level = self._rand.randint(low=0, high=self._num_levels - 1)
+
+            # Prevent optimizing the same thresholds twice in a row. This is wasted work.
+            if prev_level is not None and level == prev_level:
+                level = level - 1 if level > 0 else self._num_levels - 2
 
             # [S] array of threshold values for the select values
             best_t = np.copy(thresholds[:, level])  # The 'best' are the current thresholds at this level
@@ -314,8 +322,7 @@ class BudgetOptimizer:
                                                      model_correct=train_data.model_correct,
                                                      stop_probs=train_data.stop_probs + stop_prob_noise)
 
-                # has_improved = np.logical_and(loss < best_loss, np.logical_not(has_converged))
-                has_improved = loss < best_loss
+                has_improved = np.logical_and(loss < best_loss, np.logical_not(has_converged))
 
                 best_t = np.where(has_improved, candidate_values, best_t)
                 best_power = np.where(has_improved, avg_power, best_power)
@@ -323,50 +330,35 @@ class BudgetOptimizer:
 
             thresholds[:, level] = best_t  # Set the best thresholds based on the training data
 
-            # We evaluate the ability for these thresholds to generalize to new budgets.
-            #interpolated_budgets: List[float] = []
-            #interpolated_thresholds: List[np.ndarray] = []
+            # Compute the validation loss. The result is a [S] array.
+            valid_loss, _ = self.loss_function(thresholds=thresholds,
+                                               budgets=self._budgets,
+                                               model_correct=valid_data.model_correct,
+                                               stop_probs=valid_data.stop_probs)
 
-            #for budget_idx in range(len(self._budgets) - 1):
-            #    b = (self._budgets[budget_idx] + self._budgets[budget_idx + 1]) / 2
+            # Detect improvement on the validation set
+            has_improved = np.logical_and(valid_loss < best_valid_loss, np.logical_not(has_converged))
+            
+            best_thresholds = np.where(np.expand_dims(has_improved, axis=-1), thresholds, best_thresholds)  # [S, L]
+            best_valid_loss = np.where(has_improved, valid_loss, best_valid_loss)  # [S]
 
-            #    # Interpolation weight
-            #    z = (b - self._budgets[budget_idx]) / (self._budgets[budget_idx + 1] - self._budgets[budget_idx])
+            # Increment early stopping counter and detect convergence
+            early_stopping_counter = np.where(has_improved, 0, np.minimum(early_stopping_counter + 1, self._patience))
+            has_converged = (early_stopping_counter >= self._patience)
 
-            #    # Apply the interpolation weight
-            #    lower_t, upper_t = thresholds[budget_idx, :], thresholds[budget_idx + 1, :]
-            #    new_t = lower_t * (1 - z) + upper_t * z
-
-            #    interpolated_budgets.append(b)
-            #    interpolated_thresholds.append(new_t)
-
-            ## Evaluate the thresholds on the validation budgets, return values are [S-1] arrays
-            #validation_loss, _ = self.loss_function(thresholds=np.array(interpolated_thresholds),
-            #                                        budgets=np.array(interpolated_budgets),
-            #                                        model_correct=train_data.model_correct,
-            #                                        stop_probs=train_data.stop_probs)
-
-            #avg_validation_loss = np.average(validation_loss)
-
-            #if avg_validation_loss < best_validation_loss:
-            #    best_thresholds = np.copy(thresholds)
-            #    best_validation_loss = avg_validation_loss
-            #    early_stopping_counter = 0
-            #else:
-            #    early_stopping_counter += 1
+            prev_level = level
 
             if should_print:
                 print('Completed Iteration: {0}: level {1}'.format(i, level))
                 print('\tBest Train Loss: {0}'.format(best_loss))
                 print('\tApprox Train Power: {0}'.format(best_power))
+                print('\tBest Valid Loss: {0}'.format(best_valid_loss))
 
             # Terminate early if all budgets have converged
-            #if early_stopping_counter >= self._patience:
-            #    if should_print:
-            #        print('Converged.')
-            #    break
-
-        best_thresholds = np.copy(thresholds)
+            if has_converged.all():
+                if should_print:
+                    print('Converged.')
+                break
 
         # We zero out the thresholds at all points after the first zero. This does not
         # change the correctness but prevents mistakes during interpolation.
@@ -381,8 +373,8 @@ class BudgetOptimizer:
 
         final_loss, _ = self.loss_function(thresholds=best_thresholds,
                                            budgets=self._budgets,
-                                           model_correct=train_data.model_correct,
-                                           stop_probs=train_data.stop_probs)
+                                           model_correct=valid_data.model_correct,
+                                           stop_probs=valid_data.stop_probs)
 
         return best_thresholds, np.expand_dims(final_loss, axis=-1)
 
@@ -464,24 +456,43 @@ class AdaptiveController(Controller):
     def fit(self, series: DataSeries, should_print: bool):
         start_time = datetime.now()
 
+        # Execute the model on the training and testing sets
         train_results = execute_adaptive_model(self._model, self._dataset, series=series)
         test_results = execute_adaptive_model(self._model, self._dataset, series=DataSeries.TEST)
 
         train_correct = train_results.predictions == train_results.labels  # [N, L]
         test_correct = test_results.predictions == test_results.labels  # [M, L]
 
-        # Fit the thresholds
-        self._thresholds, self._avg_level_counts, self._est_accuracy = self._budget_optimizer.fit(model_correct=train_correct,
-                                                                                                  stop_probs=train_results.stop_probs,
-                                                                                                  should_print=should_print)
+        # Split the training set into train and validation folds. We use the same random seed
+        # to make the split consistent across all controllers.
+        rand = np.random.RandomState(seed=341)
+        sample_idx = np.arange(train_correct.shape[0])
+        rand.shuffle(sample_idx)
 
+        split_point = int(self._train_frac * train_correct.shape[0])
+        train_idx, valid_idx = sample_idx[:split_point], sample_idx[split_point:]
+
+        train_data = ThresholdData(model_correct=train_correct[train_idx, :],
+                                   stop_probs=train_results.stop_probs[train_idx, :])
+        valid_data = ThresholdData(model_correct=train_correct[valid_idx, :],
+                                   stop_probs=train_results.stop_probs[valid_idx, :])
+
+        # Fit the thresholds
+        self._thresholds, self._avg_level_counts, self._est_accuracy = self._budget_optimizer.fit(train_data=train_data,
+                                                                                                  valid_data=valid_data,
+                                                                                                  should_print=should_print)
         end_time = datetime.now()
         
         # Evaluate the model optimizer
-        train_acc = self._budget_optimizer.evaluate(model_correct=train_correct, stop_probs=train_results.stop_probs)
-        test_acc = self._budget_optimizer.evaluate(model_correct=test_correct, stop_probs=test_results.stop_probs)
+        train_acc = self._budget_optimizer.evaluate(model_correct=train_data.model_correct,
+                                                    stop_probs=train_data.stop_probs)
+        valid_acc = self._budget_optimizer.evaluate(model_correct=valid_data.model_correct,
+                                                    stop_probs=valid_data.stop_probs)
+        test_acc = self._budget_optimizer.evaluate(model_correct=test_correct,
+                                                   stop_probs=test_results.stop_probs)
 
         print('Train Accuracy: {0}'.format(train_acc))
+        print('Valid Accuracy: {0}'.format(valid_acc))
         print('Test Accuracy: {0}'.format(test_acc))
 
         self._fit_start_time = start_time.strftime('%Y-%m-%d-%H-%M-%S')
@@ -548,11 +559,6 @@ class AdaptiveController(Controller):
 
         # Create thresholds
         thresholds = lower_thresh * (1 - z) + upper_thresh * z
-
-        #print('Lower Budget: {0}, Lower Thresh: {1}'.format(lower_budget, lower_thresh))
-        #print('Upper Budget: {0}, Upper Thresh: {1}'.format(upper_budget, upper_thresh))
-        #print(thresholds)
-        #print('Budget: {0}, Weight: {1}'.format(budget, z))
 
         return thresholds
 
