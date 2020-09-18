@@ -3,6 +3,7 @@ import os.path
 from argparse import ArgumentParser
 from collections import namedtuple
 from datetime import datetime
+from scipy.stats import norm
 from typing import List, Optional, Tuple, Dict
 
 from dataset.dataset import Dataset, DataSeries
@@ -506,6 +507,9 @@ class AdaptiveController(Controller):
 
         self._est_accuracy = valid_acc  # Set the estimated accuracy to the validation accuracy
 
+        self._stop_means = np.average(valid_data.stop_probs, axis=0)  # [L]
+        self._stop_std = np.std(valid_data.stop_probs, axis=0)  # [L]
+
         self._is_fitted = True
 
     def get_thresholds(self, budget: int) -> np.ndarray:
@@ -565,10 +569,23 @@ class AdaptiveController(Controller):
         # Interpolation weight
         z = (budget - lower_budget) / (upper_budget - lower_budget)
 
-        # Create thresholds
-        thresholds = lower_thresh * (1 - z) + upper_thresh * z
+        # Calculate the new thresholds via interpolation
+        thresholds: List[float] = []
+        for level, (mean, std) in enumerate(zip(self._stop_means, self._stop_std)):
+            dist = norm()
+            
+            lower_percentile = dist.cdf(lower_thresh[level], loc=mean, scale=std)
+            upper_percentile = dist.cdf(upper_thresh[level], loc=mean, scale=std)
 
-        return thresholds
+            percentile = (1 - z) * lower_percentile + z * upper_percentile
+
+            t = dist.ppf(percentile, loc=mean, scale=std)
+            thresholds.append(t)
+
+        # Create thresholds
+        # thresholds = lower_thresh * (1 - z) + upper_thresh * z
+
+        return np.array(thresholds)
 
     def get_avg_level_counts(self, budget: int) -> np.ndarray:
         budget_idx = index_of(self._budgets, value=budget)
@@ -639,6 +656,8 @@ class AdaptiveController(Controller):
             'train_frac': self._train_frac,
             'avg_level_counts': self._avg_level_counts,
             'est_accuracy': self._est_accuracy,
+            'stop_means': self._stop_means,
+            'stop_std': self._stop_std,
             'fit_start_time': self._fit_start_time,
             'fit_end_time': self._fit_end_time
         }
@@ -683,6 +702,8 @@ class AdaptiveController(Controller):
         controller._fit_start_time = serialized_info.get('fit_start_time')
         controller._fit_end_time = serialized_info.get('fit_end_time')
         controller._est_accuracy = serialized_info.get('est_accuracy')
+        controller._stop_means = serialized_info.get('stop_means')
+        controller._stop_std = serialized_info.get('stop_std')
 
         return controller
 
