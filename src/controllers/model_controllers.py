@@ -571,19 +571,29 @@ class AdaptiveController(Controller):
 
         # Calculate the new thresholds via interpolation
         thresholds: List[float] = []
+
+        weights: List[float] = []
+        weight_product = 1.0
+
         for level, (mean, std) in enumerate(zip(self._stop_means, self._stop_std)):
-            dist = norm()
-            
-            lower_percentile = dist.cdf(lower_thresh[level], loc=mean, scale=std)
-            upper_percentile = dist.cdf(upper_thresh[level], loc=mean, scale=std)
+            dist = norm(loc=mean, scale=std)
+           
+            lower_percentile = dist.cdf(lower_thresh[level])
+            upper_percentile = dist.cdf(upper_thresh[level])
 
             percentile = (1 - z) * lower_percentile + z * upper_percentile
 
-            t = dist.ppf(percentile, loc=mean, scale=std)
+            t = dist.ppf(percentile)
             thresholds.append(t)
 
+            weights.append(weight_product * (1.0 - percentile))
+            weight_product = weight_product * percentile
+        
         # Create thresholds
         # thresholds = lower_thresh * (1 - z) + upper_thresh * z
+
+        power_estimates = get_power_estimates(self._num_levels, self._seq_length)
+        expected_power = np.sum(np.array(weights) * power_estimates)
 
         return np.array(thresholds)
 
