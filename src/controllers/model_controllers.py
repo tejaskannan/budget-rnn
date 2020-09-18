@@ -120,7 +120,7 @@ class BudgetOptimizer:
                  max_iter: int,
                  patience: int,
                  train_frac: float):
-        assert train_frac > 0.0 and train_frac < 1.0, 'Training Fraction must be in (0, 1)'
+        assert train_frac > 0.0 and train_frac <= 1.0, 'Training Fraction must be in (0, 1]'
 
         self._num_levels = num_levels
         self._num_budgets = budgets.shape[0]
