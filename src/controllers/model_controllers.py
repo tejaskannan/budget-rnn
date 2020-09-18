@@ -472,17 +472,23 @@ class AdaptiveController(Controller):
         split_point = int(self._train_frac * train_correct.shape[0])
         train_idx, valid_idx = sample_idx[:split_point], sample_idx[split_point:]
 
-        train_data = ThresholdData(model_correct=train_correct[train_idx, :],
-                                   stop_probs=train_results.stop_probs[train_idx, :])
-        valid_data = ThresholdData(model_correct=train_correct[valid_idx, :],
-                                   stop_probs=train_results.stop_probs[valid_idx, :])
+        if abs(self._train_frac - 1.0) < SMALL_NUMBER:
+            train_data = ThresholdData(model_correct=train_correct,
+                                       stop_probs=train_results.stop_probs)
+            valid_data = ThresholdData(model_correct=train_correct,
+                                       stop_probs=train_results.stop_probs)
+        else:
+            train_data = ThresholdData(model_correct=train_correct[train_idx, :],
+                                       stop_probs=train_results.stop_probs[train_idx, :])
+            valid_data = ThresholdData(model_correct=train_correct[valid_idx, :],
+                                       stop_probs=train_results.stop_probs[valid_idx, :])
 
         # Fit the thresholds
         self._thresholds, self._avg_level_counts, _ = self._budget_optimizer.fit(train_data=train_data,
                                                                                  valid_data=valid_data,
                                                                                  should_print=should_print)
         end_time = datetime.now()
-        
+
         # Evaluate the model optimizer
         train_acc = self._budget_optimizer.evaluate(model_correct=train_data.model_correct,
                                                     stop_probs=train_data.stop_probs)
