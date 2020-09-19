@@ -299,9 +299,6 @@ class BudgetOptimizer:
             best_loss = 1
             best_power = 0
 
-            # Use unbiased noise as a simple form of regularization, [B, L]
-            stop_prob_noise = self._rand.normal(loc=0.0, scale=REG_NOISE, size=train_data.stop_probs.shape)
-
             # Select best threshold over the (discrete) search space
             for t in range(fp_one):
 
@@ -313,7 +310,7 @@ class BudgetOptimizer:
                 loss, avg_power = self.loss_function(thresholds=thresholds,
                                                      budgets=self._budgets,
                                                      model_correct=train_data.model_correct,
-                                                     stop_probs=train_data.stop_probs + stop_prob_noise)
+                                                     stop_probs=train_data.stop_probs)
 
                 has_improved = np.logical_and(loss < best_loss, np.logical_not(has_converged))
 
