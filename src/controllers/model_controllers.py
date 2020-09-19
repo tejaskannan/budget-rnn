@@ -18,8 +18,7 @@ from controllers.controller_utils import execute_adaptive_model, get_budget_inde
 
 
 CONTROLLER_PATH = 'model-controller-{0}.pkl.gz'
-MARGIN = 1000
-MIN_INIT = 0.7
+MIN_INIT = 0.5
 MAX_INIT = 1.0
 REG_NOISE = 0.001
 
@@ -296,26 +295,19 @@ class BudgetOptimizer:
             # [S] array of threshold values for the select values
             best_t = np.copy(thresholds[:, level])  # The 'best' are the current thresholds at this level
 
-            # Set best loss and best power to the values given by the previous thresholds
-            best_loss, best_power = self.loss_function(thresholds=thresholds,
-                                                       budgets=self._budgets,
-                                                       model_correct=train_data.model_correct,
-                                                       stop_probs=train_data.stop_probs)
-
-            # Create the start values to enable a interval of size [MARGIN] within [0, 1]
-            fp_init = (best_t * fp_one).astype(int)  # Convert to fixed point
-            end_values = np.minimum(fp_init + int((MARGIN + 1) / 2), fp_one)  # Clip to one
-            start_values = np.maximum(end_values - MARGIN, 0)
+            # Initialize best loss and best power for this iteration
+            best_loss = 1
+            best_power = 0
 
             # Use unbiased noise as a simple form of regularization, [B, L]
             stop_prob_noise = self._rand.normal(loc=0.0, scale=REG_NOISE, size=train_data.stop_probs.shape)
 
             # Select best threshold over the (discrete) search space
-            for offset in range(MARGIN):
+            for t in range(fp_one):
 
-                # Compute the predictions using the threshold on the logistic regression model
-                candidate_values = np.minimum((start_values + offset) / fp_one, 1)  # [S]
-                thresholds[:, level] = candidate_values
+                # Set the candidate thresholds
+                candidate_value = t / fp_one
+                thresholds[:, level] = candidate_value
 
                 # Compute the fitness, both return values are [S] arrays
                 loss, avg_power = self.loss_function(thresholds=thresholds,
@@ -325,7 +317,7 @@ class BudgetOptimizer:
 
                 has_improved = np.logical_and(loss < best_loss, np.logical_not(has_converged))
 
-                best_t = np.where(has_improved, candidate_values, best_t)
+                best_t = np.where(has_improved, candidate_value, best_t)
                 best_power = np.where(has_improved, avg_power, best_power)
                 best_loss = np.where(has_improved, loss, best_loss)
 
@@ -421,6 +413,7 @@ class AdaptiveController(Controller):
 
         self._thresholds = None
         self._est_accuracy = None
+        self._validation_accuracy = None
         self._fit_start_time: Optional[str] = None
         self._fit_end_time: Optional[str] = None
         self._is_fitted = False
@@ -442,6 +435,9 @@ class AdaptiveController(Controller):
     @property
     def budgets(self) -> np.ndarray:
         return self._budgets
+
+    def load_validation_accuracy(self, validation_accuracy: np.ndarray):
+        self._validation_accuracy = validation_accuracy  # [L]
 
     def get_estimated_accuracy(self, budget: float) -> float:
         """
@@ -568,34 +564,21 @@ class AdaptiveController(Controller):
 
         # Interpolation weight
         z = (budget - lower_budget) / (upper_budget - lower_budget)
-
-        # Calculate the new thresholds via interpolation
-        thresholds: List[float] = []
-
-        weights: List[float] = []
-        weight_product = 1.0
-
-        for level, (mean, std) in enumerate(zip(self._stop_means, self._stop_std)):
-            dist = norm(loc=mean, scale=std)
-           
-            lower_percentile = dist.cdf(lower_thresh[level])
-            upper_percentile = dist.cdf(upper_thresh[level])
-
-            percentile = (1 - z) * lower_percentile + z * upper_percentile
-
-            t = dist.ppf(percentile)
-            thresholds.append(t)
-
-            weights.append(weight_product * (1.0 - percentile))
-            weight_product = weight_product * percentile
-        
+       
         # Create thresholds
-        # thresholds = lower_thresh * (1 - z) + upper_thresh * z
+        thresholds = lower_thresh * (1 - z) + upper_thresh * z
 
-        power_estimates = get_power_estimates(self._num_levels, self._seq_length)
-        expected_power = np.sum(np.array(weights) * power_estimates)
+        # Round to fixed point representation
+        thresholds = round_to_precision(thresholds, precision=self._precision)
 
-        return np.array(thresholds)
+        # Cap execution at the level with the highest validation accuracy
+        # This solves a disconnect between out-of-order models and the controller's
+        # desire to make the budget use as efficient as possible
+        if self._validation_accuracy is not None:
+            best_level = np.argmax(self._validation_accuracy)
+            thresholds[best_level] = 0
+
+        return thresholds
 
     def get_avg_level_counts(self, budget: int) -> np.ndarray:
         budget_idx = index_of(self._budgets, value=budget)
