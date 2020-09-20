@@ -138,7 +138,7 @@ class BudgetDistribution:
 
     def __init__(self,
                  prior_counts: Dict[int, np.ndarray],
-                 budget: float,
+                 budget: Tuple[float, float],
                  max_time: int,
                  num_levels: int,
                  seq_length: int,
@@ -199,14 +199,17 @@ class BudgetDistribution:
             expected_rest += power_mean * remaining_fraction
             variance_rest += np.square(class_count_diff[class_idx] / time) * power_var
 
-        expected_power = (1.0 / time) * (self._max_time * self._budget - time_delta * expected_rest)
-        expected_power = clip(expected_power, (power_estimates[0], power_estimates[-1]))  # We clip the power to the feasible range
+        expected_lower = (1.0 / time) * (self._max_time * self._budget[0] - time_delta * expected_rest)
+        expected_lower = clip(expected_lower, (power_estimates[0], power_estimates[-1]))  # We clip the power to the feasible range
+
+        expected_upper = (1.0 / time) * (self._max_time * self._budget[1] - time_delta * expected_rest)
+        expected_upper = clip(expected_upper, (power_estimates[0], power_estimates[-1]))  # We clip the power to the feasible range
 
         estimator_variance = 2 * (1.0 / time) * variance_rest
         estimator_std = np.sqrt(estimator_variance)
 
         # Upper and lower bounds as determined by one std from the mean
-        return ConfidenceBounds(lower=expected_power - estimator_std, upper=expected_power + estimator_std)
+        return ConfidenceBounds(lower=expected_lower - estimator_std, upper=expected_upper + estimator_std)
 
     def update(self, label: int, level: int, power: float):
         self._observed_label_counts[label] += 1

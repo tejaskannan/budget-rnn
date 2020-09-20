@@ -514,13 +514,13 @@ class AdaptiveController(Controller):
         # we cap the execution to the fixed policy. This makes the execution more amenable
         # to the controller, as the controller will force power to be highest based
         # on a heuristic
-        best_level = np.argmax(self._validation_accuracy)
-        best_level_power = get_avg_power(num_samples=best_level + 1, seq_length=self._seq_length, multiplier=power_multiplier)
+        # best_level = np.argmax(self._validation_accuracy)
+        # best_level_power = get_avg_power(num_samples=best_level + 1, seq_length=self._seq_length, multiplier=power_multiplier)
 
-        if budget >= best_level_power:
-            thresholds = np.ones(shape=(self._num_levels, ))
-            thresholds[best_level] = 0
-            return thresholds
+        #if budget >= best_level_power:
+        #    thresholds = np.ones(shape=(self._num_levels, ))
+        #    thresholds[best_level] = 0
+        #    return thresholds
 
         # Check if this budget is known based from the optimization phase
         budget_idx = index_of(self._budgets, value=budget)
@@ -539,6 +539,8 @@ class AdaptiveController(Controller):
                 lower_budget_idx = idx
                 upper_budget_idx = idx + 1
 
+        power_multiplier = int(self._seq_length / self._num_levels)
+
         # If the budget is out of the range of the learned budgets, the we supplement the learned
         # thresholds with fixed policies at either end.
         if lower_budget_idx is None or upper_budget_idx is None:
@@ -547,10 +549,13 @@ class AdaptiveController(Controller):
                 # then we use a fixed policy on the lowest level. Otherwise, we interpolate as usual.
                 fixed_thresholds = np.zeros_like(self._thresholds[0])
                 if budget < min_power:
-                    return fixed_thresholds
+                    return fixed_thresholds, min_power
 
                 lower_budget = min_power
-                upper_budget = self._budgets[0]
+                # upper_budget = self._budgets[0]
+                upper_budget = get_weighted_avg_power(sample_weights=self._avg_level_counts[0],
+                                                          seq_length=self._seq_length,
+                                                          multiplier=power_multiplier)
 
                 lower_thresh = fixed_thresholds
                 upper_thresh = self._thresholds[0]
@@ -560,30 +565,44 @@ class AdaptiveController(Controller):
                 fixed_thresholds = np.ones_like(self._thresholds[0])
                 fixed_thresholds[-1] = 0
                 if budget > max_power:
-                    return fixed_thresholds
+                    return fixed_thresholds, max_power
 
-                lower_budget = self._budgets[-1]
+                # lower_budget = self._budgets[-1]
+                lower_budget = get_weighted_avg_power(sample_weights=self._avg_level_counts[-1],
+                                                          seq_length=self._seq_length,
+                                                          multiplier=power_multiplier)
                 upper_budget = max_power
 
                 lower_thresh = self._thresholds[-1]
                 upper_thresh = fixed_thresholds
         else:
-            lower_budget = self._budgets[lower_budget_idx]
-            upper_budget = self._budgets[upper_budget_idx]
+            # lower_budget = self._budgets[lower_budget_idx]
+            # upper_budget = self._budgets[upper_budget_idx]
+
+            lower_budget = get_weighted_avg_power(sample_weights=self._avg_level_counts[lower_budget_idx],
+                                                      seq_length=self._seq_length,
+                                                      multiplier=power_multiplier)
+            upper_budget = get_weighted_avg_power(sample_weights=self._avg_level_counts[upper_budget_idx],
+                                                      seq_length=self._seq_length,
+                                                      multiplier=power_multiplier)
 
             lower_thresh = self._thresholds[lower_budget_idx]
             upper_thresh = self._thresholds[upper_budget_idx]
 
+        if abs(upper_budget - lower_budget) < SMALL_NUMBER:
+            return lower_thresh, lower_budget
+
         # Interpolation weight
         z = (budget - lower_budget) / (upper_budget - lower_budget)
 
-        # Create thresholds
+        # Create thresholds and projected budget
         thresholds = lower_thresh * (1 - z) + upper_thresh * z
+        expected_power = lower_budget * (1 - z) + upper_budget * z
 
         # Round to fixed point representation
         thresholds = round_to_precision(thresholds, precision=self._precision)
 
-        return thresholds
+        return thresholds, expected_power
 
     def get_avg_level_counts(self, budget: int) -> np.ndarray:
         budget_idx = index_of(self._budgets, value=budget)
@@ -606,7 +625,7 @@ class AdaptiveController(Controller):
         assert self._is_fitted, 'Model is not fitted'
 
         # Infer the thresholds for this budget
-        thresholds = self.get_thresholds(budget)
+        thresholds, _ = self.get_thresholds(budget)
 
         power_mult = int(self._seq_length / self._num_levels)
 
@@ -623,7 +642,9 @@ class AdaptiveController(Controller):
 
         max_time = model_results.stop_probs.shape[0]
 
-        thresholds = np.expand_dims(self.get_thresholds(budget=budget), axis=0)  # [1, L]
+        thresholds, _ = self.get_thresholds(budget=budget)
+        thresholds = np.expand_dims(thresholds, axis=0)  # [1, L]
+
         levels = levels_to_execute(probs=model_results.stop_probs,
                                    thresholds=thresholds)  # [1, N]
         predictions = classification_for_levels(model_correct=model_results.predictions,

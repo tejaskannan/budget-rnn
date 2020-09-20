@@ -46,10 +46,10 @@ def get_avg_power_multiple(num_samples: np.ndarray, seq_length: int, multiplier:
     return get_weighted_avg_power(sample_weights[1:], seq_length=seq_length)
 
 
-def get_weighted_avg_power(sample_weights: np.ndarray, seq_length: int) -> float:
+def get_weighted_avg_power(sample_weights: np.ndarray, seq_length: int, multiplier: int = 1) -> float:
     avg_power = 0.0
-    for idx in range(seq_length):
-        sample_power = get_avg_power(idx + 1, seq_length)
+    for idx in range(sample_weights.shape[0]):
+        sample_power = get_avg_power(idx + 1, seq_length, multiplier)
         avg_power += sample_weights[idx] * sample_power
 
     return avg_power

@@ -130,7 +130,7 @@ class RuntimeSystem:
                                                        dataset_folder=dataset_folder,
                                                        model_path=model_path)
             # Load validation accuracy
-            self._controller.load_validation_accuracy(validation_accuracy=valid_results.accuracy)
+            # self._controller.load_validation_accuracy(validation_accuracy=valid_results.accuracy)
         else:
             self._controller = None
 
@@ -204,14 +204,16 @@ class RuntimeSystem:
             
             # Create the power distribution. TODO: Remove (explicit) dependence on the validation results.
             # Instead, we should mix the label counts from the bounded sides using a weighted average.
-            thresholds = self._controller.get_thresholds(budget=budget)
+            thresholds, est_power = self._controller.get_thresholds(budget=budget)
             prior_counts = estimate_label_counts(predictions=self._valid_predictions,
                                                  stop_probs=self._valid_stop_probs,
                                                  thresholds=thresholds,
                                                  num_classes=self._num_classes)
 
+            budget_range = (min(est_power, budget), budget)
+
             self._budget_distribution = BudgetDistribution(prior_counts=prior_counts,
-                                                           budget=budget,
+                                                           budget=budget_range,
                                                            max_time=max_time,
                                                            num_levels=self._num_levels,
                                                            num_classes=self._num_classes,
@@ -275,4 +277,5 @@ class RuntimeSystem:
         assert isinstance(self._controller, AdaptiveController), 'Can only estimate validation results for adaptive controllers'
 
         acc, power = self._controller.evaluate(budget=budget, model_results=self._valid_results)
+    
         return acc, power
