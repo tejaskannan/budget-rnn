@@ -528,9 +528,14 @@ class AdaptiveController(Controller):
         min_power = get_avg_power(num_samples=1, seq_length=self._seq_length, multiplier=power_multiplier)
         max_power = get_avg_power(num_samples=self._seq_length, seq_length=self._seq_length)
 
+        power_multiplier = int(self._seq_length / self._num_levels)
+
         # If we already have the budget, then use the corresponding thresholds
         if budget_idx >= 0:
-            return self._thresholds[budget_idx]
+            power = get_weighted_avg_power(sample_weights=self._avg_level_counts[budget_idx],
+                                           seq_length=self._seq_length,
+                                           multiplier=power_multiplier)
+            return self._thresholds[budget_idx], power
 
         # Otherwise, we interpolate the thresholds from the nearest two known budgets
         lower_budget_idx, upper_budget_idx = None, None
@@ -538,8 +543,6 @@ class AdaptiveController(Controller):
             if self._budgets[idx] < budget and self._budgets[idx + 1] > budget:
                 lower_budget_idx = idx
                 upper_budget_idx = idx + 1
-
-        power_multiplier = int(self._seq_length / self._num_levels)
 
         # If the budget is out of the range of the learned budgets, the we supplement the learned
         # thresholds with fixed policies at either end.
