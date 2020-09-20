@@ -129,6 +129,8 @@ class RuntimeSystem:
             self._controller = AdaptiveController.load(os.path.join(save_folder, CONTROLLER_PATH.format(model_name)),
                                                        dataset_folder=dataset_folder,
                                                        model_path=model_path)
+            # Load validation accuracy
+            self._controller.load_validation_accuracy(validation_accuracy=valid_results.accuracy)
         else:
             self._controller = None
 
@@ -159,6 +161,9 @@ class RuntimeSystem:
 
     def get_target_budgets(self) -> np.ndarray:
         return np.array(self._target_budgets).reshape(-1)
+
+    def get_levels(self) -> np.ndarray:
+        return np.array(self._levels).reshape(-1)
 
     def init_for_budget(self, budget: float, max_time: int):
         # Make controller based on the model type
@@ -197,21 +202,16 @@ class RuntimeSystem:
                                                     integral_bounds=INTEGRAL_BOUNDS,
                                                     integral_window=INTEGRAL_WINDOW)
             
-            # Create the power distribution
+            # Create the power distribution. TODO: Remove (explicit) dependence on the validation results.
+            # Instead, we should mix the label counts from the bounded sides using a weighted average.
             thresholds = self._controller.get_thresholds(budget=budget)
             prior_counts = estimate_label_counts(predictions=self._valid_predictions,
                                                  stop_probs=self._valid_stop_probs,
                                                  thresholds=thresholds,
                                                  num_classes=self._num_classes)
-            
-            valid_budget_power: Dict[float, float] = dict()
-            for b in self._controller.budgets:
-                _, pwr = self._controller.evaluate(budget=b, model_results=self._valid_results)
-                valid_budget_power[b] = pwr
 
             self._budget_distribution = BudgetDistribution(prior_counts=prior_counts,
                                                            budget=budget,
-                                                           validation_power=valid_budget_power,
                                                            max_time=max_time,
                                                            num_levels=self._num_levels,
                                                            num_classes=self._num_classes,
@@ -230,6 +230,7 @@ class RuntimeSystem:
         self._current_budget = budget
         self._num_correct = []
         self._target_budgets = []
+        self._levels = []
 
     def step(self, budget: float, power_noise: float, t: int):
         stop_probs = self._stop_probs[t] if self._stop_probs is not None and t < len(self._stop_probs) else None
@@ -248,6 +249,7 @@ class RuntimeSystem:
 
         self._num_correct.append(is_correct)
         self._target_budgets.append(budget)
+        self._levels.append(level)
 
         # Update the adaptive controller parameters
         if self._system_type == SystemType.ADAPTIVE:
@@ -272,5 +274,5 @@ class RuntimeSystem:
         assert self._controller is not None, 'Must have an internal controller'
         assert isinstance(self._controller, AdaptiveController), 'Can only estimate validation results for adaptive controllers'
 
-        acc, _ = self._controller.evaluate(budget=budget, model_results=self._valid_results)
-        return acc
+        acc, power = self._controller.evaluate(budget=budget, model_results=self._valid_results)
+        return acc, power
