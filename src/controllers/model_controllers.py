@@ -515,7 +515,8 @@ class AdaptiveController(Controller):
         # to the controller, as the controller will force power to be highest based
         # on a heuristic
         best_level = np.argmax(self._validation_accuracy)
-        best_level_power = get_avg_power(num_samples=best_level, seq_length=self._seq_length, multiplier=power_multiplier)
+        best_level_power = get_avg_power(num_samples=best_level + 1, seq_length=self._seq_length, multiplier=power_multiplier)
+
         if budget >= best_level_power:
             thresholds = np.ones(shape=(self._num_levels, ))
             thresholds[best_level] = 0
