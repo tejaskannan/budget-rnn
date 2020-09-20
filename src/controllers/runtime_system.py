@@ -130,7 +130,7 @@ class RuntimeSystem:
                                                        dataset_folder=dataset_folder,
                                                        model_path=model_path)
             # Load validation accuracy
-            # self._controller.load_validation_accuracy(validation_accuracy=valid_results.accuracy)
+            self._controller.load_validation_accuracy(validation_accuracy=valid_results.accuracy)
         else:
             self._controller = None
 

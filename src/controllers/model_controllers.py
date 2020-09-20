@@ -514,13 +514,13 @@ class AdaptiveController(Controller):
         # we cap the execution to the fixed policy. This makes the execution more amenable
         # to the controller, as the controller will force power to be highest based
         # on a heuristic
-        # best_level = np.argmax(self._validation_accuracy)
-        # best_level_power = get_avg_power(num_samples=best_level + 1, seq_length=self._seq_length, multiplier=power_multiplier)
+        best_level = np.argmax(self._validation_accuracy)
+        best_level_power = get_avg_power(num_samples=best_level + 1, seq_length=self._seq_length, multiplier=power_multiplier)
 
-        #if budget >= best_level_power:
-        #    thresholds = np.ones(shape=(self._num_levels, ))
-        #    thresholds[best_level] = 0
-        #    return thresholds
+        if budget >= best_level_power:
+            thresholds = np.ones(shape=(self._num_levels, ))
+            thresholds[best_level] = 0
+            return thresholds
 
         # Check if this budget is known based from the optimization phase
         budget_idx = index_of(self._budgets, value=budget)
@@ -532,10 +532,10 @@ class AdaptiveController(Controller):
 
         # If we already have the budget, then use the corresponding thresholds
         if budget_idx >= 0:
-            power = get_weighted_avg_power(sample_weights=self._avg_level_counts[budget_idx],
-                                           seq_length=self._seq_length,
-                                           multiplier=power_multiplier)
-            return self._thresholds[budget_idx], power
+           # power = get_weighted_avg_power(sample_weights=self._avg_level_counts[budget_idx],
+           #                                seq_length=self._seq_length,
+           #                                multiplier=power_multiplier)
+            return self._thresholds[budget_idx], budget
 
         # Otherwise, we interpolate the thresholds from the nearest two known budgets
         lower_budget_idx, upper_budget_idx = None, None
@@ -555,10 +555,10 @@ class AdaptiveController(Controller):
                     return fixed_thresholds, min_power
 
                 lower_budget = min_power
-                # upper_budget = self._budgets[0]
-                upper_budget = get_weighted_avg_power(sample_weights=self._avg_level_counts[0],
-                                                          seq_length=self._seq_length,
-                                                          multiplier=power_multiplier)
+                upper_budget = self._budgets[0]
+                #upper_budget = get_weighted_avg_power(sample_weights=self._avg_level_counts[0],
+                #                                          seq_length=self._seq_length,
+                #                                          multiplier=power_multiplier)
 
                 lower_thresh = fixed_thresholds
                 upper_thresh = self._thresholds[0]
@@ -570,24 +570,24 @@ class AdaptiveController(Controller):
                 if budget > max_power:
                     return fixed_thresholds, max_power
 
-                # lower_budget = self._budgets[-1]
-                lower_budget = get_weighted_avg_power(sample_weights=self._avg_level_counts[-1],
-                                                          seq_length=self._seq_length,
-                                                          multiplier=power_multiplier)
+                lower_budget = self._budgets[-1]
+                #lower_budget = get_weighted_avg_power(sample_weights=self._avg_level_counts[-1],
+                #                                          seq_length=self._seq_length,
+                #                                          multiplier=power_multiplier)
                 upper_budget = max_power
 
                 lower_thresh = self._thresholds[-1]
                 upper_thresh = fixed_thresholds
         else:
-            # lower_budget = self._budgets[lower_budget_idx]
-            # upper_budget = self._budgets[upper_budget_idx]
+            lower_budget = self._budgets[lower_budget_idx]
+            upper_budget = self._budgets[upper_budget_idx]
 
-            lower_budget = get_weighted_avg_power(sample_weights=self._avg_level_counts[lower_budget_idx],
-                                                      seq_length=self._seq_length,
-                                                      multiplier=power_multiplier)
-            upper_budget = get_weighted_avg_power(sample_weights=self._avg_level_counts[upper_budget_idx],
-                                                      seq_length=self._seq_length,
-                                                      multiplier=power_multiplier)
+            #lower_budget = get_weighted_avg_power(sample_weights=self._avg_level_counts[lower_budget_idx],
+            #                                          seq_length=self._seq_length,
+            #                                          multiplier=power_multiplier)
+            #upper_budget = get_weighted_avg_power(sample_weights=self._avg_level_counts[upper_budget_idx],
+            #                                          seq_length=self._seq_length,
+            #                                          multiplier=power_multiplier)
 
             lower_thresh = self._thresholds[lower_budget_idx]
             upper_thresh = self._thresholds[upper_budget_idx]
