@@ -18,7 +18,7 @@ from controllers.controller_utils import execute_adaptive_model, get_budget_inde
 
 
 CONTROLLER_PATH = 'model-controller-{0}.pkl.gz'
-MIN_INIT = 0.5
+MIN_INIT = 0.7
 MAX_INIT = 1.0
 REG_NOISE = 0.001
 
@@ -111,7 +111,7 @@ def get_level_counts(levels: np.ndarray, num_levels: int) -> np.ndarray:
 
 class BudgetOptimizer:
 
-    def __init__(self, 
+    def __init__(self,
                  num_levels: int,
                  budgets: np.ndarray,
                  seq_length: int,
@@ -328,7 +328,7 @@ class BudgetOptimizer:
 
             # Detect improvement on the validation set
             has_improved = np.logical_and(valid_loss < best_valid_loss, np.logical_not(has_converged))
-            
+
             best_thresholds = np.where(np.expand_dims(has_improved, axis=-1), thresholds, best_thresholds)  # [S, L]
             best_valid_loss = np.where(has_improved, valid_loss, best_valid_loss)  # [S]
 
@@ -372,7 +372,7 @@ class BudgetOptimizer:
 # Model Controllers
 
 class Controller:
-    
+
     def fit(self, series: DataSeries, should_print: bool):
         pass
 
@@ -397,7 +397,7 @@ class AdaptiveController(Controller):
         model, dataset = restore_neural_network(model_path, dataset_folder=dataset_folder)
         self._model = model
         self._dataset = dataset
-        
+
         self._num_levels = model.num_outputs
         self._seq_length = model.metadata[SEQ_LENGTH]
         self._budgets = np.array(list(sorted(budgets)))
@@ -508,9 +508,23 @@ class AdaptiveController(Controller):
     def get_thresholds(self, budget: int) -> np.ndarray:
         assert self._thresholds is not None, 'Must call fit() first'
 
+        power_multiplier = int(self._seq_length / self._num_levels)
+
+        # If the budget is above the power needed for the highest validation accuracy
+        # we cap the execution to the fixed policy. This makes the execution more amenable
+        # to the controller, as the controller will force power to be highest based
+        # on a heuristic
+        best_level = np.argmax(self._validation_accuracy)
+        best_level_power = get_avg_power(num_samples=best_level, seq_length=self._seq_length, multiplier=power_multiplier)
+        if budget >= best_level_power:
+            thresholds = np.ones(shape=(self._num_levels, ))
+            thresholds[best_level] = 0
+            return thresholds
+
+        # Check if this budget is known based from the optimization phase
         budget_idx = index_of(self._budgets, value=budget)
 
-        min_power = get_avg_power(num_samples=1, seq_length=self._seq_length, multiplier=int(self._seq_length / self._num_levels))
+        min_power = get_avg_power(num_samples=1, seq_length=self._seq_length, multiplier=power_multiplier)
         max_power = get_avg_power(num_samples=self._seq_length, seq_length=self._seq_length)
 
         # If we already have the budget, then use the corresponding thresholds
@@ -561,19 +575,12 @@ class AdaptiveController(Controller):
 
         # Interpolation weight
         z = (budget - lower_budget) / (upper_budget - lower_budget)
-       
+
         # Create thresholds
         thresholds = lower_thresh * (1 - z) + upper_thresh * z
 
         # Round to fixed point representation
         thresholds = round_to_precision(thresholds, precision=self._precision)
-
-        # Cap execution at the level with the highest validation accuracy
-        # This solves a disconnect between out-of-order models and the controller's
-        # desire to make the budget use as efficient as possible
-        if self._validation_accuracy is not None:
-            best_level = np.argmax(self._validation_accuracy)
-            thresholds[best_level] = 0
 
         return thresholds
 
@@ -763,7 +770,6 @@ class MultiModelController(Controller):
         for counts in sample_counts:
             power = get_weighted_avg_power(counts, seq_length=seq_length)
             model_power.append(power)
-
 
         self._model_power = np.array(model_power).reshape(-1)
         self._model_accuracy = np.array(model_accuracy).reshape(-1)
