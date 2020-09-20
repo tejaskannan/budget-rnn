@@ -79,10 +79,11 @@ class AdaptiveModel(TFModel):
         # Calculate the stop loss weight based on on the epoch number. The weight is increased
         # exponentially per epoch and reaches the final value after Patience steps.
         end_stop_loss_weight = self.hypers.model_params.get(STOP_LOSS_WEIGHT, 0.0)
+        stop_loss_steps = self.hypers.model_params.get('stop_loss_epochs', self.hypers.patience - 1)
         stop_loss_weight = get_temperate_loss_weight(start_weight=1e-5,
                                                      end_weight=end_stop_loss_weight,
                                                      step=epoch_num,
-                                                     max_steps=self.hypers.patience - 1)
+                                                     max_steps=stop_loss_steps)
 
         feed_dict = {
             self._placeholders[INPUTS]: input_batch,
