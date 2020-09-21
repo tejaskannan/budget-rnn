@@ -537,9 +537,14 @@ class AdaptiveController(Controller):
         power_multiplier = int(self._seq_length / self._num_levels)
 
         # If the budget is above the power needed for the highest validation accuracy
-        # we cap the execution to the fixed policy. This makes the execution more amenable
-        # to the controller, as the controller will force power to be highest based
-        # on a heuristic
+        # we cap the execution to these thresholds. This makes the execution more amenable
+        # to the controller, as the controller will force power as close as possible to the
+        # budget. This doesn't work when the model has out-of-order accuracy.
+
+        best_idx = np.argmax(self._est_accuracy)
+        if self._budgets[best_idx] <= budget:
+            return self._thresholds[best_idx]
+
         #best_level = np.argmax(self._validation_accuracy)
         #best_level_power = get_avg_power(num_samples=best_level + 1, seq_length=self._seq_length, multiplier=power_multiplier)
 
