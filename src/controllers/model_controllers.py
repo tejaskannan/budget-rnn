@@ -540,13 +540,13 @@ class AdaptiveController(Controller):
         # we cap the execution to the fixed policy. This makes the execution more amenable
         # to the controller, as the controller will force power to be highest based
         # on a heuristic
-        best_level = np.argmax(self._validation_accuracy)
-        best_level_power = get_avg_power(num_samples=best_level + 1, seq_length=self._seq_length, multiplier=power_multiplier)
+        #best_level = np.argmax(self._validation_accuracy)
+        #best_level_power = get_avg_power(num_samples=best_level + 1, seq_length=self._seq_length, multiplier=power_multiplier)
 
-        if budget >= best_level_power:
-            thresholds = np.ones(shape=(self._num_levels, ))
-            thresholds[best_level] = 0
-            return thresholds
+        #if budget >= best_level_power:
+        #    thresholds = np.ones(shape=(self._num_levels, ))
+        #    thresholds[best_level] = 0
+        #    return thresholds
 
         # Check if this budget is known based from the optimization phase
         budget_idx = index_of(self._budgets, value=budget)
