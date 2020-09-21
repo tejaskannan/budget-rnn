@@ -201,19 +201,17 @@ class RuntimeSystem:
                                                     kd=KD,
                                                     integral_bounds=INTEGRAL_BOUNDS,
                                                     integral_window=INTEGRAL_WINDOW)
-            
+
             # Create the power distribution. TODO: Remove (explicit) dependence on the validation results.
             # Instead, we should mix the label counts from the bounded sides using a weighted average.
-            thresholds, est_power = self._controller.get_thresholds(budget=budget)
+            thresholds = self._controller.get_thresholds(budget=budget)
             prior_counts = estimate_label_counts(predictions=self._valid_predictions,
                                                  stop_probs=self._valid_stop_probs,
                                                  thresholds=thresholds,
                                                  num_classes=self._num_classes)
 
-            budget_range = (min(est_power, budget), budget)
-
             self._budget_distribution = BudgetDistribution(prior_counts=prior_counts,
-                                                           budget=budget_range,
+                                                           budget=budget,
                                                            max_time=max_time,
                                                            num_levels=self._num_levels,
                                                            num_classes=self._num_classes,

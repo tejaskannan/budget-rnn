@@ -78,6 +78,9 @@ def plot_and_save(sim_results: Dict[str, SimulationResult],
         if system.system_type == SystemType.ADAPTIVE:
             valid_accuracy = system.estimate_validation_results(budget=budget,
                                                                 max_time=max_time)
+
+            # print('Budget: {0:.3f}, Valid Results: {1}'.format(budget, valid_accuracy))
+            # print(np.bincount(system.get_levels(), minlength=10))
         else:
             valid_accuracy = None
 
@@ -335,10 +338,6 @@ if __name__ == '__main__':
             # Run the simulation on each budget
             for budget in sorted(budgets):
                 print('===== Starting budget: {0:.4f} ====='.format(budget))
-
-                # We shift the budget based on the noise. This is purely for experimentation--it keeps the ranges the
-                # same for all noise locations.
-                # budget_with_noise = budget + noise_generator.loc
 
                 result, noise_terms = run_simulation(runtime_systems=runtime_systems,
                                                      max_time=max_time,
