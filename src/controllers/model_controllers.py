@@ -109,6 +109,65 @@ def get_level_counts(levels: np.ndarray, num_levels: int) -> np.ndarray:
     return np.vstack([np.bincount(levels[b], minlength=num_levels) for b in range(num_budgets)])  # [S, L]
 
 
+def get_budget_interpolation_values(target: float, budgets: np.ndarray, avg_level_counts: np.ndarray, num_levels: int, seq_length: int) -> Tuple[int, int, float]:
+    budget_idx = index_of(budgets, target)
+    if budget_idx >= 0:
+        return budget_idx, budget_idx, 1
+
+    power_multiplier = int(seq_length / num_levels)
+
+    min_power = get_avg_power(num_samples=1, seq_length=seq_length, multiplier=power_multiplier)
+    max_power = get_avg_power(num_samples=seq_length, seq_length=seq_length)
+
+    # Get the nearest two budgets nearest two known budgets
+    lower_idx, upper_idx = -1, -1
+    for idx in range(0, len(budgets) - 1):
+        if budgets[idx] <= target and budgets[idx + 1] >= target:
+            lower_idx = idx
+            upper_idx = idx + 1
+
+    # Compute the expected power for each threshold
+    power_estimates = get_power_estimates(num_levels=num_levels, seq_length=seq_length)
+    
+    expected_power: List[float] = []
+    for counts in avg_level_counts:
+        expected = np.sum(counts * power_estimates)
+        expected_power.append(expected)
+
+    # If the budget is out of the range of the learned budgets, the we supplement the learned
+    # thresholds with fixed policies at either end.
+    if lower_idx == -1 or upper_idx == -1:
+        if target < budgets[0]:
+
+            # The budget is below the lowest learned budget. If it is below the lowest power amount,
+            # then we use a fixed policy on the lowest level. Otherwise, we interpolate as usual.
+            if target < min_power:
+                return -1, -1, 1
+
+            lower_power = min_power
+            upper_power = expected_power[0]
+        else:
+            # The budget is above the highest learned budget. We either fix the policy to the highest level
+            # or interpolate given the position of the budget w.r.t. the highest power level.
+            if target > max_power:
+                return len(budgets), len(budgets), 1
+
+            lower_power = expected_power[-1]
+            upper_power = max_power
+    else:
+        lower_budget = expected_power[lower_idx]
+        upper_budget = expected_power[upper_idx]
+
+    if abs(upper_power - lower_power) < SMALL_NUMBER:
+        return lower_idx, lower_idx, lower_power
+
+    # Interpolation weight, Clipped to the range [0, 1]
+    z = (target - lower_power) / (upper_power - lower_power)
+    z = min(max(z, 0), 1)
+
+    return lower_idx, upper_idx, z
+
+
 # BUDGET OPTIMIZER
 
 class BudgetOptimizer:
@@ -198,14 +257,25 @@ class BudgetOptimizer:
         best_thresholds: List[np.ndarray] = []  # Holds list of best thresholds for each budget
         best_loss: List[float] = []
 
+        power_estimates = get_power_estimates(self._num_levels, self._seq_length)
+        level_idx = np.arange(self._num_levels)
+
         for budget in self._budgets:
             if should_print:
                 print('===== Starting Budget {0:.3f} ====='.format(budget))
 
-            # Initialize the thresholds uniformly at random. We sort the thresholds in decreasing
-            # order to align with the notion of answer 'confidence'. This is a heuristic.
+            # Initialize the thresholds uniformly at random. We cap the thresholds at the smallest known level
+            # which consumes power more than the budget. This prevents quick, greedy methods to get under the budget
+            # in early iterations.
             init_thresholds = self._rand.uniform(low=MIN_INIT, high=MAX_INIT, size=(self._trials, self._num_levels))
             init_thresholds = round_to_precision(init_thresholds, self._precision)
+
+            power_diff = power_estimates - budget
+            diff_mask = (power_diff <= 0).astype(int) * BIG_NUMBER
+            max_level = np.argmin(power_diff + diff_mask)
+
+            mask = np.expand_dims((level_idx < max_level).astype(int), axis=0)  # [1, L]
+            init_thresholds = init_thresholds * mask
 
             # Fit thresholds for this budget
             thresholds, loss = self.fit_single(train_data=train_data,
@@ -228,7 +298,7 @@ class BudgetOptimizer:
         self._thresholds = final_thresholds
         return final_thresholds, avg_level_counts, -np.array(best_loss).reshape(-1)
 
-    def evaluate(self, model_correct: np.ndarray, stop_probs: np.ndarray) -> np.ndarray:
+    def evaluate(self, model_correct: np.ndarray, stop_probs: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
         Evaluates the already-fitted thresholds on the given data points.
 
@@ -237,17 +307,19 @@ class BudgetOptimizer:
                 at each batch sample (B) and level (L)
             stop_probs: A [B, L] array of stop probabilities at each sample (B) and level (L)
         Returns:
-            A [S] array of system accuracy for each budget (S)
+            A tuple of two elements:
+                (1) A [S] array of system accuracy for each budget (S)
+                (2) A [S] array of power for each budget (S)
         """
         assert self._thresholds is not None, 'Must fit the optimizer first'
         assert model_correct.shape == stop_probs.shape, 'model_correct ({0}) and stop_probs ({1}) must have the same shape'.format(model_correct.shape, stop_probs.shape)
 
         # The loss is the negative accuracy AFTER accounting for the budget
-        loss, _ = self.loss_function(model_correct=model_correct,
-                                     budgets=self._budgets,
-                                     stop_probs=stop_probs,
-                                     thresholds=self._thresholds)
-        return -loss
+        loss, pwr = self.loss_function(model_correct=model_correct,
+                                       budgets=self._budgets,
+                                       stop_probs=stop_probs,
+                                       thresholds=self._thresholds)
+        return -loss, pwr
 
     def fit_single(self,
                    train_data: ThresholdData,
@@ -347,16 +419,22 @@ class BudgetOptimizer:
             # Increment early stopping counter
             early_stopping_counter = np.where(has_improved, 0, np.minimum(early_stopping_counter + 1, self._patience))
 
-            # Allow budgets to steal thresholds with improved validation loss. We add a random 
+            # Allow budgets to steal thresholds with improved validation loss. We add a random move
+            # to explore the `promising` region
+            lowest_loss = np.min(best_valid_loss)
+            lowest_idx = np.argmin(best_valid_loss)
+
             if (i + 1) % stealing_iterations == 0:
                 for j in range(best_thresholds.shape[0]):
-                    is_improved = best_valid_loss < best_valid_loss[j]
-                    accuracy_diff = best_valid_loss - best_valid_loss[j]
-                    best_replacement = np.argmin(accuracy_diff)
 
-                    if is_improved.any() and best_replacement != j:
+                    is_improved = lowest_loss < best_valid_loss[j]
+                    accuracy_diff = lowest_loss - best_valid_loss[j]
+
+
+                    if is_improved and lowest_idx != j:
                         random_move = self._rand.uniform(low=-RANDOM_MOVE, high=RANDOM_MOVE, size=best_thresholds.shape[1])
-                        thresholds[j] = round_to_precision(best_thresholds[best_replacement] + random_move, self._precision)
+                        thresholds[j] = round_to_precision(best_thresholds[lowest_idx] + random_move, self._precision)
+                        thresholds[j] = np.clip(thresholds[j], a_min=0, a_max=1)
 
                         early_stopping_counter[j] = 0
 
@@ -388,14 +466,18 @@ class BudgetOptimizer:
         threshold_mask = (level_idx < np.expand_dims(mask_index, axis=1)).astype(float)  # [S, L]
         best_thresholds = best_thresholds * threshold_mask
 
-        final_loss, _ = self.loss_function(thresholds=best_thresholds,
-                                           budgets=budget_array,
-                                           model_correct=valid_data.model_correct,
-                                           stop_probs=valid_data.stop_probs)
+        # Get the best set of thresholds according to the thresholds with the lowest loss.
+        # We break ties by selecting the thresholds with the higher power amount.
+        final_loss, final_power = self.loss_function(thresholds=best_thresholds,
+                                                     budgets=budget_array,
+                                                     model_correct=valid_data.model_correct,
+                                                     stop_probs=valid_data.stop_probs)
 
-        best_index = np.argmin(final_loss)
+        best_loss = np.min(final_loss)
+        equal_mask = np.isclose(final_loss, best_loss)
+        best_idx = np.argmax(final_power * equal_mask) 
 
-        return best_thresholds[best_index], final_loss[best_index]
+        return best_thresholds[best_idx], final_loss[best_idx]
 
 
 # Model Controllers
@@ -514,16 +596,18 @@ class AdaptiveController(Controller):
         end_time = datetime.now()
 
         # Evaluate the model optimizer
-        train_acc = self._budget_optimizer.evaluate(model_correct=train_data.model_correct,
-                                                    stop_probs=train_data.stop_probs)
-        valid_acc = self._budget_optimizer.evaluate(model_correct=valid_data.model_correct,
-                                                    stop_probs=valid_data.stop_probs)
-        test_acc = self._budget_optimizer.evaluate(model_correct=test_correct,
-                                                   stop_probs=test_results.stop_probs)
+        train_acc, _ = self._budget_optimizer.evaluate(model_correct=train_data.model_correct,
+                                                       stop_probs=train_data.stop_probs)
+        valid_acc, valid_pwr = self._budget_optimizer.evaluate(model_correct=valid_data.model_correct,
+                                                               stop_probs=valid_data.stop_probs)
+        test_acc, _ = self._budget_optimizer.evaluate(model_correct=test_correct,
+                                                      stop_probs=test_results.stop_probs)
 
         print('Train Accuracy: {0}'.format(train_acc))
         print('Valid Accuracy: {0}'.format(valid_acc))
         print('Test Accuracy: {0}'.format(test_acc))
+
+        print('Approximate Power: {0}'.format(valid_pwr))
 
         self._fit_start_time = start_time.strftime('%Y-%m-%d-%H-%M-%S')
         self._fit_end_time = end_time.strftime('%Y-%m-%d-%H-%M-%S')
@@ -532,6 +616,7 @@ class AdaptiveController(Controller):
 
         self._stop_means = np.average(valid_data.stop_probs, axis=0)  # [L]
         self._stop_std = np.std(valid_data.stop_probs, axis=0)  # [L]
+
 
         # Estimate the level distribution for each predicted label.
         valid_predictions = train_results.predictions[train_idx, :]
@@ -552,9 +637,56 @@ class AdaptiveController(Controller):
 
             self._label_distribution[budget] = budget_dict
 
+        # Add estimates for the lowest and highest fixed policies
+        lowest_thresholds = np.zeros(self._num_levels)
+        highest_thresholds = np.ones(self._num_levels)
+
+        levels = levels_to_execute(valid_data.stop_probs, np.vstack([lowest_thresholds, highest_thresholds]))  # [2, K]
+        pred = classification_for_levels(valid_predictions, levels)  # [2, K]
+
+        self._lowest_distribution: Dict[int, np.ndarray] = dict()
+        for class_idx in range(self._num_classes):
+            class_mask = np.isclose(pred[0], class_idx).astype(int)
+            class_level_counts = np.bincount(levels[0], minlength=self._num_levels, weights=class_mask)
+            self._lowest_distribution[class_idx] = class_level_counts
+
+        self._highest_distribution: Dict[int, np.ndarray] = dict()
+        for class_idx in range(self._num_classes):
+            class_mask = np.isclose(pred[1], class_idx).astype(int)
+            class_level_counts = np.bincount(levels[1], minlength=self._num_levels, weights=class_mask)
+            self._highest_distribution[class_idx] = class_level_counts
+
         self._is_fitted = True
 
-    def get_thresholds(self, budget: int) -> np.ndarray:
+    def estimate_level_distribution(self, budget: float) -> Dict[int, np.ndarray]:
+        assert self._label_distribution is not None, 'Must call fit() first'
+
+        lower_idx, upper_idx, weight = get_budget_interpolation_values(target=budget,
+                                                                       budgets=self._budgets,
+                                                                       avg_level_counts=self._avg_level_counts,
+                                                                       num_levels=self._num_levels,
+                                                                       seq_length=self._seq_length)
+        if lower_idx < 0:
+            lower_counts = self._lowest_distribution
+        elif lower_idx >= self._num_levels:
+            lower_counts = self._highest_distribution
+        else:
+            lower_counts = self._label_distribution[self._budgets[lower_idx]]
+
+        if upper_idx < 0:
+            upper_counts = self._lowest_distribution
+        elif upper_idx >= self._num_levels:
+            upper_counts = self._highest_distribution
+        else:
+            lower_counts = self._label_distribution[self._budgets[upper_idx]]
+
+        result: Dict[int, np.ndarray] = dict()
+        for label in range(self._num_classes):
+            result[label] = lower_counts[label] * (1 - weight) + upper_counts[label] * weight
+
+        return result
+
+    def get_thresholds(self, budget: float) -> np.ndarray:
         assert self._thresholds is not None, 'Must call fit() first'
 
         power_multiplier = int(self._seq_length / self._num_levels)
@@ -579,69 +711,89 @@ class AdaptiveController(Controller):
             return self._thresholds[budget_idx]
 
         # Otherwise, we interpolate the thresholds from the nearest two known budgets
-        lower_budget_idx, upper_budget_idx = None, None
-        for idx in range(0, len(self._budgets) - 1):
-            if self._budgets[idx] < budget and self._budgets[idx + 1] > budget:
-                lower_budget_idx = idx
-                upper_budget_idx = idx + 1
+        #lower_budget_idx, upper_budget_idx = None, None
+        #for idx in range(0, len(self._budgets) - 1):
+        #    if self._budgets[idx] < budget and self._budgets[idx + 1] > budget:
+        #        lower_budget_idx = idx
+        #        upper_budget_idx = idx + 1
 
-        # Compute the expected power for each threshold
-        power_estimates = get_power_estimates(num_levels=self._num_levels,
-                                              seq_length=self._seq_length)
-        expected_power: List[float] = []
-        for counts in self._avg_level_counts:
-            expected = np.sum(counts * power_estimates)
-            expected_power.append(expected)
+        ## Compute the expected power for each threshold
+        #power_estimates = get_power_estimates(num_levels=self._num_levels,
+        #                                      seq_length=self._seq_length)
+        #expected_power: List[float] = []
+        #for counts in self._avg_level_counts:
+        #    expected = np.sum(counts * power_estimates)
+        #    expected_power.append(expected)
 
-        # If the budget is out of the range of the learned budgets, the we supplement the learned
-        # thresholds with fixed policies at either end.
-        if lower_budget_idx is None or upper_budget_idx is None:
-            if budget < self._budgets[0]:
-                # The budget is below the lowest learned budget. If it is below the lowest power amount,
-                # then we use a fixed policy on the lowest level. Otherwise, we interpolate as usual.
-                fixed_thresholds = np.zeros_like(self._thresholds[0])
-                if budget < min_power:
-                    return fixed_thresholds
+        ## If the budget is out of the range of the learned budgets, the we supplement the learned
+        ## thresholds with fixed policies at either end.
+        #if lower_budget_idx is None or upper_budget_idx is None:
+        #    if budget < self._budgets[0]:
+        #        # The budget is below the lowest learned budget. If it is below the lowest power amount,
+        #        # then we use a fixed policy on the lowest level. Otherwise, we interpolate as usual.
+        #        fixed_thresholds = np.zeros_like(self._thresholds[0])
+        #        if budget < min_power:
+        #            return fixed_thresholds
 
-                lower_budget = min_power
-                # upper_budget = self._budgets[0]
-                upper_budget = expected_power[0]
+        #        lower_budget = min_power
+        #        # upper_budget = self._budgets[0]
+        #        upper_budget = expected_power[0]
 
-                lower_thresh = fixed_thresholds
-                upper_thresh = self._thresholds[0]
-            else:
-                # The budget is above the highest learned budget. We either fix the policy to the highest level
-                # or interpolate given the position of the budget w.r.t. the highest power level.
-                fixed_thresholds = np.ones_like(self._thresholds[0])
-                fixed_thresholds[-1] = 0
-                if budget > max_power:
-                    return fixed_thresholds
+        #        lower_thresh = fixed_thresholds
+        #        upper_thresh = self._thresholds[0]
+        #    else:
+        #        # The budget is above the highest learned budget. We either fix the policy to the highest level
+        #        # or interpolate given the position of the budget w.r.t. the highest power level.
+        #        fixed_thresholds = np.ones_like(self._thresholds[0])
+        #        fixed_thresholds[-1] = 0
+        #        if budget > max_power:
+        #            return fixed_thresholds
 
-                lower_budget = expected_power[-1]
-                #lower_budget = self._budgets[-1]
-                upper_budget = max_power
+        #        lower_budget = expected_power[-1]
+        #        #lower_budget = self._budgets[-1]
+        #        upper_budget = max_power
 
-                lower_thresh = self._thresholds[-1]
-                upper_thresh = fixed_thresholds
+        #        lower_thresh = self._thresholds[-1]
+        #        upper_thresh = fixed_thresholds
+        #else:
+        #    # lower_budget = self._budgets[lower_budget_idx]
+        #    # upper_budget = self._budgets[upper_budget_idx]
+
+        #    lower_budget = expected_power[lower_budget_idx]
+        #    upper_budget = expected_power[upper_budget_idx]
+
+        #    lower_thresh = self._thresholds[lower_budget_idx]
+        #    upper_thresh = self._thresholds[upper_budget_idx]
+
+        #if abs(upper_budget - lower_budget) < SMALL_NUMBER:
+        #    return lower_thresh
+
+        ## Interpolation weight, Clipped to the range [0, 1]
+        #z = (budget - lower_budget) / (upper_budget - lower_budget)
+        #z = min(max(z, 0), 1)
+
+        lower_idx, upper_idx, weight = get_budget_interpolation_values(budgets=self._budgets,
+                                                                       target=budget,
+                                                                       avg_level_counts=self._avg_level_counts,
+                                                                       num_levels=self._num_levels,
+                                                                       seq_length=self._seq_length)
+        if lower_idx < 0:
+            lower_thresh = np.zeros(self._thresholds.shape[1])
+        elif lower_idx > self._thresholds.shape[1]:
+            lower_thresh = np.ones(self._thresholds.shape[1])
         else:
-            # lower_budget = self._budgets[lower_budget_idx]
-            # upper_budget = self._budgets[upper_budget_idx]
-
-            lower_budget = expected_power[lower_budget_idx]
-            upper_budget = expected_power[upper_budget_idx]
-
-            lower_thresh = self._thresholds[lower_budget_idx]
-            upper_thresh = self._thresholds[upper_budget_idx]
-
-        if abs(upper_budget - lower_budget) < SMALL_NUMBER:
-            return lower_thresh
-
-        # Interpolation weight, Clipped to the range [0, 1]
-        z = (budget - lower_budget) / (upper_budget - lower_budget)
-        z = min(max(z, 0), 1)
-
+            lower_thresh = self._thresholds[lower_idx]
+        
+        if upper_idx < 0:
+            upper_thresh = np.zeros(self._thresholds.shape[1])
+        elif upper_idx > self._thresholds.shape[1]:
+            upper_thresh = np.ones(self._thresholds.shape[1])
+        else:
+            upper_thresh = self._thresholds[upper_idx]
+        
         # Create thresholds and projected budget
-        thresholds = lower_thresh * (1 - z) + upper_thresh * z
+        thresholds = lower_thresh * (1 - weight) + upper_thresh * weight
+        thresholds[-1] = 0
 
         # Round to fixed point representation
         thresholds = round_to_precision(thresholds, precision=self._precision)
@@ -722,6 +874,8 @@ class AdaptiveController(Controller):
             'stop_means': self._stop_means,
             'stop_std': self._stop_std,
             'label_distribution': self._label_distribution,
+            'lowest_distribution': self._lowest_distribution,
+            'highest_distribution': self._highest_distribution,
             'fit_start_time': self._fit_start_time,
             'fit_end_time': self._fit_end_time
         }
@@ -769,6 +923,8 @@ class AdaptiveController(Controller):
         controller._stop_means = serialized_info.get('stop_means')
         controller._stop_std = serialized_info.get('stop_std')
         controller._label_distribution = serialized_info.get('label_distribution')
+        controller._lowest_distribution = serialized_info.get('lowest_distribution')
+        controller._highest_distribution = serialized_info.get('highest_distribution')
 
         return controller
 
