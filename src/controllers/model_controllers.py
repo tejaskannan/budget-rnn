@@ -18,10 +18,10 @@ from controllers.controller_utils import execute_adaptive_model, get_budget_inde
 
 
 CONTROLLER_PATH = 'model-controller-{0}.pkl.gz'
-MIN_INIT = 0.7
+MIN_INIT = 0.5
 MAX_INIT = 1.0
 REG_NOISE = 0.001
-STEAL_ITERATIONS = 5
+STEAL_ITERATIONS = 10
 RANDOM_MOVE = 0.05
 
 
@@ -433,7 +433,6 @@ class BudgetOptimizer:
                     is_improved = lowest_loss < best_valid_loss[j]
                     accuracy_diff = lowest_loss - best_valid_loss[j]
 
-
                     if is_improved and lowest_idx != j:
                         random_move = rand.uniform(low=-RANDOM_MOVE, high=RANDOM_MOVE, size=best_thresholds.shape[1])
                         thresholds[j] = round_to_precision(best_thresholds[lowest_idx] + random_move, self._precision)
@@ -477,12 +476,15 @@ class BudgetOptimizer:
                                                      stop_probs=valid_data.stop_probs)
 
         best_loss = np.min(final_loss)
-        equal_mask = np.logical_and(np.isclose(final_loss, best_loss), final_power <= budget)
+        equal_mask = np.isclose(final_loss, best_loss)
+        best_idx = np.argmax(final_power * equal_mask)
 
-        if equal_mask.any():
-            best_idx = np.argmax(final_power * equal_mask)
-        else:
-            best_idx = np.argmin(best_loss)
+        #equal_mask = np.logical_and(np.isclose(final_loss, best_loss), final_power <= budget)
+
+        #if equal_mask.any():
+        #    best_idx = np.argmax(final_power * equal_mask)
+        #else:
+        #    best_idx = np.argmin(best_loss)
 
         return best_thresholds[best_idx], final_loss[best_idx]
 
