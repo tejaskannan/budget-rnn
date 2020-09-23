@@ -193,9 +193,7 @@ class BudgetOptimizer:
         self._seq_length = seq_length
         self._power_multiplier = int(self._seq_length / self._num_levels)
         self._train_frac = train_frac
-        self._valid_frac = 1.0 - train_frac
 
-        self._rand = np.random.RandomState(seed=42)
         self._thresholds = None
 
     @property
@@ -264,10 +262,13 @@ class BudgetOptimizer:
             if should_print:
                 print('===== Starting Budget {0:.3f} ====='.format(budget))
 
+            # Initialize the random state. We use the same seed for all budgets to get consistent results
+            rand = np.random.RandomState(seed=42)
+
             # Initialize the thresholds uniformly at random. We cap the thresholds at the smallest known level
             # which consumes power more than the budget. This prevents quick, greedy methods to get under the budget
             # in early iterations.
-            init_thresholds = self._rand.uniform(low=MIN_INIT, high=MAX_INIT, size=(self._trials, self._num_levels))
+            init_thresholds = rand.uniform(low=MIN_INIT, high=MAX_INIT, size=(self._trials, self._num_levels))
             init_thresholds = round_to_precision(init_thresholds, self._precision)
 
             power_diff = power_estimates - budget
@@ -283,6 +284,7 @@ class BudgetOptimizer:
                                                init_thresholds=init_thresholds,
                                                budget=budget,
                                                stealing_iterations=STEAL_ITERATIONS,
+                                               rand=rand,
                                                should_print=should_print)
 
             best_thresholds.append(thresholds)
@@ -327,6 +329,7 @@ class BudgetOptimizer:
                    init_thresholds: np.ndarray,
                    budget: float,
                    stealing_iterations: int,
+                   rand: np.random.RandomState,
                    should_print: bool) -> Tuple[np.ndarray, np.ndarray]:
         """
         Fits the optimizer to the given predictions of the logistic regression model and neural network model.
@@ -367,7 +370,7 @@ class BudgetOptimizer:
 
             # Select a random level to optimize. We skip the top-level because it does
             # not correspond to a trainable threshold.
-            level = self._rand.randint(low=0, high=self._num_levels - 1)
+            level = rand.randint(low=0, high=self._num_levels - 1)
 
             # Prevent optimizing the same thresholds twice in a row. This is wasted work.
             if prev_level is not None and level == prev_level:
@@ -432,7 +435,7 @@ class BudgetOptimizer:
 
 
                     if is_improved and lowest_idx != j:
-                        random_move = self._rand.uniform(low=-RANDOM_MOVE, high=RANDOM_MOVE, size=best_thresholds.shape[1])
+                        random_move = rand.uniform(low=-RANDOM_MOVE, high=RANDOM_MOVE, size=best_thresholds.shape[1])
                         thresholds[j] = round_to_precision(best_thresholds[lowest_idx] + random_move, self._precision)
                         thresholds[j] = np.clip(thresholds[j], a_min=0, a_max=1)
 
@@ -474,8 +477,12 @@ class BudgetOptimizer:
                                                      stop_probs=valid_data.stop_probs)
 
         best_loss = np.min(final_loss)
-        equal_mask = np.isclose(final_loss, best_loss)
-        best_idx = np.argmax(final_power * equal_mask) 
+        equal_mask = np.logical_and(np.isclose(final_loss, best_loss), final_power <= budget)
+
+        if equal_mask.any():
+            best_idx = np.argmax(final_power * equal_mask)
+        else:
+            best_idx = np.argmin(best_loss)
 
         return best_thresholds[best_idx], final_loss[best_idx]
 
