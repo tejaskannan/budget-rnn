@@ -9,7 +9,7 @@ from typing import List, Optional, Tuple, Dict
 from dataset.dataset import Dataset, DataSeries
 from models.adaptive_model import AdaptiveModel
 from utils.np_utils import index_of, round_to_precision
-from utils.constants import OUTPUT, BIG_NUMBER, SMALL_NUMBER, INPUTS, SEQ_LENGTH, DROPOUT_KEEP_RATE, SEQ_LENGTH
+from utils.constants import OUTPUT, BIG_NUMBER, SMALL_NUMBER, INPUTS, SEQ_LENGTH, DROPOUT_KEEP_RATE, SEQ_LENGTH, NUM_CLASSES
 from utils.file_utils import save_pickle_gz, read_pickle_gz, extract_model_name
 from utils.loading_utils import restore_neural_network
 from controllers.power_distribution import PowerDistribution
@@ -21,6 +21,8 @@ CONTROLLER_PATH = 'model-controller-{0}.pkl.gz'
 MIN_INIT = 0.7
 MAX_INIT = 1.0
 REG_NOISE = 0.001
+STEAL_ITERATIONS = 5
+RANDOM_MOVE = 0.05
 
 
 ThresholdData = namedtuple('ThresholdData', ['stop_probs', 'model_correct'])
@@ -193,50 +195,38 @@ class BudgetOptimizer:
                 (3) A [S] array containing the final generalization accuracy for each budget
         """
         # Arrays to keep track of the best thresholds per budget
-        best_thresholds = np.ones(shape=(self._num_budgets, self._num_levels))  # [S, L]
-        best_loss = np.ones(shape=(self._num_budgets, 1), dtype=float)  # [S, 1]
+        best_thresholds: List[np.ndarray] = []  # Holds list of best thresholds for each budget
+        best_loss: List[float] = []
 
-        power_estimates = get_power_estimates(self._num_levels, self._seq_length)
-
-        for t in range(self._trials):
+        for budget in self._budgets:
             if should_print:
-                print('===== Starting Trial {0} ====='.format(t))
+                print('===== Starting Budget {0:.3f} ====='.format(budget))
 
             # Initialize the thresholds uniformly at random. We sort the thresholds in decreasing
             # order to align with the notion of answer 'confidence'. This is a heuristic.
-            init_thresholds = self._rand.uniform(low=MIN_INIT, high=MAX_INIT, size=(self._num_budgets, self._num_levels))
+            init_thresholds = self._rand.uniform(low=MIN_INIT, high=MAX_INIT, size=(self._trials, self._num_levels))
             init_thresholds = round_to_precision(init_thresholds, self._precision)
-            init_thresholds = np.flip(np.sort(init_thresholds, axis=-1), axis=-1)  # [S, L]
 
-            for i, b in enumerate(self._budgets):
-                power_comparison = (power_estimates >= b).astype(float)
-                if not power_comparison.any():
-                    init_thresholds[i][-1] = 0
-                else:
-                    mask = (1.0 - power_comparison) * BIG_NUMBER
-                    level = np.argmin(np.arange(power_comparison.shape[0]) + mask)
-                    init_thresholds[i][level] = 0
-    
-            # Fit the thresholds ([S, L]) and get the corresponding loss ([S, 1])
+            # Fit thresholds for this budget
             thresholds, loss = self.fit_single(train_data=train_data,
                                                valid_data=valid_data,
                                                init_thresholds=init_thresholds,
+                                               budget=budget,
+                                               stealing_iterations=STEAL_ITERATIONS,
                                                should_print=should_print)
 
-            # Set the thresholds using the best seen fitness so far
-            best_thresholds = np.where(loss < best_loss, thresholds, best_thresholds)
-            best_loss = np.where(loss < best_loss, loss, best_loss)
+            best_thresholds.append(thresholds)
+            best_loss.append(loss)
 
-            if should_print:
-                print('Completed Trial {0}. Best Loss: {1}'.format(t, best_loss))
+        final_thresholds = np.vstack(best_thresholds)
 
         # Get the level distribution
-        levels = levels_to_execute(probs=valid_data.stop_probs, thresholds=best_thresholds)
+        levels = levels_to_execute(probs=valid_data.stop_probs, thresholds=final_thresholds)
         level_counts = get_level_counts(levels=levels, num_levels=self._num_levels)  # [S, L]
         avg_level_counts = level_counts / (np.sum(level_counts, axis=-1, keepdims=True) + SMALL_NUMBER)
 
-        self._thresholds = best_thresholds
-        return best_thresholds, avg_level_counts, -best_loss.reshape(-1)
+        self._thresholds = final_thresholds
+        return final_thresholds, avg_level_counts, -np.array(best_loss).reshape(-1)
 
     def evaluate(self, model_correct: np.ndarray, stop_probs: np.ndarray) -> np.ndarray:
         """
@@ -259,7 +249,13 @@ class BudgetOptimizer:
                                      thresholds=self._thresholds)
         return -loss
 
-    def fit_single(self, train_data: ThresholdData, valid_data: ThresholdData, init_thresholds: np.ndarray, should_print: bool) -> Tuple[np.ndarray, np.ndarray]:
+    def fit_single(self,
+                   train_data: ThresholdData,
+                   valid_data: ThresholdData,
+                   init_thresholds: np.ndarray,
+                   budget: float,
+                   stealing_iterations: int,
+                   should_print: bool) -> Tuple[np.ndarray, np.ndarray]:
         """
         Fits the optimizer to the given predictions of the logistic regression model and neural network model.
 
@@ -293,6 +289,7 @@ class BudgetOptimizer:
         fp_one = 1 << self._precision
 
         prev_level = None
+        budget_array = np.full(fill_value=budget, shape=thresholds.shape[0])
 
         for i in range(self._max_iter):
 
@@ -309,7 +306,7 @@ class BudgetOptimizer:
 
             # Initialize best loss and best power for this iteration
             best_loss, best_power = self.loss_function(thresholds=thresholds,
-                                                       budgets=self._budgets,
+                                                       budgets=budget_array,
                                                        model_correct=train_data.model_correct,
                                                        stop_probs=train_data.stop_probs)
 
@@ -322,7 +319,7 @@ class BudgetOptimizer:
 
                 # Compute the fitness, both return values are [S] arrays
                 loss, avg_power = self.loss_function(thresholds=thresholds,
-                                                     budgets=self._budgets,
+                                                     budgets=budget_array,
                                                      model_correct=train_data.model_correct,
                                                      stop_probs=train_data.stop_probs)
 
@@ -336,7 +333,7 @@ class BudgetOptimizer:
 
             # Compute the validation loss. The result is a [S] array.
             valid_loss, valid_power = self.loss_function(thresholds=thresholds,
-                                                         budgets=self._budgets,
+                                                         budgets=budget_array,
                                                          model_correct=valid_data.model_correct,
                                                          stop_probs=valid_data.stop_probs)
 
@@ -350,14 +347,18 @@ class BudgetOptimizer:
             # Increment early stopping counter
             early_stopping_counter = np.where(has_improved, 0, np.minimum(early_stopping_counter + 1, self._patience))
 
-            # Allow budgets to steal thresholds with improved validation loss
-            for j in range(len(self._budgets)):
-                is_improved = np.logical_and(best_valid_loss < best_valid_loss[j], best_valid_power < self._budgets[j])
+            # Allow budgets to steal thresholds with improved validation loss. We add a random 
+            if (i + 1) % stealing_iterations == 0:
+                for j in range(best_thresholds.shape[0]):
+                    is_improved = best_valid_loss < best_valid_loss[j]
+                    accuracy_diff = best_valid_loss - best_valid_loss[j]
+                    best_replacement = np.argmin(accuracy_diff)
 
-                if is_improved.any():
-                    best_replacement = np.argmax(is_improved.astype(float) * self._budgets)
-                    thresholds[j] = np.copy(best_thresholds[best_replacement])
-                    early_stopping_counter[j] = 0
+                    if is_improved.any() and best_replacement != j:
+                        random_move = self._rand.uniform(low=-RANDOM_MOVE, high=RANDOM_MOVE, size=best_thresholds.shape[1])
+                        thresholds[j] = round_to_precision(best_thresholds[best_replacement] + random_move, self._precision)
+
+                        early_stopping_counter[j] = 0
 
             # Detect convergence
             has_converged = (early_stopping_counter >= self._patience)
@@ -388,11 +389,13 @@ class BudgetOptimizer:
         best_thresholds = best_thresholds * threshold_mask
 
         final_loss, _ = self.loss_function(thresholds=best_thresholds,
-                                           budgets=self._budgets,
+                                           budgets=budget_array,
                                            model_correct=valid_data.model_correct,
                                            stop_probs=valid_data.stop_probs)
 
-        return best_thresholds, np.expand_dims(final_loss, axis=-1)
+        best_index = np.argmin(final_loss)
+
+        return best_thresholds[best_index], final_loss[best_index]
 
 
 # Model Controllers
@@ -426,6 +429,7 @@ class AdaptiveController(Controller):
 
         self._num_levels = model.num_outputs
         self._seq_length = model.metadata[SEQ_LENGTH]
+        self._num_classes = model.metadata[NUM_CLASSES]
         self._budgets = np.array(list(sorted(budgets)))
         self._num_budgets = len(self._budgets)
         self._precision = precision
@@ -528,6 +532,25 @@ class AdaptiveController(Controller):
 
         self._stop_means = np.average(valid_data.stop_probs, axis=0)  # [L]
         self._stop_std = np.std(valid_data.stop_probs, axis=0)  # [L]
+
+        # Estimate the level distribution for each predicted label.
+        valid_predictions = train_results.predictions[train_idx, :]
+        levels = levels_to_execute(valid_data.stop_probs, self._thresholds)  # [S, K]
+        pred = classification_for_levels(valid_predictions, levels)  # [S, K]
+
+        self._label_distribution: Dict[float, Dict[int, np.ndarray]] = dict()
+        for budget_idx, budget in enumerate(self._budgets):
+            budget_dict: Dict[int, np.ndarray] = dict()
+
+            budget_levels = levels[budget_idx]
+            budget_predictions = pred[budget_idx]
+
+            for class_idx in range(self._num_classes):
+                class_mask = np.isclose(budget_predictions, class_idx).astype(int)
+                class_level_counts = np.bincount(budget_levels, minlength=self._num_levels, weights=class_mask)  # [L]
+                budget_dict[class_idx] = class_level_counts
+
+            self._label_distribution[budget] = budget_dict
 
         self._is_fitted = True
 
@@ -698,6 +721,7 @@ class AdaptiveController(Controller):
             'est_accuracy': self._est_accuracy,
             'stop_means': self._stop_means,
             'stop_std': self._stop_std,
+            'label_distribution': self._label_distribution,
             'fit_start_time': self._fit_start_time,
             'fit_end_time': self._fit_end_time
         }
@@ -744,6 +768,7 @@ class AdaptiveController(Controller):
         controller._est_accuracy = serialized_info.get('est_accuracy')
         controller._stop_means = serialized_info.get('stop_means')
         controller._stop_std = serialized_info.get('stop_std')
+        controller._label_distribution = serialized_info.get('label_distribution')
 
         return controller
 
