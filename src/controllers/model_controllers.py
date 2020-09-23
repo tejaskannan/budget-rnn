@@ -351,13 +351,13 @@ class BudgetOptimizer:
             early_stopping_counter = np.where(has_improved, 0, np.minimum(early_stopping_counter + 1, self._patience))
 
             # Allow budgets to steal thresholds with improved validation loss
-            for i in range(len(self._budgets)):
-                is_improved = np.logical_and(best_valid_loss < best_valid_loss[i], best_valid_power < self._budgets[i])
+            for j in range(len(self._budgets)):
+                is_improved = np.logical_and(best_valid_loss < best_valid_loss[j], best_valid_power < self._budgets[j])
 
                 if is_improved.any():
                     best_replacement = np.argmax(is_improved.astype(float) * self._budgets)
-                    thresholds[i] = np.copy(best_thresholds[best_replacement])
-                    early_stopping_counter[i] = 0
+                    thresholds[j] = np.copy(best_thresholds[best_replacement])
+                    early_stopping_counter[j] = 0
 
             # Detect convergence
             has_converged = (early_stopping_counter >= self._patience)
@@ -545,21 +545,11 @@ class AdaptiveController(Controller):
         if self._budgets[best_idx] <= budget:
             return self._thresholds[best_idx]
 
-        #best_level = np.argmax(self._validation_accuracy)
-        #best_level_power = get_avg_power(num_samples=best_level + 1, seq_length=self._seq_length, multiplier=power_multiplier)
-
-        #if budget >= best_level_power:
-        #    thresholds = np.ones(shape=(self._num_levels, ))
-        #    thresholds[best_level] = 0
-        #    return thresholds
-
         # Check if this budget is known based from the optimization phase
         budget_idx = index_of(self._budgets, value=budget)
 
         min_power = get_avg_power(num_samples=1, seq_length=self._seq_length, multiplier=power_multiplier)
         max_power = get_avg_power(num_samples=self._seq_length, seq_length=self._seq_length)
-
-        power_multiplier = int(self._seq_length / self._num_levels)
 
         # If we already have the budget, then use the corresponding thresholds
         if budget_idx >= 0:
@@ -572,6 +562,14 @@ class AdaptiveController(Controller):
                 lower_budget_idx = idx
                 upper_budget_idx = idx + 1
 
+        # Compute the expected power for each threshold
+        power_estimates = get_power_estimates(num_levels=self._num_levels,
+                                              seq_length=self._seq_length)
+        expected_power: List[float] = []
+        for counts in self._avg_level_counts:
+            expected = np.sum(counts * power_estimates)
+            expected_power.append(expected)
+
         # If the budget is out of the range of the learned budgets, the we supplement the learned
         # thresholds with fixed policies at either end.
         if lower_budget_idx is None or upper_budget_idx is None:
@@ -583,7 +581,8 @@ class AdaptiveController(Controller):
                     return fixed_thresholds
 
                 lower_budget = min_power
-                upper_budget = self._budgets[0]
+                # upper_budget = self._budgets[0]
+                upper_budget = expected_power[0]
 
                 lower_thresh = fixed_thresholds
                 upper_thresh = self._thresholds[0]
@@ -595,23 +594,28 @@ class AdaptiveController(Controller):
                 if budget > max_power:
                     return fixed_thresholds
 
-                lower_budget = self._budgets[-1]
+                lower_budget = expected_power[-1]
+                #lower_budget = self._budgets[-1]
                 upper_budget = max_power
 
                 lower_thresh = self._thresholds[-1]
                 upper_thresh = fixed_thresholds
         else:
-            lower_budget = self._budgets[lower_budget_idx]
-            upper_budget = self._budgets[upper_budget_idx]
+            # lower_budget = self._budgets[lower_budget_idx]
+            # upper_budget = self._budgets[upper_budget_idx]
+
+            lower_budget = expected_power[lower_budget_idx]
+            upper_budget = expected_power[upper_budget_idx]
 
             lower_thresh = self._thresholds[lower_budget_idx]
             upper_thresh = self._thresholds[upper_budget_idx]
 
         if abs(upper_budget - lower_budget) < SMALL_NUMBER:
-            return lower_thresh, lower_budget
+            return lower_thresh
 
-        # Interpolation weight
+        # Interpolation weight, Clipped to the range [0, 1]
         z = (budget - lower_budget) / (upper_budget - lower_budget)
+        z = min(max(z, 0), 1)
 
         # Create thresholds and projected budget
         thresholds = lower_thresh * (1 - z) + upper_thresh * z
