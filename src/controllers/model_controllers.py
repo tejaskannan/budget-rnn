@@ -18,9 +18,6 @@ from controllers.controller_utils import execute_adaptive_model, get_budget_inde
 
 
 CONTROLLER_PATH = 'model-controller-{0}.pkl.gz'
-MIN_INIT = 0.5
-MAX_INIT = 1.0
-REG_NOISE = 0.001
 STEAL_ITERATIONS = 10
 RANDOM_MOVE = 0.05
 
@@ -179,10 +176,7 @@ class BudgetOptimizer:
                  precision: int,
                  trials: int,
                  max_iter: int,
-                 patience: int,
-                 train_frac: float):
-        assert train_frac > 0.0 and train_frac <= 1.0, 'Training Fraction must be in (0, 1]'
-
+                 patience: int):
         self._num_levels = num_levels
         self._num_budgets = budgets.shape[0]
         self._budgets = budgets
@@ -192,7 +186,6 @@ class BudgetOptimizer:
         self._patience = patience
         self._seq_length = seq_length
         self._power_multiplier = int(self._seq_length / self._num_levels)
-        self._train_frac = train_frac
 
         self._thresholds = None
 
@@ -258,17 +251,21 @@ class BudgetOptimizer:
         power_estimates = get_power_estimates(self._num_levels, self._seq_length)
         level_idx = np.arange(self._num_levels)
 
+        min_init = np.median(train_data.stop_probs, axis=0)  # [L]
+        max_init = 1.0
+
         for budget in self._budgets:
             if should_print:
                 print('===== Starting Budget {0:.3f} ====='.format(budget))
 
-            # Initialize the random state. We use the same seed for all budgets to get consistent results
+            # Initialize the random state. We use the same seed for all budgets to get consistent results. Otherwise
+            # the results are dependent on how many budgets we use due to changes in randomness.
             rand = np.random.RandomState(seed=42)
 
             # Initialize the thresholds uniformly at random. We cap the thresholds at the smallest known level
             # which consumes power more than the budget. This prevents quick, greedy methods to get under the budget
             # in early iterations.
-            init_thresholds = rand.uniform(low=MIN_INIT, high=MAX_INIT, size=(self._trials, self._num_levels))
+            init_thresholds = rand.uniform(low=min_init, high=max_init, size=(self._trials, self._num_levels))
             init_thresholds = round_to_precision(init_thresholds, self._precision)
 
             power_diff = power_estimates - budget
@@ -355,10 +352,10 @@ class BudgetOptimizer:
 
         # Variables to track convergence and best overall result
         best_thresholds = np.copy(thresholds)  # [S, L]
-        early_stopping_counter = np.zeros(thresholds.shape[0])  # [S]
-        has_converged = np.zeros(thresholds.shape[0])  # [S]
         best_valid_loss = np.ones(thresholds.shape[0])  # [S]
         best_valid_power = np.zeros(thresholds.shape[0])
+        best_overall_loss = 1.0  # Tracks the maximum validation loss
+        early_stopping_counter = 0
 
         # The number 1 in fixed point representation with the specific precision
         fp_one = 1 << self._precision
@@ -398,7 +395,7 @@ class BudgetOptimizer:
                                                      model_correct=train_data.model_correct,
                                                      stop_probs=train_data.stop_probs)
 
-                has_improved = np.logical_and(loss < best_loss, np.logical_not(has_converged))
+                has_improved = loss < best_loss
 
                 best_t = np.where(has_improved, candidate_value, best_t)
                 best_power = np.where(has_improved, avg_power, best_power)
@@ -413,14 +410,11 @@ class BudgetOptimizer:
                                                          stop_probs=valid_data.stop_probs)
 
             # Detect improvement on the validation set
-            has_improved = np.logical_and(valid_loss < best_valid_loss, np.logical_not(has_converged))
+            has_improved = valid_loss < best_valid_loss
 
             best_thresholds = np.where(np.expand_dims(has_improved, axis=-1), thresholds, best_thresholds)  # [S, L]
             best_valid_loss = np.where(has_improved, valid_loss, best_valid_loss)  # [S]
             best_valid_power = np.where(has_improved, valid_power, best_valid_power)  # [S]
-
-            # Increment early stopping counter
-            early_stopping_counter = np.where(has_improved, 0, np.minimum(early_stopping_counter + 1, self._patience))
 
             # Allow budgets to steal thresholds with improved validation loss. We add a random move
             # to explore the `promising` region
@@ -438,21 +432,20 @@ class BudgetOptimizer:
                         thresholds[j] = round_to_precision(best_thresholds[lowest_idx] + random_move, self._precision)
                         thresholds[j] = np.clip(thresholds[j], a_min=0, a_max=1)
 
-                        early_stopping_counter[j] = 0
-
-            # Detect convergence
-            has_converged = (early_stopping_counter >= self._patience)
-
-            prev_level = level
-
             if should_print:
                 print('Completed Iteration: {0}: level {1}'.format(i, level))
                 print('\tBest Train Loss: {0}'.format(best_loss))
                 print('\tApprox Train Power: {0}'.format(best_power))
                 print('\tBest Valid Loss: {0}'.format(best_valid_loss))
 
-            # Terminate early if all budgets have converged
-            if has_converged.all():
+            # Detect convergence
+            if lowest_loss < best_overall_loss:
+                best_overall_loss = lowest_loss
+                early_stopping_counter = 0
+            else:
+                early_stopping_counter += 1
+
+            if early_stopping_counter >= self._patience:
                 if should_print:
                     print('Converged.')
                 break
@@ -479,13 +472,6 @@ class BudgetOptimizer:
         equal_mask = np.isclose(final_loss, best_loss)
         best_idx = np.argmax(final_power * equal_mask)
 
-        #equal_mask = np.logical_and(np.isclose(final_loss, best_loss), final_power <= budget)
-
-        #if equal_mask.any():
-        #    best_idx = np.argmax(final_power * equal_mask)
-        #else:
-        #    best_idx = np.argmin(best_loss)
-
         return best_thresholds[best_idx], final_loss[best_idx]
 
 
@@ -508,8 +494,7 @@ class AdaptiveController(Controller):
                  budgets: List[float],
                  trials: int,
                  patience: int,
-                 max_iter: int,
-                 train_frac: float):
+                 max_iter: int):
         self._model_path = model_path
         self._dataset_folder = dataset_folder
 
@@ -527,7 +512,6 @@ class AdaptiveController(Controller):
         self._trials = trials
         self._patience = patience
         self._max_iter = max_iter
-        self._train_frac = train_frac
 
         self._thresholds = None
         self._est_accuracy = None
@@ -543,8 +527,7 @@ class AdaptiveController(Controller):
                                                  precision=self._precision,
                                                  trials=self._trials,
                                                  patience=patience,
-                                                 max_iter=max_iter,
-                                                 train_frac=train_frac)
+                                                 max_iter=max_iter)
 
     @property
     def thresholds(self) -> np.ndarray:
@@ -877,7 +860,6 @@ class AdaptiveController(Controller):
             'precision': self._precision,
             'patience': self._patience,
             'max_iter': self._max_iter,
-            'train_frac': self._train_frac,
             'avg_level_counts': self._avg_level_counts,
             'est_accuracy': self._est_accuracy,
             'stop_means': self._stop_means,
@@ -919,8 +901,7 @@ class AdaptiveController(Controller):
                                         budgets=serialized_info['budgets'],
                                         trials=serialized_info['trials'],
                                         patience=serialized_info.get('patience', 10),
-                                        max_iter=serialized_info.get('max_iter', 100),
-                                        train_frac=serialized_info.get('train_frac', 0.7))
+                                        max_iter=serialized_info.get('max_iter', 100))
 
         # Set remaining fields
         controller._thresholds = serialized_info['thresholds']
@@ -1118,7 +1099,6 @@ if __name__ == '__main__':
     parser.add_argument('--trials', type=int, default=1)
     parser.add_argument('--patience', type=int, default=25)
     parser.add_argument('--max-iter', type=int, default=100)
-    parser.add_argument('--train-frac', type=float, default=0.7)
     parser.add_argument('--should-print', action='store_true')
     args = parser.parse_args()
 
@@ -1132,8 +1112,7 @@ if __name__ == '__main__':
                                         budgets=args.budgets,
                                         trials=args.trials,
                                         patience=args.patience,
-                                        max_iter=args.max_iter,
-                                        train_frac=args.train_frac)
+                                        max_iter=args.max_iter)
 
         # Fit the model on the validation set
         controller.fit(series=DataSeries.VALID, should_print=args.should_print)
