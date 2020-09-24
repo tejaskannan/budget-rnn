@@ -36,42 +36,6 @@ class SystemType(Enum):
     FIXED_UNDER_BUDGET = auto()
 
 
-def estimate_label_counts(predictions: np.ndarray, stop_probs: np.ndarray, thresholds: np.ndarray, num_classes: int) -> Dict[int, np.ndarray]:
-    """
-    Counts the number of levels for each class predicted by the adaptive model. This count is based on the validation set
-    and used as an estimate for the behavior on the testing set.
-
-    Args:
-        predictions: A [N, L] array of predictions for each sample (N) and level (L) of the model
-        stop_probs: A [N, L] array of stop probabilities for each sample (N) and level (L) of the model
-        thresholds: A [L] array of thresholds for the current budget. These are derived from the controller.
-        num_classes: The number of classes.
-    Returns:
-        A dictionary mapping the class index to an [L] array of inference counts per level
-    """
-    # Compute the number of levels to execute using the thresholds and stop probabilities
-    levels = levels_to_execute(np.expand_dims(stop_probs, axis=0), np.expand_dims(thresholds, axis=0))  # [1, N]
-    
-    # Use the number of levels to fetch the predictions
-    pred = classification_for_levels(predictions, levels)  # [1, N]
-    
-    # Reshape arrays to size [N]
-    pred = pred[0]
-    levels = levels[0]
-
-    result: Dict[int, np.ndarray] = dict()
-
-    # Collect the counts for each class
-    num_levels = predictions.shape[1]
-    for class_idx in range(num_classes):
-        class_mask = (pred == class_idx).astype(int)
-
-        class_level_counts = np.bincount(levels, minlength=num_levels, weights=class_mask)
-        result[class_idx] = class_level_counts
-
-    return result
-
-
 class RuntimeSystem:
 
     def __init__(self,
@@ -151,9 +115,11 @@ class RuntimeSystem:
         return self._system_type
 
     def get_power(self) -> np.ndarray:
+        assert self._budget_controller is not None, 'Must have a budget controller'
         return np.array(self._budget_controller.power)
 
     def get_energy(self) -> np.ndarray:
+        assert self._budget_controller is not None
         return np.cumsum(self._budget_controller.power)
 
     def get_num_correct(self) -> np.ndarray:
@@ -204,11 +170,7 @@ class RuntimeSystem:
 
             # Create the power distribution. TODO: Remove (explicit) dependence on the validation results.
             # Instead, we should mix the label counts from the bounded sides using a weighted average.
-            thresholds = self._controller.get_thresholds(budget=budget)
-            prior_counts = estimate_label_counts(predictions=self._valid_predictions,
-                                                 stop_probs=self._valid_stop_probs,
-                                                 thresholds=thresholds,
-                                                 num_classes=self._num_classes)
+            prior_counts = self._controller.estimate_level_distribution(budget=budget)
 
             self._budget_distribution = BudgetDistribution(prior_counts=prior_counts,
                                                            budget=budget,
@@ -228,11 +190,12 @@ class RuntimeSystem:
                                                 budget=budget)
         self._budget_step = 0
         self._current_budget = budget
-        self._num_correct = []
-        self._target_budgets = []
-        self._levels = []
+        self._num_correct: List[float] = []
+        self._target_budgets: List[float] = []
+        self._levels: List[int] = []
 
     def step(self, budget: float, power_noise: float, t: int):
+        assert self._budget_controller is not None, 'Must call init_for_budget() first'
         stop_probs = self._stop_probs[t] if self._stop_probs is not None and t < len(self._stop_probs) else None
 
         budget += self._budget_step
@@ -270,10 +233,10 @@ class RuntimeSystem:
                 if is_end_of_window:
                     self._budget_step = budget_step
 
-    def estimate_validation_results(self, budget: float, max_time: int) -> float:
+    def estimate_validation_results(self, budget: float, max_time: int) -> Tuple[float, float]:
         assert self._controller is not None, 'Must have an internal controller'
         assert isinstance(self._controller, AdaptiveController), 'Can only estimate validation results for adaptive controllers'
 
         acc, power = self._controller.evaluate(budget=budget, model_results=self._valid_results)
-    
+
         return acc, power

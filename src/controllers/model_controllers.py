@@ -155,8 +155,8 @@ def get_budget_interpolation_values(target: float, budgets: np.ndarray, avg_leve
             lower_power = expected_power[-1]
             upper_power = max_power
     else:
-        lower_budget = expected_power[lower_idx]
-        upper_budget = expected_power[upper_idx]
+        lower_power = expected_power[lower_idx]
+        upper_power = expected_power[upper_idx]
 
     if abs(upper_power - lower_power) < SMALL_NUMBER:
         return lower_idx, lower_idx, lower_power
@@ -687,7 +687,7 @@ class AdaptiveController(Controller):
         elif upper_idx >= self._num_levels:
             upper_counts = self._highest_distribution
         else:
-            lower_counts = self._label_distribution[self._budgets[upper_idx]]
+            upper_counts = self._label_distribution[self._budgets[upper_idx]]
 
         result: Dict[int, np.ndarray] = dict()
         for label in range(self._num_classes):
