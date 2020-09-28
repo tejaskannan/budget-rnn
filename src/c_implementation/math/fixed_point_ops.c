@@ -17,7 +17,9 @@ int16_t fp_mul(int16_t x, int16_t y, uint16_t precision) {
 
 
 int16_t fp_div(int16_t x, int16_t y, uint16_t precision) {
-    return (int16_t) (((int) x * (1 << precision)) / y);
+    int32_t xLarge = (int32_t) x;
+    int32_t one = (int32_t) (1 << precision);
+    return (int16_t) ((xLarge * one) / y);
 }
 
 
@@ -58,7 +60,7 @@ int16_t fp_round_to_int(int16_t x, uint16_t precision) {
     int16_t fractionMask = (1 << precision) - 1;
     int16_t fractionalPart = x & fractionMask;
     int16_t integerPart = x & ~(fractionMask);
-    
+
     int16_t roundedVal;
     int16_t one_half = 1 << (precision - 1);
     if (fractionalPart >= one_half) {
@@ -66,7 +68,6 @@ int16_t fp_round_to_int(int16_t x, uint16_t precision) {
     } else {
         roundedVal = integerPart;
     }
-
 
     if (should_invert_sign) {
         return fp_neg(roundedVal);
@@ -89,7 +90,7 @@ int16_t fp_leaky_relu(int16_t x, uint16_t precision) {
         return x;
     }
 
-    // Fixed factor of 1/4
+    // Fixed leak rate of 1/4
     return fp_mul(x, 1 << (precision - 2), precision);
 }
 

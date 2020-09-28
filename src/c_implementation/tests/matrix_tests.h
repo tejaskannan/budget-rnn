@@ -43,5 +43,10 @@
     void test_argmax_two(void);
     void test_matrix_min(void);
     void test_matrix_sum(void);
+    void test_argsort(void);
+    void test_argsort_two(void);
+    void test_sparsemax(void);
+    void test_sparsemax_two(void);
+    void test_sparsemax_equal(void);
 
 #endif

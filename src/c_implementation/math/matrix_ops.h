@@ -25,6 +25,8 @@ matrix *matrix_set(matrix *mat, int16_t value);
 matrix *matrix_replace(matrix *dst, matrix *src);
 matrix *vstack(matrix *result, matrix *mat1, matrix *mat2);
 int16_t dot_product(matrix *vec1, matrix *vec2, uint16_t precision);
+uint16_t *argsort(matrix *vec, uint16_t *result);
+matrix *sparsemax(matrix *result, matrix *vec, uint16_t precision);
 
 // Operations useful for various neural network functions
 int16_t argmax(matrix *vec);

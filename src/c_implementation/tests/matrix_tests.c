@@ -79,6 +79,19 @@ int main(void) {
     test_matrix_sum();
     printf("\tPassed matrix sum test.\n");
 
+    // Argsort
+    printf("---- Testing Argsoft ----\n");
+    test_argsort();
+    test_argsort_two();
+    printf("\tPassed argsort tests.\n");
+
+    // Sparsemax
+    printf("---- Testing Sparsemax ----\n");
+    test_sparsemax();
+    test_sparsemax_two();
+    test_sparsemax_equal();
+    printf("\tPassed Sparsemax tests.\n");
+
     printf("--------------------\n");
     printf("Completed all tests.\n");
     return 0;
@@ -480,6 +493,109 @@ void test_matrix_min(void) {
 
     int16_t min = matrix_min(&mat);
     assert(int_to_fp(1, PRECISION) == min);
+}
+
+
+void test_argsort(void) {
+    int16_t vecData[] = { 2, 3, 1, 5, 4, 2 };
+    matrix vec = { to_fixed_point(vecData, 6, PRECISION), 6, 1 };
+
+    uint16_t expected[] = { 3, 4, 1, 0, 5, 2 };
+
+    uint16_t result[6];
+    argsort(&vec, result);
+
+    uint16_t i = 0;
+    for (; i < 6; i++) {
+        assert(expected[i] == result[i]);
+    }
+}
+
+
+void test_argsort_two(void) {
+    int16_t vecData[] = { 2, 0, 3, 0, 1, 0, 5, 0, 4, 0, 2, 0 };
+    matrix vec = { to_fixed_point(vecData, 12, PRECISION), 6, 2 };
+
+    uint16_t expected[] = { 6, 8, 2, 0, 10, 4 };
+
+    uint16_t result[6];
+    argsort(&vec, result);
+
+    uint16_t i = 0;
+    for (; i < 6; i++) {
+        assert(expected[i] == result[i]);
+    }
+}
+
+
+void test_sparsemax(void) {
+    int16_t vecData[6];
+    vecData[0] = float_to_fp(1.25, PRECISION);
+    vecData[1] = float_to_fp(-0.5, PRECISION);
+    vecData[2] = float_to_fp(0, PRECISION);
+    vecData[3] = float_to_fp(-1, PRECISION);
+    vecData[4] = float_to_fp(1.5, PRECISION);
+    vecData[5] = float_to_fp(1, PRECISION);
+
+    matrix vec = { vecData, 6, 1 };
+
+    int16_t expectedData[6] = { 0, 0, 0, 0, 0, 0 };
+    expectedData[0] = float_to_fp(43.0 / 128.0, PRECISION);
+    expectedData[4] = float_to_fp(75.0 / 128.0, PRECISION);
+    expectedData[5] = float_to_fp(11.0 / 128.0, PRECISION);
+    
+    matrix expected = { expectedData, 6, 1 };
+
+    int16_t resultData[6];
+    matrix result = { resultData, 6, 1 };
+
+    sparsemax(&result, &vec, PRECISION);
+
+    assert(matrix_equal(&expected, &result));
+}
+
+
+void test_sparsemax_two(void) {
+    int16_t vecData[12] = { 0 };
+    vecData[0] = float_to_fp(1.25, PRECISION);
+    vecData[2] = float_to_fp(-0.5, PRECISION);
+    vecData[4] = float_to_fp(0, PRECISION);
+    vecData[6] = float_to_fp(-1, PRECISION);
+    vecData[8] = float_to_fp(1.5, PRECISION);
+    vecData[10] = float_to_fp(1, PRECISION);
+
+    matrix vec = { vecData, 6, 2 };
+
+    int16_t expectedData[12] = { 0 };
+    expectedData[0] = float_to_fp(43.0 / 128.0, PRECISION);
+    expectedData[8] = float_to_fp(75.0 / 128.0, PRECISION);
+    expectedData[10] = float_to_fp(11.0 / 128.0, PRECISION);
+    
+    matrix expected = { expectedData, 6, 2 };
+
+    int16_t resultData[12] = { 0 };
+    matrix result = { resultData, 6, 2 };
+
+    sparsemax(&result, &vec, PRECISION);
+
+    assert(matrix_equal(&expected, &result));
+}
+
+
+void test_sparsemax_equal(void) {
+    int16_t vecData[4] = { 1, 1, 1, 1 };
+    matrix vec = { to_fixed_point(vecData, 4, PRECISION), 4, 1 };
+
+    int16_t one_fourth = 1 << (PRECISION - 2);
+    int16_t expectedData[4] = { one_fourth, one_fourth, one_fourth, one_fourth };
+    matrix expected = { expectedData, 4, 1 };
+
+    int16_t resultData[4];
+    matrix result = { resultData, 4, 1 };
+
+    sparsemax(&result, &vec, PRECISION);
+
+    assert(matrix_equal(&expected, &result));
 }
 
 

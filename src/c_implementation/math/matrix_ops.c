@@ -355,3 +355,84 @@ int16_t argmax(matrix *vec) {
 
     return max_index;
 }
+
+
+uint16_t *argsort(matrix *vec, uint16_t *result) {
+    // Sorts indices in descending order
+    // according to the first column of the given matrix. Sorting
+    // performed by insertion sort, as the vectors are generally small.
+
+    // Initialize the result indices.
+    uint16_t i;
+    for (i = 0; i < vec->numRows; i++) {
+        result[i] = i * vec->numCols;
+    }
+
+    uint16_t j, k;
+    uint16_t idx1, idx2;
+    int16_t t;
+
+    for (k = vec->numRows; k > 0; k--) {
+        i = vec->numRows - k;
+
+        for (j = i; j > 0; j--) {
+            idx1 = result[j-1];
+            idx2 = result[j];
+
+            // Swap if result[j] corresponds to a larger
+            // value than result[j-1]
+            if (vec->data[idx2] > vec->data[idx1]) {
+                t = result[j-1];
+                result[j-1] = result[j];
+                result[j] = t;
+            }
+        }
+    }
+
+    return result;
+}
+
+
+matrix *sparsemax(matrix *result, matrix *vec, uint16_t precision) {
+    // Sort indices of the vector in descending order
+    uint16_t sortedIndices[vec->numRows];
+    argsort(vec, sortedIndices);
+
+    // Compute the k(z) function
+    int16_t partialSum = 0;
+    int16_t one = 1 << precision;
+    int16_t zk = 0;
+    int16_t coordinate = 0;
+    uint16_t k = 0;
+
+    uint16_t i;
+    for (i = vec->numRows; i > 0; i--) {
+        k = vec->numRows - i + 1;
+        zk = vec->data[sortedIndices[k - 1]];
+        partialSum = fp_add(partialSum, zk);
+
+        coordinate = fp_add(one, fp_mul(int_to_fp(k, precision), zk, precision));
+
+        if (coordinate <= partialSum) {
+            k = k - 1;
+            partialSum = fp_add(partialSum, fp_neg(zk));
+            break;
+        }
+    }
+
+    // Compute the threshold, t(z)
+    int16_t kz = int_to_fp(k, precision);
+    int16_t sumMinusOne = fp_add(partialSum, fp_neg(one));
+    int16_t threshold = fp_div(sumMinusOne, kz, precision);
+
+    // Use the threshold to apply the sparse normalization function
+    uint16_t j, idx;
+    int16_t diff;
+    for (j = vec->numRows; j > 0; j--) {
+        idx = (j - 1) * vec->numCols;
+        diff = fp_sub(vec->data[idx], threshold);
+        result->data[idx] = fp_relu(diff, precision);
+    }
+
+    return result;
+}
