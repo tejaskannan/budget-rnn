@@ -9,7 +9,7 @@ static dtype DATA_BUFFER[10 * STATE_SIZE * VECTOR_COLS] = {0};
 #if IS_MSP
 DSPLIB_DATA(STATE_BUFFER, 4)
 #endif
-static dtype STATE_BUFFER[3 * STATE_SIZE * VECTOR_COLS] = {0};
+static dtype STATE_BUFFER[3 * STATE_SIZE * VECTOR_COLS + NUM_OUTPUT_FEATURES * VECTOR_COLS] = {0};
 
 #if IS_MSP
 DSPLIB_DATA(INPUT_BUFFER, 4)
@@ -35,7 +35,7 @@ uint8_t should_process(uint16_t t, ExecutionState *execState) {
 }
 
 
-void process_input(matrix *input, matrix states[SEQ_LENGTH], uint16_t step, ExecutionState *execState) {
+void process_input(matrix *input, matrix states[SEQ_LENGTH], matrix logits[NUM_OUTPUTS], uint16_t step, ExecutionState *execState) {
     /**
      * Processes the current input using the recurrent neural network. This function tracks when inference should stop
      * through the execution state struct.
@@ -110,7 +110,6 @@ void process_input(matrix *input, matrix states[SEQ_LENGTH], uint16_t step, Exec
 
     matrix prevState = { STATE_BUFFER + stateBufferOffset, STATE_SIZE, VECTOR_COLS };
 
-    // nextState = gate * nextState + (1-gate) * prevState
     scalar_product(&nextState, &nextState, gate, FIXED_POINT_PRECISION);
     scalar_product(&prevState, &currentState, oneMinusGate, FIXED_POINT_PRECISION);
     matrix_add(&nextState, &nextState, &prevState);
@@ -123,15 +122,22 @@ void process_input(matrix *input, matrix states[SEQ_LENGTH], uint16_t step, Exec
     #if defined(IS_SAMPLE_RNN) || defined(IS_RNN)
     // If we reach the last element of the highest level, we compute the output.
     uint8_t isEnd = isLastSampleInLevel(step, execState->levelsToExecute);
-    if ((currentLevel == execState->levelsToExecute && execState->isStopped && isEnd) || (step == SEQ_LENGTH - 1)) {
-        int16_t prediction = compute_prediction(&nextState, FIXED_POINT_PRECISION);
 
-        execState->prediction = prediction;
+    if (isEnd) {
+        compute_logits(logits + currentLevel, &nextState, FIXED_POINT_PRECISION);
+    }
+
+    if ((currentLevel == execState->levelsToExecute && execState->isStopped && isEnd) || (step == SEQ_LENGTH - 1)) {
+        matrix pooledLogits = { STATE_BUFFER + stateBufferOffset, NUM_CLASSES, VECTOR_COLS };
+        pool_logits(&pooledLogits, logits, states, currentLevel + 1, FIXED_POINT_PRECISION);
+
+        execState->prediction = argmax(&pooledLogits);
         execState->isCompleted = 1;
     }
     #else
-    int16_t prediction = compute_prediction(&nextState, FIXED_POINT_PRECISION);
-    execState->prediction = prediction;
+    matrix logProbs = { STATE_BUFFER + stateBufferOffset, NUM_CLASSES, VECTOR_COLS };
+    compute_logits(&logProbs, &nextState, FIXED_POINT_PRECISION);
+    execState->prediction = argmax(&logProbs);
     #endif
 }
 
@@ -230,7 +236,7 @@ matrix *apply_transformation(matrix *result, matrix *input, matrix *state, uint1
 
 
 // Function to compute output (1 or 2 hidden layer depending on model type)
-int16_t compute_prediction(matrix *input, uint16_t precision) {
+matrix *compute_logits(matrix *result, matrix *input, uint16_t precision) {
     /**
      * Function to compute the prediction using a feed-forward network.
      */
@@ -239,14 +245,11 @@ int16_t compute_prediction(matrix *input, uint16_t precision) {
     matrix hidden = { DATA_BUFFER + data_buffer_offset, OUTPUT_LAYER_HIDDEN_0_BIAS_MAT->numRows, input->numCols };
     data_buffer_offset += hidden.numRows * hidden.numCols;
 
-    matrix output = { DATA_BUFFER + data_buffer_offset, NUM_OUTPUT_FEATURES, input->numCols };
-    data_buffer_offset += output.numRows * output.numCols;
-
     // Apply the dense layers
     dense(&hidden, input, OUTPUT_LAYER_HIDDEN_0_KERNEL_MAT, OUTPUT_LAYER_HIDDEN_0_BIAS_MAT, &fp_leaky_relu, precision);
-    dense(&output, &hidden, OUTPUT_LAYER_OUTPUT_KERNEL_MAT, OUTPUT_LAYER_OUTPUT_BIAS_MAT, &fp_linear, precision);
+    dense(result, &hidden, OUTPUT_LAYER_OUTPUT_KERNEL_MAT, OUTPUT_LAYER_OUTPUT_BIAS_MAT, &fp_linear, precision);
 
-    return argmax(&output);
+    return result;
 }
 
 
@@ -270,6 +273,79 @@ int16_t compute_stop_output(matrix *state, uint16_t precision) {
     output = fp_sigmoid(output, precision);
 
     return output;
+}
+
+matrix *pool_logits(matrix *result, matrix logits[NUM_OUTPUTS], matrix states[SEQ_LENGTH], uint16_t n, uint16_t precision) {
+    if (n <= 1) {
+        matrix_replace(result, &logits[0]);
+        return result;
+    }
+
+    // Set the result data to zero.
+    matrix_set(result, 0);
+
+    // Compute the aggregation weights using the model parameters
+    uint16_t dataBufferOffset = 0;
+    matrix aggregationWeights = { DATA_BUFFER + dataBufferOffset, n, VECTOR_COLS };
+    dataBufferOffset += aggregationWeights.numRows * aggregationWeights.numCols;
+
+    matrix stacked = { DATA_BUFFER + dataBufferOffset, 2 * STATE_SIZE, VECTOR_COLS };
+    dataBufferOffset += stacked.numRows * stacked.numCols;
+
+    int16_t weight;
+    uint16_t offset;
+
+    #if STRIDE_LENGTH > 1
+    offset = SEQ_LENGTH - NUM_OUTPUTS + n - 1;
+    #else
+    offset = n * SAMPLES_PER_SEQ - 1;
+    #endif
+
+    matrix *anchor = states + offset;
+
+    uint16_t i;
+    matrix *state;
+    for (i = n; i > 0; i--) {
+        // Get (i-1)-th final state depending on the stride length
+        #if STRIDE_LENGTH > 1
+        offset = SEQ_LENGTH - NUM_OUTPUTS + i - 1;
+        #else
+        offset = i * SAMPLES_PER_SEQ - 1;
+        #endif
+
+        // Stack the states
+        state = states + offset;
+        vstack(&stacked, state, anchor);
+
+        // Apply the aggregation layer
+        weight = dot_product(AGGREGATION_LAYER_KERNEL_MAT, &stacked, precision);
+        weight = fp_add(weight, AGGREGATION_LAYER_BIAS_MAT->data[0]);
+        
+        aggregationWeights.data[i-1] = weight;
+    }
+
+    // `Free` the stacked state from the data memory
+    dataBufferOffset -= stacked.numRows * stacked.numCols;
+
+    // Set the result data to zero.
+    matrix_set(result, 0);
+
+    // Normalize the weights using SparseMax
+    sparsemax(&aggregationWeights, &aggregationWeights, precision);
+
+    matrix temp = { DATA_BUFFER + dataBufferOffset, NUM_CLASSES, VECTOR_COLS };
+    dataBufferOffset += temp.numRows * temp.numCols;
+
+    // Aggregate logits using the weighted average
+    for (i = n; i > 0; i--) {
+        // Apply weight
+        scalar_product(&temp, logits + i - 1, aggregationWeights.data[i-1], precision);
+
+        // Aggregate into the result array
+        matrix_add(result, result, &temp);
+    }
+
+    return result;
 }
 #endif
 

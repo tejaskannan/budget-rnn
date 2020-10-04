@@ -702,68 +702,6 @@ class AdaptiveController(Controller):
         if budget_idx >= 0:
             return self._thresholds[budget_idx]
 
-        # Otherwise, we interpolate the thresholds from the nearest two known budgets
-        #lower_budget_idx, upper_budget_idx = None, None
-        #for idx in range(0, len(self._budgets) - 1):
-        #    if self._budgets[idx] < budget and self._budgets[idx + 1] > budget:
-        #        lower_budget_idx = idx
-        #        upper_budget_idx = idx + 1
-
-        ## Compute the expected power for each threshold
-        #power_estimates = get_power_estimates(num_levels=self._num_levels,
-        #                                      seq_length=self._seq_length)
-        #expected_power: List[float] = []
-        #for counts in self._avg_level_counts:
-        #    expected = np.sum(counts * power_estimates)
-        #    expected_power.append(expected)
-
-        ## If the budget is out of the range of the learned budgets, the we supplement the learned
-        ## thresholds with fixed policies at either end.
-        #if lower_budget_idx is None or upper_budget_idx is None:
-        #    if budget < self._budgets[0]:
-        #        # The budget is below the lowest learned budget. If it is below the lowest power amount,
-        #        # then we use a fixed policy on the lowest level. Otherwise, we interpolate as usual.
-        #        fixed_thresholds = np.zeros_like(self._thresholds[0])
-        #        if budget < min_power:
-        #            return fixed_thresholds
-
-        #        lower_budget = min_power
-        #        # upper_budget = self._budgets[0]
-        #        upper_budget = expected_power[0]
-
-        #        lower_thresh = fixed_thresholds
-        #        upper_thresh = self._thresholds[0]
-        #    else:
-        #        # The budget is above the highest learned budget. We either fix the policy to the highest level
-        #        # or interpolate given the position of the budget w.r.t. the highest power level.
-        #        fixed_thresholds = np.ones_like(self._thresholds[0])
-        #        fixed_thresholds[-1] = 0
-        #        if budget > max_power:
-        #            return fixed_thresholds
-
-        #        lower_budget = expected_power[-1]
-        #        #lower_budget = self._budgets[-1]
-        #        upper_budget = max_power
-
-        #        lower_thresh = self._thresholds[-1]
-        #        upper_thresh = fixed_thresholds
-        #else:
-        #    # lower_budget = self._budgets[lower_budget_idx]
-        #    # upper_budget = self._budgets[upper_budget_idx]
-
-        #    lower_budget = expected_power[lower_budget_idx]
-        #    upper_budget = expected_power[upper_budget_idx]
-
-        #    lower_thresh = self._thresholds[lower_budget_idx]
-        #    upper_thresh = self._thresholds[upper_budget_idx]
-
-        #if abs(upper_budget - lower_budget) < SMALL_NUMBER:
-        #    return lower_thresh
-
-        ## Interpolation weight, Clipped to the range [0, 1]
-        #z = (budget - lower_budget) / (upper_budget - lower_budget)
-        #z = min(max(z, 0), 1)
-
         lower_idx, upper_idx, weight = get_budget_interpolation_values(budgets=self._budgets,
                                                                        target=budget,
                                                                        avg_level_counts=self._avg_level_counts,

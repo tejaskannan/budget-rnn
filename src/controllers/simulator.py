@@ -78,8 +78,8 @@ def plot_and_save(sim_results: Dict[str, SimulationResult],
         if system.system_type == SystemType.ADAPTIVE:
             valid_accuracy = system.estimate_validation_results(budget=budget,
                                                                 max_time=max_time)
-            # print('Budget: {0:.3f}, Valid Results: {1}'.format(budget, valid_accuracy))
-            # print(np.bincount(system.get_levels(), minlength=10))
+            print('Budget: {0:.3f}, Valid Results: {1}'.format(budget, valid_accuracy))
+            print(np.bincount(system.get_levels(), minlength=10))
         else:
             valid_accuracy = None
 

@@ -239,4 +239,8 @@ class RuntimeSystem:
 
         acc, power = self._controller.evaluate(budget=budget, model_results=self._valid_results)
 
+        print('0.75 thresholds: {0}'.format(self._controller.get_thresholds(budget=0.75)))
+        print('{0:.2f} thresholds: {1}'.format(budget, self._controller.get_thresholds(budget=budget)))
+        print('1.0 thresholds: {0}'.format(self._controller.get_thresholds(budget=1.0)))
+
         return acc, power

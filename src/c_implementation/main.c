@@ -29,6 +29,15 @@ int main(int argc, char **argv) {
         states[i].data = &stateData[i * STATE_SIZE * VECTOR_COLS];
     }
 
+    // Initialize a buffer for the logits
+    matrix logits[NUM_OUTPUTS];
+    int16_t logitsData[NUM_OUTPUTS * NUM_CLASSES * VECTOR_COLS] = {0};
+    for (uint16_t i = 0; i < NUM_OUTPUTS; i++) {
+        logits[i].numRows = NUM_CLASSES;
+        logits[i].numCols = VECTOR_COLS;
+        logits[i].data = &logitsData[i * NUM_CLASSES * VECTOR_COLS];
+    }
+
     // Initialize an input buffer
     int16_t data[NUM_INPUT_FEATURES * VECTOR_COLS];
     matrix input;
@@ -86,7 +95,7 @@ int main(int argc, char **argv) {
             }
 
             if (should_process(i, &execState)) {
-                process_input(&input, states, i, &execState);
+                process_input(&input, states, logits, i, &execState);
             } else {
                 if (i > 0) {
                     matrix_replace(states + i, states + (i - 1));

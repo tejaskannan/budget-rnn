@@ -1,4 +1,5 @@
 import numpy as np
+from typing import List
 
 # Constants from taking readings from the DHT-11 sensor
 VCC = 3.3                  # Supply Voltage (3.3 V)

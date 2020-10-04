@@ -20,13 +20,11 @@ def get_avg_accuracy(validation_accuracy: Dict[float, float], budget: float) -> 
     """
     budget_under, budget_over = None, None
     for b in validation_accuracy.keys():
-        if b <= budget and (budget_under is None or b > budget_under):
+        if b < budget and (budget_under is None or b > budget_under):
             budget_under = b
 
-        if b >= budget and (budget_over is None or b < budget_over):
+        if b > budget and (budget_over is None or b < budget_over):
             budget_over = b
-
-    # print('Budget: {0}, Budget Over: {1}, Budget Under: {2}'.format(budget, budget_over, budget_under))
 
     if budget_under is None:
         assert budget_over is not None, 'Could to find bounds for {0}'.format(budget)
@@ -43,7 +41,7 @@ def get_model_for_budget(model_accuracy: List[Dict[float, float]], budget: float
 
     for model_idx, valid_accuracy in enumerate(model_accuracy):
         avg_acc = get_avg_accuracy(valid_accuracy, budget=budget)
-
+        
         if best_accuracy < avg_acc:
             best_idx = model_idx
             best_accuracy = avg_acc
@@ -109,11 +107,6 @@ if __name__ == '__main__':
     adaptive_model_accuracy: List[Dict[float, float]] = []
     fixed_model_accuracy: List[Dict[float, float]] = []
 
-    adaptive_best_accuracy: Dict[float, float] = dict()  # Maps budget to the best validation accuracy
-    fixed_best_accuracy: Dict[float, float] = dict()
-
-    best_power: Dict[float, float] = dict()
-
     adaptive_logs: List[Dict[str, Dict[str, Dict[str, Any]]]] = []
     fixed_budget_logs: List[Dict[str, Dict[str, Dict[str, Any]]]] = []
     fixed_acc_logs: List[Dict[str, Dict[str, Dict[str, Any]]]] = []
@@ -147,6 +140,9 @@ if __name__ == '__main__':
                                              dataset_folder=args.dataset_folder,
                                              model_path=model_path)
 
+        if controller._est_accuracy is None:
+            continue
+
         print('==========')
 
         adaptive_valid_accuracy: Dict[float, float] = dict()
@@ -155,16 +151,12 @@ if __name__ == '__main__':
         # Select budgets in which to use this model
         budgets = controller.budgets
         for budget in budgets:
-            
-            # Evaluate the adaptive system
-            adaptive_accuracy, adaptive_power = controller.evaluate(budget=budget, model_results=valid_results)
+            # Evaluate the adaptive system using the estimated results from threshold fitting
+            adaptive_accuracy = controller.get_estimated_accuracy(budget=budget)
 
-            print('Model Idx: {0}, Budget: {1}, Accuracy: {2:.4f}, Power: {3:.4f}'.format(model_idx, budget, adaptive_accuracy, adaptive_power))
+            print('Model Idx: {0}, Budget: {1}, Accuracy: {2:.4f}'.format(model_idx, budget, adaptive_accuracy))
 
             adaptive_valid_accuracy[budget] = adaptive_accuracy
-
-            if adaptive_best_accuracy.get(budget, 0.0) < adaptive_accuracy:
-                adaptive_best_accuracy[budget] = adaptive_accuracy
 
             # Evaluate the fixed system
             max_time = valid_results.stop_probs.shape[0]
@@ -181,9 +173,6 @@ if __name__ == '__main__':
             adjusted_fixed_accuracy = (fixed_accuracy * time_steps) / max_time  # [S]
 
             fixed_valid_accuracy[budget] = adjusted_fixed_accuracy
-
-            if fixed_best_accuracy.get(budget, 0.0) < adjusted_fixed_accuracy:
-                fixed_best_accuracy[budget] = adjusted_fixed_accuracy
         
         adaptive_model_accuracy.append(adaptive_valid_accuracy)
         fixed_model_accuracy.append(fixed_valid_accuracy)
