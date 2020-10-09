@@ -1,5 +1,27 @@
 #include "matrix_ops.h"
 
+#ifdef IS_MSP
+#include "DSPLib.h"
+
+// For MSP implementations, we allocate memory in the LEA RAM.
+// This memory is used when executing matrix multiplications.
+DSPLIB_DATA(MULTIPLY_BUFFER, 4);
+static dtype MULTIPLY_BUFFER[1800];
+
+void dma_load(dtype *result, dtype *data, uint16_t n) {
+    /**
+     * Loads the first n elements of the data array into the result array using
+     * DMA.
+     */
+    // Configure DMA channel 0
+    __data20_write_long((uintptr_t) &DMA0SA, (uintptr_t) data);   // Source block address
+    __data20_write_long((uintptr_t) &DMA0DA, (uintptr_t) result); // Destination single address
+    DMA0SZ = n;                                      // Block size
+    DMA0CTL = DMADT_5 | DMASRCINCR_3 | DMADSTINCR_3; // Rpt, inc
+    DMA0CTL |= DMAEN;                                // Enable DMA0
+    DMA0CTL |= DMAREQ;
+}
+#endif
 
 matrix *matrix_add(matrix *result, matrix *mat1, matrix *mat2) {
     /**
@@ -63,35 +85,48 @@ matrix *matrix_multiply(matrix *result, matrix *mat1, matrix *mat2, uint16_t pre
     uint16_t p = mat2->numCols;
 
     #ifdef IS_MSP
+    // We first transfer the input matrices to the LEA RAM segment. We make this
+    // copy efficient using DMA.
+    uint16_t offset = 0;
+    dtype *mat1Data = dma_load(MULTIPLY_BUFFER, mat1->data, n * m);
+    offset += n * m;
+
+    dtype *mat2Data = dma_load(MULTIPLY_BUFFER + offset, mat2->data, m * p);
+    offset += m * p;
+
+    dtype *resultData = MULTIPLY_BUFFER + offset;  // Temporary buffer (in LEA RAM) for the result
+
     // When using the MSP430, we use the LEA for matrix multiplications. Based on profiling,
     // the LEA can take up to 5x fewer compute cycles than a standard implementation.
-
     msp_status status;
     msp_matrix_mpy_q15_params mulParams;
 
     // Initialze LEA metadata
     msp_status status;
     msp_matrix_mpy_q15_params mulParams;
-    mulParams.srcARows = mat1->numRows;
-    mulParams.srcACols = mat1->numCols;
-    mulParams.srcBRows = mat2->numRows;
-    mulParams.srcBCols = mat2->numCols;
+    mulParams.srcARows = n;
+    mulParams.srcACols = m;
+    mulParams.srcBRows = m;
+    mulParams.srcBCols = p;
 
     // Perform matrix multiplication using the LEA
-    status = msp_matrix_mpy_q15(&mulParams, mat1->data, mat2->data, result->data);
+    status = msp_matrix_mpy_q15(&mulParams, mat1Data, mat2Data, resultData);
     msp_checkStatus(status);
 
     // Convert back to the original fixed-point precision. The LEA assumes 15 fractional bits.
     msp_matrix_shift_q15_params shiftParams;
-    shiftParams.rows = result->numRows;
-    shiftParams.cols = result->numCols;
+    shiftParams.rows = n;
+    shiftParams.cols = p;
     shiftParams.shift = 15 - precision;
 
     // Perform element-wise shift using the LEA
     if (shiftParams.shift > 0) {
-        status = msp_matrix_shift_q15(&shiftParams, result->data, result->data);
+        status = msp_matrix_shift_q15(&shiftParams, resultData, resultData);
         msp_checkStatus(status);
     }
+
+    // Load result back into the given result matrix
+    dma_load(result->data, resultData, n * p);
 
     #else
 

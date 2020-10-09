@@ -12,14 +12,16 @@ int16_t fp_sub(int16_t x, int16_t y) {
 
 
 int16_t fp_mul(int16_t x, int16_t y, uint16_t precision) {
-    return (int16_t) (((int) x * (int) y) / (1 << precision));
+    int32_t mul = ((int32_t) x) * ((int32_t) y);
+    return (int16_t) (mul >> precision);
+    // return (int16_t) (((int32_t) x * (int32_t) y) / (1 << precision));
 }
 
 
 int16_t fp_div(int16_t x, int16_t y, uint16_t precision) {
-    int32_t xLarge = (int32_t) x;
-    int32_t one = (int32_t) (1 << precision);
-    return (int16_t) ((xLarge * one) / y);
+    int32_t xLarge = ((int32_t) x) << precision;
+    // int32_t one = (int32_t) (1 << precision);
+    return (int16_t) (xLarge / y);
 }
 
 
@@ -86,12 +88,19 @@ int16_t fp_relu(int16_t x, uint16_t precision) {
 
 
 int16_t fp_leaky_relu(int16_t x, uint16_t precision) {
-    if (x >= 0) {
-        return x;
-    }
+    //UNUSED(precision);
+    //if (x >= 0) {
+    //    return x;
+    //}
+    //return x / 4;
 
-    // Fixed leak rate of 1/4
-    return fp_mul(x, 1 << (precision - 2), precision);
+    UNUSED(precision);
+    int16_t isPositive = (int16_t) (x > 0);
+
+    // We perform division by 4 like this because bit shifting
+    // is more efficient than division on the MSP430
+    int16_t leakyX = (x >> 2);
+    return isPositive * x + (1 - isPositive) * leakyX;
 }
 
 

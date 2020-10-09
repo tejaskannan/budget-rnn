@@ -78,7 +78,7 @@ void process_input(matrix *input, matrix states[SEQ_LENGTH], matrix logits[NUM_O
     #endif
     }
 
-    // Apply recurrent cell and save results in the states array
+    // Apply recurrent cell
     matrix nextState = { STATE_BUFFER + stateBufferOffset, STATE_SIZE, VECTOR_COLS };
     stateBufferOffset += nextState.numRows * nextState.numCols;
 
@@ -128,14 +128,14 @@ void process_input(matrix *input, matrix states[SEQ_LENGTH], matrix logits[NUM_O
     }
 
     if ((currentLevel == execState->levelsToExecute && execState->isStopped && isEnd) || (step == SEQ_LENGTH - 1)) {
-        matrix pooledLogits = { STATE_BUFFER + stateBufferOffset, NUM_CLASSES, VECTOR_COLS };
+        matrix pooledLogits = { STATE_BUFFER + stateBufferOffset, NUM_OUTPUT_FEATURES, VECTOR_COLS };
         pool_logits(&pooledLogits, logits, states, currentLevel + 1, FIXED_POINT_PRECISION);
 
         execState->prediction = argmax(&pooledLogits);
         execState->isCompleted = 1;
     }
     #else
-    matrix logProbs = { STATE_BUFFER + stateBufferOffset, NUM_CLASSES, VECTOR_COLS };
+    matrix logProbs = { STATE_BUFFER + stateBufferOffset, NUM_OUTPUT_FEATURES, VECTOR_COLS };
     compute_logits(&logProbs, &nextState, FIXED_POINT_PRECISION);
     execState->prediction = argmax(&logProbs);
     #endif
@@ -321,7 +321,7 @@ matrix *pool_logits(matrix *result, matrix logits[NUM_OUTPUTS], matrix states[SE
         weight = dot_product(AGGREGATION_LAYER_KERNEL_MAT, &stacked, precision);
         weight = fp_add(weight, AGGREGATION_LAYER_BIAS_MAT->data[0]);
         
-        aggregationWeights.data[i-1] = weight;
+        aggregationWeights.data[VECTOR_COLUMN(i - 1)] = weight;
     }
 
     // `Free` the stacked state from the data memory
@@ -333,13 +333,13 @@ matrix *pool_logits(matrix *result, matrix logits[NUM_OUTPUTS], matrix states[SE
     // Normalize the weights using SparseMax
     sparsemax(&aggregationWeights, &aggregationWeights, precision);
 
-    matrix temp = { DATA_BUFFER + dataBufferOffset, NUM_CLASSES, VECTOR_COLS };
+    matrix temp = { DATA_BUFFER + dataBufferOffset, NUM_OUTPUT_FEATURES, VECTOR_COLS };
     dataBufferOffset += temp.numRows * temp.numCols;
 
     // Aggregate logits using the weighted average
     for (i = n; i > 0; i--) {
         // Apply weight
-        scalar_product(&temp, logits + i - 1, aggregationWeights.data[i-1], precision);
+        scalar_product(&temp, logits + i - 1, aggregationWeights.data[VECTOR_COLUMN(i - 1)], precision);
 
         // Aggregate into the result array
         matrix_add(result, result, &temp);

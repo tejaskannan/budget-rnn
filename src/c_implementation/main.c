@@ -31,11 +31,11 @@ int main(int argc, char **argv) {
 
     // Initialize a buffer for the logits
     matrix logits[NUM_OUTPUTS];
-    int16_t logitsData[NUM_OUTPUTS * NUM_CLASSES * VECTOR_COLS] = {0};
+    int16_t logitsData[NUM_OUTPUTS * NUM_OUTPUT_FEATURES * VECTOR_COLS] = {0};
     for (uint16_t i = 0; i < NUM_OUTPUTS; i++) {
-        logits[i].numRows = NUM_CLASSES;
+        logits[i].numRows = NUM_OUTPUT_FEATURES;
         logits[i].numCols = VECTOR_COLS;
-        logits[i].data = &logitsData[i * NUM_CLASSES * VECTOR_COLS];
+        logits[i].data = &logitsData[i * NUM_OUTPUT_FEATURES * VECTOR_COLS];
     }
 
     // Initialize an input buffer

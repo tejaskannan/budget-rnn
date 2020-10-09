@@ -3,7 +3,11 @@
 
 int main(void) {
     // Run all tests
+    printf("Testing Multiply...\n");
     test_mul_basic();
+    test_mul_neg();
+
+    printf("Testing Division...\n");
     test_div_basic();
     test_mod();
     test_exp_basic();
@@ -12,6 +16,7 @@ int main(void) {
     test_sigmoid_basic();
     test_relu_basic();
     test_round_to_int();
+    test_leaky_relu();
 
     printf("\nPassed All Tests.\n\n");
 }
@@ -28,6 +33,21 @@ void test_mul_basic(void) {
 
     int16_t four = 1 << (fixed_point_bits + 2);
     assert(four == fp_mul(two, two, fixed_point_bits));
+}
+
+void test_mul_neg(void) {
+    int16_t precision = 10;
+    
+    int16_t one = 1 << precision;
+    int16_t negOne = fp_neg(one);
+    int16_t prod = fp_mul(one, negOne, precision);
+    test_equality(negOne, prod);
+
+    int16_t two = 1 << (precision + 1);
+    int16_t negFour = fp_neg(1 << (precision + 2));
+    int16_t negEight = fp_neg(1 << (precision + 3));
+    prod = fp_mul(two, negFour, precision);
+    test_equality(negEight, prod);
 }
 
 void test_div_basic(void) {
@@ -128,6 +148,29 @@ void test_relu_basic(void) {
 }
 
 
+void test_leaky_relu(void) {
+    int16_t precision = 10;
+    
+    int16_t oneHalf = 1 << (precision - 1);
+    int16_t oneFourth = 1 << (precision - 2);
+    int16_t oneEighth = 1 << (precision - 3);
+    int16_t one = 1 << precision;
+    int16_t two = 1 << (precision + 1);
+
+    // Test positive values
+    test_equality(two, fp_leaky_relu(two, precision));
+    test_equality(one, fp_leaky_relu(one, precision));
+    test_equality(oneHalf, fp_leaky_relu(oneHalf, precision));
+    test_equality(oneFourth, fp_leaky_relu(oneFourth, precision));
+    test_equality(oneEighth, fp_leaky_relu(oneEighth, precision));
+
+    // Test negative values
+    test_equality(fp_neg(oneHalf), fp_leaky_relu(fp_neg(two), precision));
+    test_equality(fp_neg(oneFourth), fp_leaky_relu(fp_neg(one), precision));
+    test_equality(fp_neg(oneEighth), fp_leaky_relu(fp_neg(oneHalf), precision));
+}
+
+
 void test_round_to_int(void) {
     int16_t precision = 4;
 
@@ -136,4 +179,13 @@ void test_round_to_int(void) {
     assert(int_to_fp(4, precision) == fp_round_to_int(float_to_fp(3.5, precision), precision));
     assert(int_to_fp(-4, precision) == fp_round_to_int(float_to_fp(-3.5, precision), precision));
 }
+
+uint8_t test_equality(int16_t expected, int16_t result) {
+    if (expected != result) {
+        printf("Failed. Expected: %d, Got: %d\n", expected, result);
+        return 0;
+    }
+    return 1;
+}
+
 

@@ -13,6 +13,8 @@
 #ifndef MATRIX_OPS_GUARD
 #define MATRIX_OPS_GUARD
 
+#define VECTOR_COLUMN(X)    ((X) * VECTOR_COLS)
+
 // Standard matrix operations
 matrix *matrix_add(matrix *result, matrix *mat1, matrix *mat2);
 matrix *matrix_multiply(matrix *result, matrix *mat1, matrix *mat2, uint16_t precision);
