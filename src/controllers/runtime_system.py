@@ -10,7 +10,7 @@ from controllers.controller_utils import clip, get_budget_index, ModelResults
 from controllers.power_utils import PowerType, make_power_system
 from controllers.model_controllers import AdaptiveController, FixedController, RandomController, BudgetWrapper
 from controllers.model_controllers import CONTROLLER_PATH, levels_to_execute, classification_for_levels, MultiModelController
-from controllers.runtime_controllers import PIDController, BudgetController, BudgetDistribution, PowerSetpoint
+from controllers.runtime_controllers import PIDController, BudgetController, BudgetDistribution
 from dataset.dataset import DataSeries, Dataset
 from models.adaptive_model import AdaptiveModel
 from models.tf_model import TFModel
@@ -63,10 +63,10 @@ class RuntimeSystem:
 
         save_folder, model_file_name = os.path.split(model_path)
         model_name = extract_model_name(model_file_name)
-        
+
         self._model_name = model_name
         self._save_folder = save_folder
-            
+
         # Results from the testing set. These are precomputed for efficiency.
         self._level_predictions = test_results.predictions
         self._test_accuracy = test_results.accuracy  # [L]
@@ -97,6 +97,7 @@ class RuntimeSystem:
             self._controller = AdaptiveController.load(os.path.join(save_folder, controller_path),
                                                        dataset_folder=dataset_folder,
                                                        model_path=model_path)
+
             # Load validation accuracy
             self._controller.load_validation_accuracy(validation_accuracy=valid_results.accuracy)
         else:
@@ -145,7 +146,10 @@ class RuntimeSystem:
             self._controller.fit(series=None)
         elif self._system_type == SystemType.GREEDY:
             level = np.argmax(self._valid_accuracy)
-            self._controller = FixedController(model_index=level)
+            self._controller = FixedController(model_index=level,
+                                               num_levels=self._num_levels,
+                                               seq_length=self._seq_length,
+                                               power_system_type=self._power_system_type)
         elif self._system_type in (SystemType.FIXED_UNDER_BUDGET, SystemType.FIXED_MAX_ACCURACY):
             allow_violations = self._system_type == SystemType.FIXED_MAX_ACCURACY
 
@@ -191,7 +195,8 @@ class RuntimeSystem:
                                                            max_time=max_time,
                                                            num_levels=self._num_levels,
                                                            num_classes=self._num_classes,
-                                                           seq_length=self._seq_length)
+                                                           seq_length=self._seq_length,
+                                                           power_system_type=self._power_system_type)
 
         # Apply budget wrapper to the controller
         assert self._controller is not None, 'Must have a valid controller'
@@ -212,13 +217,13 @@ class RuntimeSystem:
         assert self._budget_controller is not None, 'Must call init_for_budget() first'
         stop_probs = self._stop_probs[t] if self._stop_probs is not None and t < len(self._stop_probs) else None
 
-        budget += self._budget_step
+        # budget += self._budget_step
         pred, level, power = self._budget_controller.predict_sample(stop_probs=stop_probs,
                                                                     budget=budget,
                                                                     noise=power_noise,
                                                                     current_time=t)
         label = self._labels[t]
-       
+
         if pred is None:
             is_correct = 0
         else:
@@ -232,7 +237,7 @@ class RuntimeSystem:
         if self._system_type == SystemType.ADAPTIVE:
             if pred is not None:
                 self._budget_distribution.update(label=pred, level=level, power=power)
-   
+
             is_end_of_window = (t + 1) % WINDOW_SIZE == 0
             if is_end_of_window:
                 self._current_budget = self._budget_distribution.get_budget(t + 1)
@@ -252,9 +257,5 @@ class RuntimeSystem:
         assert isinstance(self._controller, AdaptiveController), 'Can only estimate validation results for adaptive controllers'
 
         acc, power = self._controller.evaluate(budget=budget, model_results=self._valid_results)
-
-        print('0.75 thresholds: {0}'.format(self._controller.get_thresholds(budget=0.75)))
-        print('{0:.2f} thresholds: {1}'.format(budget, self._controller.get_thresholds(budget=budget)))
-        print('1.0 thresholds: {0}'.format(self._controller.get_thresholds(budget=1.0)))
 
         return acc, power

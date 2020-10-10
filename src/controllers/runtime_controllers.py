@@ -4,7 +4,7 @@ from typing import Tuple, Union, List, Dict
 from collections import deque, defaultdict, namedtuple
 
 from controllers.controller_utils import clip
-from controllers.power_utils import get_avg_power, get_power_estimates
+from controllers.power_utils import PowerType, make_power_system
 from utils.constants import SMALL_NUMBER
 
 
@@ -25,7 +25,7 @@ class PIDController:
         self._integral_bounds = integral_bounds
         self._integral_window = integral_window
 
-    def plant_function(self, y_pred: Union[float, int], proportional_error: float, integral_error: float) -> float:
+    def plant_function(self, y_true: Tuple[float, float], y_pred: float, control_error: float) -> float:
         raise NotImplementedError()
 
     def step(self, y_true: Tuple[float, float], y_pred: float, time: float) -> Union[float, int]:
@@ -33,7 +33,7 @@ class PIDController:
         Updates the controller and outputs the next control signal.
         """
         # Only add to error if it is out of the target bounds
-        error = 0
+        error = 0.0
         if y_pred < y_true[0] - SMALL_NUMBER:
             error = y_true[0] - y_pred
         elif y_pred > y_true[1] + SMALL_NUMBER:
@@ -54,7 +54,7 @@ class PIDController:
         integral = clip(integral, bounds=self._integral_bounds)
 
         # Approximate the derivative term using the average over the window
-        derivative = 0
+        derivative = 0.0
         if len(self._errors) > 1:
             derivative_sum = 0
             for i in range(1, len(self._errors)):
@@ -81,57 +81,13 @@ class PIDController:
 
 class BudgetController(PIDController):
 
-    def plant_function(self, y_true: Tuple[float, float], y_pred: Tuple[float, float], control_error: float) -> float:
+    def plant_function(self, y_true: Tuple[float, float], y_pred: float, control_error: float) -> float:
         # If within bounds, we don't apply and adjustments
         if y_pred >= y_true[0] and y_pred <= y_true[1]:
             return 0
 
         # Otherwise, we apply an offset proportional to the error
         return control_error
-
-
-class PowerSetpoint:
-
-    def __init__(self, num_levels: int, seq_length: int, window_size: int):
-        self._num_levels = num_levels
-        self._seq_length = seq_length
-        self._window_size = window_size
-
-        # [L] array of power estimates for each level. This is the prior
-        # distribution.
-        self._power_estimates = get_power_estimates(num_levels=num_levels,
-                                                    seq_length=seq_length)
-
-        # [W] queue containing the observed power per sample within this window
-        self._measurements: deque = deque()
-
-    def get_setpoint(self) -> float:
-        # Compute the measured power. This is the average power per step
-        # over the entire execution.
-        total_count = len(self._measurements)
-
-        # [L] array containing the count per level and total power per level
-        level_counts = np.zeros((self._num_levels, ))
-        power_per_level = np.zeros((self._num_levels, ))
-
-        for (level, power) in self._measurements:
-            level_counts[level] += 1
-            power_per_level[level] += power
-
-        # Get the measured avg power over the last window
-        measured_power = np.sum(power_per_level / total_count)
-
-        # Compute the expected power based on the prior measurements
-        expected_power = np.sum((self._power_estimates * level_counts) / total_count)
-
-        return expected_power - measured_power
-
-    def update(self, level: int, power: float):
-        measurement = (level, power)
-        self._measurements.append(measurement)
-
-        if len(self._measurements) > self._window_size:
-            self._measurements.popleft()
 
 
 class BudgetDistribution:
@@ -142,22 +98,24 @@ class BudgetDistribution:
                  max_time: int,
                  num_levels: int,
                  seq_length: int,
-                 num_classes: int):
+                 num_classes: int,
+                 power_system_type: PowerType):
         self._prior_counts = prior_counts  # key: class index, value: array [L] counts for each level
         self._max_time = max_time
         self._num_levels = num_levels
         self._num_classes = num_classes
         self._budget = budget
-       
+
         # Initialize variables for budget distribution tracking
         self._level_counts = np.zeros(shape=(num_levels, ))
         self._observed_power = np.zeros(shape=(num_levels, ))
         self._seq_length = seq_length
-        self._power_multiplier = int(seq_length / num_levels)
 
         # Estimate the power prior based on profiling
-        self._prior_power = [get_avg_power(num_samples=level + 1, seq_length=seq_length, multiplier=self._power_multiplier) for level in range(num_levels)]
-        self._prior_power = np.array(self._prior_power)
+        power_system = make_power_system(mode=power_system_type,
+                                         num_levels=num_levels,
+                                         seq_length=seq_length)
+        self._prior_power = power_system.get_power_estimates()  # [L]
 
         # Estimated count of each label over the time window
         self._estimated_label_counts = np.zeros(shape=(num_classes, ))

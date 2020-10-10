@@ -80,8 +80,8 @@ def plot_and_save(sim_results: Dict[str, SimulationResult],
         if system.system_type == SystemType.ADAPTIVE:
             valid_accuracy = system.estimate_validation_results(budget=budget,
                                                                 max_time=max_time)
-            print('Budget: {0:.3f}, Valid Results: {1}'.format(budget, valid_accuracy))
-            print(np.bincount(system.get_levels(), minlength=10))
+            # print('Budget: {0:.3f}, Valid Results: {1}'.format(budget, valid_accuracy))
+            # print(np.bincount(system.get_levels(), minlength=4))
         else:
             valid_accuracy = None
 
@@ -155,7 +155,7 @@ def create_multi_model_systems(folder: str, model_type: str, power_system_type: 
     valid_results: List[ModelResults] = []
     test_results: List[ModelResults] = []
     model_paths: List[str] = []
-    for model_path in iterate_files(folder, pattern='model-{0}-.*model_best\.pkl\.gz'.format(model_type)):
+    for model_path in iterate_files(folder, pattern=r'model-{0}-.*model_best\.pkl\.gz'.format(model_type)):
         model, dataset = restore_neural_network(model_path, dataset_folder=dataset_folder)
 
         if model_type == 'SKIP_RNN':

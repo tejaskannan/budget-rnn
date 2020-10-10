@@ -43,13 +43,13 @@ class PowerSystem:
 
     def get_max_power(self) -> float:
         return self.get_avg_power(self._total_levels)
-    
+
     def get_min_power(self) -> float:
         return self.get_avg_power(1)
 
     def get_avg_power(self, num_levels: int) -> float:
         assert num_levels > 0, 'Must have a positive number of levels'
-        
+
         total_time = self.sample_period * self._seq_length
         num_samples = num_levels * self._multiplier
 
@@ -57,10 +57,12 @@ class PowerSystem:
 
     def get_avg_power_multiple(self, num_levels: np.ndarray) -> float:
         """
-        Computes the weighted average power over the number of samples per episode.
+        Computes the weighted average power over the
+        number of samples per episode.
 
         Args:
-            num_samples: An [B] array of the number of levels for each batch element
+            num_samples: An [B] array of the number of
+                levels for each batch element
         Returns:
             The weighted average power.
         """
@@ -90,13 +92,6 @@ class PowerSystem:
         weighted_avg = np.sum(weights * estimates)
 
         return weighted_avg
-        
-        #avg_power = 0.0
-        #for idx in range(sample_weights.shape[0]):
-        #    sample_power = self.get_avg_power(idx + 1)
-        #    avg_power += sample_weights[idx] * sample_power
-
-        #return avg_power
 
     def get_power_estimates(self) -> np.ndarray:
         estimates: List[float] = []

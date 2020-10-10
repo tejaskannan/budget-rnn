@@ -14,7 +14,6 @@ from utils.file_utils import save_pickle_gz, read_pickle_gz, extract_model_name
 from utils.loading_utils import restore_neural_network
 from controllers.power_distribution import PowerDistribution
 from controllers.power_utils import PowerSystem, make_power_system, PowerType
-# from controllers.power_utils import get_avg_power_multiple, get_avg_power, get_weighted_avg_power, get_power_estimates
 from controllers.controller_utils import execute_adaptive_model, get_budget_index, ModelResults
 
 
@@ -122,9 +121,9 @@ def get_budget_interpolation_values(target: float, budgets: np.ndarray, avg_leve
             lower_idx = idx
             upper_idx = idx + 1
 
-    # Compute the expected power for each threshold
+    # Compute the expected power for each threshold, [L]
     power_estimates = power_system.get_power_estimates()
-    
+
     expected_power: List[float] = []
     for counts in avg_level_counts:
         expected = np.sum(counts * power_estimates)
@@ -486,7 +485,7 @@ class Controller:
     @property
     def power_system(self) -> PowerSystem:
         return self._power_system
-    
+
     def fit(self, series: DataSeries, should_print: bool):
         pass
 
@@ -621,7 +620,6 @@ class AdaptiveController(Controller):
         self._stop_means = np.average(valid_data.stop_probs, axis=0)  # [L]
         self._stop_std = np.std(valid_data.stop_probs, axis=0)  # [L]
 
-
         # Estimate the level distribution for each predicted label.
         valid_predictions = train_results.predictions[train_idx, :]
         levels = levels_to_execute(valid_data.stop_probs, self._thresholds)  # [S, K]
@@ -716,22 +714,24 @@ class AdaptiveController(Controller):
         lower_idx, upper_idx, weight = get_budget_interpolation_values(budgets=self._budgets,
                                                                        target=budget,
                                                                        avg_level_counts=self._avg_level_counts,
-                                                                       num_levels=self._num_levels,
-                                                                       seq_length=self._seq_length)
+                                                                       power_system=self._power_system)
+        num_thresholds = self._thresholds.shape[0]
+        num_levels = self._thresholds.shape[1]
+
         if lower_idx < 0:
-            lower_thresh = np.zeros(self._thresholds.shape[1])
-        elif lower_idx > self._thresholds.shape[1]:
-            lower_thresh = np.ones(self._thresholds.shape[1])
+            lower_thresh = np.zeros(num_levels)
+        elif lower_idx > num_thresholds:
+            lower_thresh = np.ones(num_levels)
         else:
             lower_thresh = self._thresholds[lower_idx]
-        
+
         if upper_idx < 0:
-            upper_thresh = np.zeros(self._thresholds.shape[1])
-        elif upper_idx > self._thresholds.shape[1]:
-            upper_thresh = np.ones(self._thresholds.shape[1])
+            upper_thresh = np.zeros(num_levels)
+        elif upper_idx > num_thresholds:
+            upper_thresh = np.ones(num_levels)
         else:
             upper_thresh = self._thresholds[upper_idx]
-        
+
         # Create thresholds and projected budget
         thresholds = lower_thresh * (1 - weight) + upper_thresh * weight
         thresholds[-1] = 0
