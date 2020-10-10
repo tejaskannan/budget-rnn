@@ -12,6 +12,7 @@ from controllers.runtime_system import RuntimeSystem, SystemType
 from controllers.controller_utils import execute_adaptive_model, execute_standard_model, concat_model_results, LOG_FILE_FMT
 from controllers.controller_utils import save_test_log, execute_skip_rnn_model, ModelResults, execute_phased_rnn_model
 from controllers.noise_generators import get_noise_generator, NoiseGenerator
+from controllers.power_utils import PowerType
 from models.base_model import Model
 from models.model_factory import get_model
 from models.adaptive_model import AdaptiveModel
@@ -62,6 +63,7 @@ def plot_and_save(sim_results: Dict[str, SimulationResult],
                   max_time: int,
                   noise_generator: NoiseGenerator,
                   noise_terms: List[float],
+                  power_system_type: PowerType,
                   should_plot: bool,
                   save_plots: bool):
     # Make the output folder if necessary
@@ -83,7 +85,7 @@ def plot_and_save(sim_results: Dict[str, SimulationResult],
         else:
             valid_accuracy = None
 
-        log_file_name = LOG_FILE_FMT.format(system.system_type.name.lower(), system.model_name)
+        log_file_name = LOG_FILE_FMT.format(system.system_type.name.lower(), system.model_name, power_system_type.name.lower())
         log_path = os.path.join(output_folder, log_file_name)
         save_test_log(accuracy=sim_result.accuracy[-1],
                       power=sim_result.power[-1],
@@ -144,7 +146,7 @@ def plot_and_save(sim_results: Dict[str, SimulationResult],
             plt.show()
 
 
-def create_multi_model_systems(folder: str, model_type: str) -> List[RuntimeSystem]:
+def create_multi_model_systems(folder: str, model_type: str, power_system_type: PowerType) -> List[RuntimeSystem]:
     model_type = model_type.upper()
     assert model_type in ('SKIP_RNN', 'PHASED_RNN'), 'Unknown model type: {0}'.format(model_type)
 
@@ -179,7 +181,8 @@ def create_multi_model_systems(folder: str, model_type: str) -> List[RuntimeSyst
                                  dataset_folder=dataset_folder,
                                  seq_length=seq_length,
                                  num_levels=len(model_paths),
-                                 num_classes=num_classes)
+                                 num_classes=num_classes,
+                                 power_system_type=power_system_type)
     runtime_systems.append(under_budget)
 
     max_accuracy = RuntimeSystem(test_results=test_results_concat,
@@ -189,7 +192,8 @@ def create_multi_model_systems(folder: str, model_type: str) -> List[RuntimeSyst
                                  dataset_folder=dataset_folder,
                                  seq_length=seq_length,
                                  num_levels=len(model_paths),
-                                 num_classes=num_classes)
+                                 num_classes=num_classes,
+                                 power_system_type=power_system_type)
     runtime_systems.append(max_accuracy)
 
     return runtime_systems
@@ -207,6 +211,7 @@ if __name__ == '__main__':
     parser.add_argument('--budget-step', type=float, required=True)
     parser.add_argument('--output-folder', type=str, required=True)
     parser.add_argument('--noise-params', type=str, nargs='+', required=True)
+    parser.add_argument('--power-system-type', type=str, choices=['bluetooth', 'temp'], default='temp')
     parser.add_argument('--skip-plotting', action='store_true')
     parser.add_argument('--save-plots', action='store_true')
     args = parser.parse_args()
@@ -220,6 +225,7 @@ if __name__ == '__main__':
     budgets = np.arange(start=budget_start, stop=budget_end + (budget_step / 2), step=budget_step)
 
     dataset_folder = args.dataset_folder
+    power_system_type = PowerType[args.power_system_type.upper()]
 
     # Make systems based on adaptive models
     runtime_systems: List[RuntimeSystem] = []
@@ -240,7 +246,8 @@ if __name__ == '__main__':
                                         dataset_folder=dataset_folder,
                                         seq_length=seq_length,
                                         num_levels=num_levels,
-                                        num_classes=num_classes)
+                                        num_classes=num_classes,
+                                        power_system_type=power_system_type)
         runtime_systems.append(adaptive_system)
 
         adaptive_fixed_under_budget = RuntimeSystem(valid_results=valid_results,
@@ -250,7 +257,8 @@ if __name__ == '__main__':
                                                     dataset_folder=dataset_folder,
                                                     seq_length=seq_length,
                                                     num_levels=num_levels,
-                                                    num_classes=num_classes)
+                                                    num_classes=num_classes,
+                                                    power_system_type=power_system_type)
         runtime_systems.append(adaptive_fixed_under_budget)
 
         adaptive_fixed_max_accuracy = RuntimeSystem(valid_results=valid_results,
@@ -260,7 +268,8 @@ if __name__ == '__main__':
                                                     dataset_folder=dataset_folder,
                                                     seq_length=seq_length,
                                                     num_levels=num_levels,
-                                                    num_classes=num_classes)
+                                                    num_classes=num_classes,
+                                                    power_system_type=power_system_type)
         runtime_systems.append(adaptive_fixed_max_accuracy)
 
         randomized_system = RuntimeSystem(valid_results=valid_results,
@@ -270,7 +279,8 @@ if __name__ == '__main__':
                                           dataset_folder=dataset_folder,
                                           seq_length=seq_length,
                                           num_levels=num_levels,
-                                          num_classes=num_classes)
+                                          num_classes=num_classes,
+                                          power_system_type=power_system_type)
         runtime_systems.append(randomized_system)
 
     # Make the baseline systems
@@ -290,7 +300,8 @@ if __name__ == '__main__':
                                   dataset_folder=dataset_folder,
                                   seq_length=seq_length,
                                   num_levels=seq_length,
-                                  num_classes=num_classes)
+                                  num_classes=num_classes,
+                                  power_system_type=power_system_type)
     runtime_systems.append(greedy_system)
 
     fixed_under_budget = RuntimeSystem(test_results=test_results,
@@ -300,7 +311,8 @@ if __name__ == '__main__':
                                        dataset_folder=dataset_folder,
                                        seq_length=seq_length,
                                        num_levels=seq_length,
-                                       num_classes=num_classes)
+                                       num_classes=num_classes,
+                                       power_system_type=power_system_type)
     runtime_systems.append(fixed_under_budget)
 
     fixed_max_accuracy = RuntimeSystem(test_results=test_results,
@@ -310,19 +322,24 @@ if __name__ == '__main__':
                                        dataset_folder=dataset_folder,
                                        seq_length=seq_length,
                                        num_levels=seq_length,
-                                       num_classes=num_classes)
+                                       num_classes=num_classes,
+                                       power_system_type=power_system_type)
     runtime_systems.append(fixed_max_accuracy)
 
     # Add the Skip RNN models if provided
     skip_rnn_folder = args.skip_model_folder
     if skip_rnn_folder is not None:
-        skip_rnn_systems = create_multi_model_systems(folder=skip_rnn_folder, model_type='SKIP_RNN')
+        skip_rnn_systems = create_multi_model_systems(folder=skip_rnn_folder,
+                                                      model_type='SKIP_RNN',
+                                                      power_system_type=power_system_type)
         runtime_systems.extend(skip_rnn_systems)
 
     # Add the Phased RNN models if provided
     phased_rnn_folder = args.phased_model_folder
     if phased_rnn_folder is not None:
-        phased_rnn_systems = create_multi_model_systems(folder=phased_rnn_folder, model_type='PHASED_RNN')
+        phased_rnn_systems = create_multi_model_systems(folder=phased_rnn_folder,
+                                                        model_type='PHASED_RNN',
+                                                        power_system_type=power_system_type)
         runtime_systems.extend(phased_rnn_systems)
 
     # Max time equals the number of test samples
@@ -351,4 +368,5 @@ if __name__ == '__main__':
                               noise_terms=noise_terms,
                               output_folder=args.output_folder,
                               should_plot=not args.skip_plotting,
-                              save_plots=args.save_plots)
+                              save_plots=args.save_plots,
+                              power_system_type=power_system_type)

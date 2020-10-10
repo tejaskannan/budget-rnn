@@ -6,7 +6,8 @@ from enum import Enum, auto
 from typing import List, Dict, Any, Tuple
 
 from controllers.controller_utils import clip, get_budget_index, ModelResults
-from controllers.power_utils import get_power_estimates, get_avg_power_multiple
+# from controllers.power_utils import get_power_estimates, get_avg_power_multiple
+from controllers.power_utils import PowerType, make_power_system
 from controllers.model_controllers import AdaptiveController, FixedController, RandomController, BudgetWrapper
 from controllers.model_controllers import CONTROLLER_PATH, levels_to_execute, classification_for_levels, MultiModelController
 from controllers.runtime_controllers import PIDController, BudgetController, BudgetDistribution, PowerSetpoint
@@ -46,7 +47,8 @@ class RuntimeSystem:
                  dataset_folder: str,
                  num_classes: int,
                  num_levels: int,
-                 seq_length: int):
+                 seq_length: int,
+                 power_system_type: PowerType):
         self._system_type = system_type
         self._test_results = test_results
         self._valid_results = valid_results
@@ -57,6 +59,7 @@ class RuntimeSystem:
         self._num_classes = num_classes
         self._num_levels = num_levels
         self._seq_length = seq_length
+        self._power_system_type = power_system_type
 
         save_folder, model_file_name = os.path.split(model_path)
         model_name = extract_model_name(model_file_name)
@@ -90,7 +93,8 @@ class RuntimeSystem:
 
         # For some systems, we can load the controller now. Otherwise, we wait until later
         if self._system_type == SystemType.ADAPTIVE:
-            self._controller = AdaptiveController.load(os.path.join(save_folder, CONTROLLER_PATH.format(model_name)),
+            controller_path = CONTROLLER_PATH.format(self._power_system_type.name.lower(), model_name)
+            self._controller = AdaptiveController.load(os.path.join(save_folder, controller_path),
                                                        dataset_folder=dataset_folder,
                                                        model_path=model_path)
             # Load validation accuracy
@@ -134,14 +138,16 @@ class RuntimeSystem:
     def init_for_budget(self, budget: float, max_time: int):
         # Make controller based on the model type
         if self._system_type == SystemType.RANDOMIZED:
-            self._controller = RandomController(budgets=[budget], seq_length=self._seq_length, num_levels=self._num_levels)
+            self._controller = RandomController(budgets=[budget],
+                                                seq_length=self._seq_length,
+                                                num_levels=self._num_levels,
+                                                power_system_type=self._power_system_type)
             self._controller.fit(series=None)
         elif self._system_type == SystemType.GREEDY:
             level = np.argmax(self._valid_accuracy)
             self._controller = FixedController(model_index=level)
         elif self._system_type in (SystemType.FIXED_UNDER_BUDGET, SystemType.FIXED_MAX_ACCURACY):
             allow_violations = self._system_type == SystemType.FIXED_MAX_ACCURACY
-            power_estimates = get_power_estimates(num_levels=self._num_levels, seq_length=self._seq_length)
 
             # Create the fixed policy based on the model type. Skip RNNs use a similar strategy as those seen in
             # other model types. For Skip RNNs, however, the policy applies to model selection as opposed to
@@ -152,14 +158,22 @@ class RuntimeSystem:
                                                         model_accuracy=self._valid_accuracy,
                                                         seq_length=self._seq_length,
                                                         max_time=max_time,
-                                                        allow_violations=allow_violations)
+                                                        allow_violations=allow_violations,
+                                                        power_system_type=self._power_system_type)
             else:
+                power_system = make_power_system(mode=self._power_system_type,
+                                                 num_levels=self._num_levels,
+                                                 seq_length=self._seq_length)
+
                 level = get_budget_index(budget=budget,
                                          valid_accuracy=self._valid_accuracy,
                                          max_time=max_time,
-                                         power_estimates=power_estimates,
+                                         power_estimates=power_system.get_power_estimates(),
                                          allow_violations=allow_violations)
-                self._controller = FixedController(model_index=level)
+                self._controller = FixedController(model_index=level,
+                                                   num_levels=self._num_levels,
+                                                   seq_length=self._seq_length,
+                                                   power_system_type=self._power_system_type)
         elif self._system_type == SystemType.ADAPTIVE:
             # Make the budget distribution and PID controller
             self._pid_controller = BudgetController(kp=KP,

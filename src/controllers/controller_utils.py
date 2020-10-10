@@ -10,9 +10,8 @@ from dataset.dataset import Dataset, DataSeries
 from utils.file_utils import save_by_file_suffix, read_by_file_suffix
 from utils.sequence_model_utils import SequenceModelType
 from utils.constants import OUTPUT, LOGITS, SEQ_LENGTH, SKIP_GATES, PHASE_GATES, STOP_OUTPUT_NAME
-from controllers.power_utils import get_avg_power
 
-LOG_FILE_FMT = 'model-{0}-{1}.jsonl.gz'
+LOG_FILE_FMT = 'model-{0}-{1}-{2}.jsonl.gz'
 ModelResults = namedtuple('ModelResults', ['predictions', 'labels', 'stop_probs', 'accuracy'])
 BATCH_SIZE = 64
 

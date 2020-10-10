@@ -13,11 +13,12 @@ from utils.constants import OUTPUT, BIG_NUMBER, SMALL_NUMBER, INPUTS, SEQ_LENGTH
 from utils.file_utils import save_pickle_gz, read_pickle_gz, extract_model_name
 from utils.loading_utils import restore_neural_network
 from controllers.power_distribution import PowerDistribution
-from controllers.power_utils import get_avg_power_multiple, get_avg_power, get_weighted_avg_power, get_power_estimates
+from controllers.power_utils import PowerSystem, make_power_system, PowerType
+# from controllers.power_utils import get_avg_power_multiple, get_avg_power, get_weighted_avg_power, get_power_estimates
 from controllers.controller_utils import execute_adaptive_model, get_budget_index, ModelResults
 
 
-CONTROLLER_PATH = 'model-controller-{0}.pkl.gz'
+CONTROLLER_PATH = 'model-controller-{0}-{1}.pkl.gz'
 STEAL_ITERATIONS = 10
 RANDOM_MOVE = 0.05
 
@@ -106,15 +107,13 @@ def get_level_counts(levels: np.ndarray, num_levels: int) -> np.ndarray:
     return np.vstack([np.bincount(levels[b], minlength=num_levels) for b in range(num_budgets)])  # [S, L]
 
 
-def get_budget_interpolation_values(target: float, budgets: np.ndarray, avg_level_counts: np.ndarray, num_levels: int, seq_length: int) -> Tuple[int, int, float]:
+def get_budget_interpolation_values(target: float, budgets: np.ndarray, avg_level_counts: np.ndarray, power_system: PowerSystem) -> Tuple[int, int, float]:
     budget_idx = index_of(budgets, target)
     if budget_idx >= 0:
         return budget_idx, budget_idx, 1
 
-    power_multiplier = int(seq_length / num_levels)
-
-    min_power = get_avg_power(num_samples=1, seq_length=seq_length, multiplier=power_multiplier)
-    max_power = get_avg_power(num_samples=seq_length, seq_length=seq_length)
+    min_power = power_system.get_min_power()
+    max_power = power_system.get_max_power()
 
     # Get the nearest two budgets nearest two known budgets
     lower_idx, upper_idx = -1, -1
@@ -124,7 +123,7 @@ def get_budget_interpolation_values(target: float, budgets: np.ndarray, avg_leve
             upper_idx = idx + 1
 
     # Compute the expected power for each threshold
-    power_estimates = get_power_estimates(num_levels=num_levels, seq_length=seq_length)
+    power_estimates = power_system.get_power_estimates()
     
     expected_power: List[float] = []
     for counts in avg_level_counts:
@@ -170,22 +169,19 @@ def get_budget_interpolation_values(target: float, budgets: np.ndarray, avg_leve
 class BudgetOptimizer:
 
     def __init__(self,
-                 num_levels: int,
                  budgets: np.ndarray,
-                 seq_length: int,
+                 power_system: PowerSystem,
                  precision: int,
                  trials: int,
                  max_iter: int,
                  patience: int):
-        self._num_levels = num_levels
         self._num_budgets = budgets.shape[0]
         self._budgets = budgets
         self._precision = precision
         self._trials = trials
         self._max_iter = max_iter
         self._patience = patience
-        self._seq_length = seq_length
-        self._power_multiplier = int(self._seq_length / self._num_levels)
+        self._power_system = power_system
 
         self._thresholds = None
 
@@ -211,7 +207,7 @@ class BudgetOptimizer:
         levels = levels_to_execute(probs=stop_probs, thresholds=thresholds)  # [S, B]
 
         # Compute the approximate power
-        avg_power = np.vstack([get_avg_power_multiple(levels[idx] + 1, self._seq_length, self._power_multiplier) for idx in range(budgets.shape[0])])  # [S, 1]
+        avg_power = np.vstack([self._power_system.get_avg_power_multiple(levels[idx] + 1) for idx in range(budgets.shape[0])])  # [S, 1]
         avg_power = np.squeeze(avg_power, axis=-1)  # [S]
 
         # Compute the accuracy
@@ -248,8 +244,9 @@ class BudgetOptimizer:
         best_thresholds: List[np.ndarray] = []  # Holds list of best thresholds for each budget
         best_loss: List[float] = []
 
-        power_estimates = get_power_estimates(self._num_levels, self._seq_length)
-        level_idx = np.arange(self._num_levels)
+        power_estimates = self._power_system.get_power_estimates()  # [L]
+        num_levels = power_estimates.shape[0]
+        level_idx = np.arange(num_levels)  # [L]
 
         min_init = np.median(train_data.stop_probs, axis=0)  # [L]
         max_init = 1.0
@@ -265,7 +262,7 @@ class BudgetOptimizer:
             # Initialize the thresholds uniformly at random. We cap the thresholds at the smallest known level
             # which consumes power more than the budget. This prevents quick, greedy methods to get under the budget
             # in early iterations.
-            init_thresholds = rand.uniform(low=min_init, high=max_init, size=(self._trials, self._num_levels))
+            init_thresholds = rand.uniform(low=min_init, high=max_init, size=(self._trials, num_levels))
             init_thresholds = round_to_precision(init_thresholds, self._precision)
 
             power_diff = power_estimates - budget
@@ -291,7 +288,7 @@ class BudgetOptimizer:
 
         # Get the level distribution
         levels = levels_to_execute(probs=valid_data.stop_probs, thresholds=final_thresholds)
-        level_counts = get_level_counts(levels=levels, num_levels=self._num_levels)  # [S, L]
+        level_counts = get_level_counts(levels=levels, num_levels=num_levels)  # [S, L]
         avg_level_counts = level_counts / (np.sum(level_counts, axis=-1, keepdims=True) + SMALL_NUMBER)
 
         self._thresholds = final_thresholds
@@ -363,15 +360,17 @@ class BudgetOptimizer:
         prev_level = None
         budget_array = np.full(fill_value=budget, shape=thresholds.shape[0])
 
+        num_levels = train_data.model_correct.shape[1]
+
         for i in range(self._max_iter):
 
             # Select a random level to optimize. We skip the top-level because it does
             # not correspond to a trainable threshold.
-            level = rand.randint(low=0, high=self._num_levels - 1)
+            level = rand.randint(low=0, high=num_levels - 1)
 
             # Prevent optimizing the same thresholds twice in a row. This is wasted work.
             if prev_level is not None and level == prev_level:
-                level = level - 1 if level > 0 else self._num_levels - 2
+                level = level - 1 if level > 0 else num_levels - 2
 
             # [S] array of threshold values for the select values
             best_t = np.copy(thresholds[:, level])  # The 'best' are the current thresholds at this level
@@ -479,6 +478,15 @@ class BudgetOptimizer:
 
 class Controller:
 
+    def __init__(self, num_levels: int, seq_length: int, power_system_type: PowerType):
+        self._power_system = make_power_system(mode=power_system_type,
+                                               num_levels=num_levels,
+                                               seq_length=seq_length)
+
+    @property
+    def power_system(self) -> PowerSystem:
+        return self._power_system
+    
     def fit(self, series: DataSeries, should_print: bool):
         pass
 
@@ -494,7 +502,8 @@ class AdaptiveController(Controller):
                  budgets: List[float],
                  trials: int,
                  patience: int,
-                 max_iter: int):
+                 max_iter: int,
+                 power_system_type: PowerType):
         self._model_path = model_path
         self._dataset_folder = dataset_folder
 
@@ -520,10 +529,13 @@ class AdaptiveController(Controller):
         self._fit_end_time: Optional[str] = None
         self._is_fitted = False
 
-        # Create the budget optimizer
-        self._budget_optimizer = BudgetOptimizer(num_levels=self._num_levels,
-                                                 seq_length=self._seq_length,
-                                                 budgets=self._budgets,
+        # Create the budget optimizer and power system
+        self._power_system = make_power_system(mode=power_system_type,
+                                               num_levels=self._num_levels,
+                                               seq_length=self._seq_length)
+
+        self._budget_optimizer = BudgetOptimizer(budgets=self._budgets,
+                                                 power_system=self._power_system,
                                                  precision=self._precision,
                                                  trials=self._trials,
                                                  patience=patience,
@@ -656,8 +668,7 @@ class AdaptiveController(Controller):
         lower_idx, upper_idx, weight = get_budget_interpolation_values(target=budget,
                                                                        budgets=self._budgets,
                                                                        avg_level_counts=self._avg_level_counts,
-                                                                       num_levels=self._num_levels,
-                                                                       seq_length=self._seq_length)
+                                                                       power_system=self._power_system)
         if lower_idx < 0:
             lower_counts = self._lowest_distribution
         elif lower_idx >= self._num_levels:
@@ -695,8 +706,8 @@ class AdaptiveController(Controller):
         # Check if this budget is known based from the optimization phase
         budget_idx = index_of(self._budgets, value=budget)
 
-        min_power = get_avg_power(num_samples=1, seq_length=self._seq_length, multiplier=power_multiplier)
-        max_power = get_avg_power(num_samples=self._seq_length, seq_length=self._seq_length)
+        min_power = self._power_system.get_min_power()
+        max_power = self._power_system.get_max_power()
 
         # If we already have the budget, then use the corresponding thresholds
         if budget_idx >= 0:
@@ -753,15 +764,13 @@ class AdaptiveController(Controller):
         # Infer the thresholds for this budget
         thresholds = self.get_thresholds(budget)
 
-        power_mult = int(self._seq_length / self._num_levels)
-
         for level, stop_prob in enumerate(stop_probs):
             if thresholds[level] < stop_prob:
-                power = get_avg_power(level + 1, self._seq_length, power_mult)
+                power = self._power_system.get_avg_power(level + 1)
                 return level, power
 
         # By default, we return the top level
-        return self._num_levels - 1, get_avg_power(self._seq_length, self._seq_length)
+        return self._num_levels - 1, self._power_system.get_max_power()
 
     def evaluate(self, budget: float, model_results: ModelResults) -> Tuple[float, float]:
         assert self._thresholds is not None, 'Must call fit() first'
@@ -779,9 +788,8 @@ class AdaptiveController(Controller):
         correct = (predictions == model_results.labels).astype(float)  # [N]
         accuracy = np.average(correct)
 
-        avg_power = get_avg_power_multiple(num_samples=np.squeeze(levels + 1, axis=0),
-                                           seq_length=self._seq_length,
-                                           multiplier=int(self._seq_length / self._num_levels))
+        avg_power = self._power_system.get_avg_power_multiple(num_levels=np.squeeze(levels + 1, axis=0))
+
         time_steps = min(int((budget * max_time) / avg_power), max_time)
         adjusted_accuracy = (accuracy * time_steps) / max_time
 
@@ -806,7 +814,8 @@ class AdaptiveController(Controller):
             'lowest_distribution': self._lowest_distribution,
             'highest_distribution': self._highest_distribution,
             'fit_start_time': self._fit_start_time,
-            'fit_end_time': self._fit_end_time
+            'fit_end_time': self._fit_end_time,
+            'power_system_type': self._power_system.system_type.name
         }
 
     def save(self, output_file: Optional[str] = None):
@@ -817,7 +826,9 @@ class AdaptiveController(Controller):
         if output_file is None:
             save_folder, model_path = os.path.split(self._model_path)
             model_name = extract_model_name(model_path)
-            output_file = os.path.join(save_folder, CONTROLLER_PATH.format(model_name))
+            power_system_type = self.power_system.system_type.name.lower()
+
+            output_file = os.path.join(save_folder, CONTROLLER_PATH.format(power_system_type, model_name))
 
         # Save the model components
         save_pickle_gz(self.as_dict(), output_file)
@@ -839,7 +850,8 @@ class AdaptiveController(Controller):
                                         budgets=serialized_info['budgets'],
                                         trials=serialized_info['trials'],
                                         patience=serialized_info.get('patience', 10),
-                                        max_iter=serialized_info.get('max_iter', 100))
+                                        max_iter=serialized_info.get('max_iter', 100),
+                                        power_system_type=PowerType[serialized_info.get('power_system_type', 'TEMP').upper()])
 
         # Set remaining fields
         controller._thresholds = serialized_info['thresholds']
@@ -859,24 +871,30 @@ class AdaptiveController(Controller):
 
 class FixedController(Controller):
 
-    def __init__(self, model_index: int):
+    def __init__(self, model_index: int, num_levels: int, seq_length: int, power_system_type: PowerType):
         self._model_index = model_index
+        self._power_system = make_power_system(mode=power_system_type,
+                                               num_levels=num_levels,
+                                               seq_length=seq_length)
 
     def predict_sample(self, stop_probs: np.ndarray, budget: int) -> Tuple[int, Optional[float]]:
         """
         Predicts the label for the given inputs. This strategy always uses the same index.
         """
-        return self._model_index, None
+        return self._model_index, self._power_system.get_avg_power(self._model_index + 1)
 
 
 class RandomController(Controller):
 
-    def __init__(self, budgets: List[float], seq_length: int, num_levels: int):
+    def __init__(self, budgets: List[float], seq_length: int, num_levels: int, power_system_type: PowerType):
         self._budgets = np.array(budgets)
-        self._seq_length = seq_length
         self._num_levels = num_levels
-        self._power_multiplier = int(seq_length / num_levels)
+        self._seq_length = seq_length
         self._levels = np.arange(num_levels)
+
+        self._power_system = make_power_system(mode=power_system_type,
+                                               num_levels=num_levels,
+                                               seq_length=seq_length)
 
         self._threshold_dict: Dict[float, np.ndarray] = dict()
 
@@ -887,7 +905,7 @@ class RandomController(Controller):
     def fit(self, series: DataSeries, should_print: bool = False):
         # Fit a weighted average for each budget
         thresholds: List[np.ndarray] = []
-        power_array = np.array([get_avg_power(i+1, self._seq_length, self._power_multiplier) for i in range(self._num_levels)])
+        power_array = np.array([self._power_system.get_avg_power(i+1) for i in range(self._num_levels)])
 
         for budget in self._budgets:
             distribution = PowerDistribution(power_array, target=budget)
@@ -912,21 +930,28 @@ class RandomController(Controller):
         # Get thresholds for this budget if needed to infer
         thresholds = self._threshold_dict[budget]
         chosen_level = self._rand.choice(self._levels, p=thresholds)
-        return chosen_level, get_avg_power(chosen_level + 1, seq_length=self._seq_length, multiplier=self._power_multiplier)
+        return chosen_level, self._power_system.get_avg_power(chosen_level + 1)
 
 
 class MultiModelController(Controller):
 
-    def __init__(self, sample_counts: List[np.ndarray], model_accuracy: List[float], seq_length: int, max_time: int, allow_violations: bool):
+    def __init__(self, sample_counts: List[np.ndarray], model_accuracy: List[float], seq_length: int, max_time: int, allow_violations: bool, power_system_type: PowerType):
+        self._power_system = make_power_system(mode=power_system_type,
+                                               num_levels=seq_length,
+                                               seq_length=seq_length)
+
         model_power: List[float] = []
         for counts in sample_counts:
-            power = get_weighted_avg_power(counts, seq_length=seq_length)
+            power = self._power_system.get_weighted_avg_power(counts)
             model_power.append(power)
 
         self._model_power = np.array(model_power).reshape(-1)
         self._model_accuracy = np.array(model_accuracy).reshape(-1)
         self._max_time = max_time
         self._allow_violations = allow_violations
+        self._power_system = make_power_system(mode=power_system_type,
+                                               num_levels=seq_length,
+                                               seq_length=seq_length)
 
     def predict_sample(self, stop_probs: np.ndarray, budget: float) -> Tuple[int, Optional[float]]:
         """
@@ -997,7 +1022,7 @@ class BudgetWrapper:
 
             # If no power is given, we default to using the known power estimates.
             if model_power is None:
-                power = get_avg_power(level + 1, seq_length=self._seq_length, multiplier=int(self._seq_length / self._num_levels))
+                power = controller.power_system.get_avg_power(level + 1)
             else:
                 power = model_power
 
@@ -1037,6 +1062,7 @@ if __name__ == '__main__':
     parser.add_argument('--trials', type=int, default=1)
     parser.add_argument('--patience', type=int, default=25)
     parser.add_argument('--max-iter', type=int, default=100)
+    parser.add_argument('--power-system-type', type=str, choices=['bluetooth', 'temp'], default='temp')
     parser.add_argument('--should-print', action='store_true')
     args = parser.parse_args()
 
@@ -1050,7 +1076,8 @@ if __name__ == '__main__':
                                         budgets=args.budgets,
                                         trials=args.trials,
                                         patience=args.patience,
-                                        max_iter=args.max_iter)
+                                        max_iter=args.max_iter,
+                                        power_system_type=PowerType[args.power_system_type.upper()])
 
         # Fit the model on the validation set
         controller.fit(series=DataSeries.VALID, should_print=args.should_print)
