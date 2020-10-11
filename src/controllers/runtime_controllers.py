@@ -158,9 +158,9 @@ class BudgetDistribution:
             variance_rest += np.square(class_count_diff[class_idx] / time) * power_var
 
         expected_power = (1.0 / time) * (self._max_time * self._budget - time_delta * expected_rest)
-        expected_power = clip(expected_power, (power_estimates[0], power_estimates[-1]))  # We clip the power to the feasible range
+        expected_power = clip(expected_power, (power_estimates[0], power_estimates[-1]))  # Clip the power to the feasible range
 
-        estimator_variance = 2 * (1.0 / time) * variance_rest
+        estimator_variance = (1.0 / time) * variance_rest
         estimator_std = np.sqrt(estimator_variance)
 
         # Upper and lower bounds as determined by one std from the mean

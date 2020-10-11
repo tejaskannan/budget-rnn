@@ -667,16 +667,18 @@ class AdaptiveController(Controller):
                                                                        budgets=self._budgets,
                                                                        avg_level_counts=self._avg_level_counts,
                                                                        power_system=self._power_system)
+        num_thresholds = self._thresholds.shape[0]
+        
         if lower_idx < 0:
             lower_counts = self._lowest_distribution
-        elif lower_idx >= self._num_levels:
+        elif lower_idx >= num_thresholds:
             lower_counts = self._highest_distribution
         else:
             lower_counts = self._label_distribution[self._budgets[lower_idx]]
 
         if upper_idx < 0:
             upper_counts = self._lowest_distribution
-        elif upper_idx >= self._num_levels:
+        elif upper_idx >= num_thresholds:
             upper_counts = self._highest_distribution
         else:
             upper_counts = self._label_distribution[self._budgets[upper_idx]]

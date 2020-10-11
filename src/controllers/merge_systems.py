@@ -9,7 +9,7 @@ from utils.loading_utils import restore_neural_network
 from utils.file_utils import read_by_file_suffix, save_by_file_suffix, extract_model_name, make_dir, iterate_files
 from controllers.controller_utils import ModelResults, execute_adaptive_model, LOG_FILE_FMT, get_budget_index
 from controllers.model_controllers import CONTROLLER_PATH, AdaptiveController
-from controllers.power_utils import get_power_estimates
+# from controllers.power_utils import PowerType, make_power_system
 
 
 def get_avg_accuracy(validation_accuracy: Dict[float, float], budget: float) -> float:
@@ -75,12 +75,13 @@ def merge_and_save(logs: List[Dict[str, Dict[str, Dict[str, Any]]]],
                    model_accuracy: List[Dict[float, float]],
                    output_folder: str,
                    system_name: str,
-                   dataset_name: str):
+                   dataset_name: str,
+                   power_system_type: str):
     merged_log = merge_simulation_logs(logs=logs,
                                        model_accuracy=model_accuracy,
                                        system_type=system_name)
 
-    output_file_name = LOG_FILE_FMT.format(system_name, 'SAMPLE_RNN-{0}-merged'.format(dataset_name))
+    output_file_name = LOG_FILE_FMT.format(system_name, 'SAMPLE_RNN-{0}-merged'.format(dataset_name), power_system_type)
     output_file = os.path.join(output_folder, output_file_name)
     save_by_file_suffix([merged_log], output_file)
 
@@ -90,6 +91,7 @@ if __name__ == '__main__':
     parser.add_argument('--models', type=str, required=True, nargs='+')
     parser.add_argument('--dataset-folder', type=str, required=True)
     parser.add_argument('--log-folder', type=str, required=True)
+    parser.add_argument('--power-system-type', type=str, choices=['bluetooth', 'temp'], required=True)
     parser.add_argument('--output-folder', type=str)
     args = parser.parse_args()
 
@@ -125,13 +127,10 @@ if __name__ == '__main__':
         model, dataset = restore_neural_network(model_path, args.dataset_folder)
         valid_results = execute_adaptive_model(model, dataset, series=DataSeries.VALID) 
 
-        # Estimate power at each level
-        power_estimates = get_power_estimates(num_levels=model.num_outputs, seq_length=model.seq_length)
-
         # Create the adaptive controller
         save_folder, model_file_name = os.path.split(model_path)
         model_name = extract_model_name(model_file_name)
-        controller_path = os.path.join(save_folder, CONTROLLER_PATH.format(model_name))
+        controller_path = os.path.join(save_folder, CONTROLLER_PATH.format(args.power_system_type, model_name))
 
         if not os.path.exists(controller_path):
             continue
@@ -139,6 +138,8 @@ if __name__ == '__main__':
         controller = AdaptiveController.load(save_file=controller_path,
                                              dataset_folder=args.dataset_folder,
                                              model_path=model_path)
+
+        power_estimates = controller._power_system.get_power_estimates()
 
         if controller._est_accuracy is None:
             continue
@@ -178,22 +179,22 @@ if __name__ == '__main__':
         fixed_model_accuracy.append(fixed_valid_accuracy)
 
         # Get the simulation logs
-        adaptive_log_file_name = LOG_FILE_FMT.format('adaptive', model_name)
+        adaptive_log_file_name = LOG_FILE_FMT.format('adaptive', model_name, args.power_system_type)
         adaptive_log_path = os.path.join(args.log_folder, adaptive_log_file_name)
         adaptive_log = list(read_by_file_suffix(adaptive_log_path))[0]
         adaptive_logs.append(adaptive_log)
 
-        fixed_acc_log_file_name = LOG_FILE_FMT.format('fixed_max_accuracy', model_name)
+        fixed_acc_log_file_name = LOG_FILE_FMT.format('fixed_max_accuracy', model_name, args.power_system_type)
         fixed_acc_log_path = os.path.join(args.log_folder, fixed_acc_log_file_name)
         fixed_acc_log = list(read_by_file_suffix(fixed_acc_log_path))[0]
         fixed_acc_logs.append(fixed_acc_log)
 
-        fixed_budget_log_file_name = LOG_FILE_FMT.format('fixed_under_budget', model_name)
+        fixed_budget_log_file_name = LOG_FILE_FMT.format('fixed_under_budget', model_name, args.power_system_type)
         fixed_budget_log_path = os.path.join(args.log_folder, fixed_budget_log_file_name)
         fixed_budget_log = list(read_by_file_suffix(fixed_budget_log_path))[0]
         fixed_budget_logs.append(fixed_budget_log)
 
-        randomized_log_file_name = LOG_FILE_FMT.format('randomized', model_name)
+        randomized_log_file_name = LOG_FILE_FMT.format('randomized', model_name, args.power_system_type)
         randomized_log_path = os.path.join(args.log_folder, randomized_log_file_name)
         randomized_log = list(read_by_file_suffix(randomized_log_path))[0]
         randomized_logs.append(randomized_log)
@@ -206,22 +207,26 @@ if __name__ == '__main__':
                    model_accuracy=adaptive_model_accuracy,
                    system_name='adaptive',
                    dataset_name=dataset_name,
-                   output_folder=output_folder)
+                   output_folder=output_folder,
+                   power_system_type=args.power_system_type)
 
     merge_and_save(logs=fixed_acc_logs,
                    model_accuracy=fixed_model_accuracy,
                    system_name='fixed_max_accuracy',
                    dataset_name=dataset_name,
-                   output_folder=output_folder)
+                   output_folder=output_folder,
+                   power_system_type=args.power_system_type)
 
     merge_and_save(logs=fixed_budget_logs,
                    model_accuracy=fixed_model_accuracy,
                    system_name='fixed_under_budget',
                    dataset_name=dataset_name,
-                   output_folder=output_folder)
+                   output_folder=output_folder,
+                   power_system_type=args.power_system_type)
 
     merge_and_save(logs=randomized_logs,
                    model_accuracy=adaptive_model_accuracy,
                    system_name='randomized',
                    dataset_name=dataset_name,
-                   output_folder=output_folder)
+                   output_folder=output_folder,
+                   power_system_type=args.power_system_type)

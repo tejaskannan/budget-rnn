@@ -208,7 +208,7 @@ class RuntimeSystem:
                                                 seq_length=self._seq_length,
                                                 budget=budget)
         self._budget_step = 0
-        self._current_budget = budget
+        self._current_budget: Tuple[float, float] = (budget, budget)
         self._num_correct: List[float] = []
         self._target_budgets: List[float] = []
         self._levels: List[int] = []
