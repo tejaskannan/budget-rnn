@@ -217,7 +217,7 @@ class RuntimeSystem:
         assert self._budget_controller is not None, 'Must call init_for_budget() first'
         stop_probs = self._stop_probs[t] if self._stop_probs is not None and t < len(self._stop_probs) else None
 
-        # budget += self._budget_step
+        budget += self._budget_step
         pred, level, power = self._budget_controller.predict_sample(stop_probs=stop_probs,
                                                                     budget=budget,
                                                                     noise=power_noise,
