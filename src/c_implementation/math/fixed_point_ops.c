@@ -14,13 +14,11 @@ int16_t fp_sub(int16_t x, int16_t y) {
 int16_t fp_mul(int16_t x, int16_t y, uint16_t precision) {
     int32_t mul = ((int32_t) x) * ((int32_t) y);
     return (int16_t) (mul >> precision);
-    // return (int16_t) (((int32_t) x * (int32_t) y) / (1 << precision));
 }
 
 
 int16_t fp_div(int16_t x, int16_t y, uint16_t precision) {
     int32_t xLarge = ((int32_t) x) << precision;
-    // int32_t one = (int32_t) (1 << precision);
     return (int16_t) (xLarge / y);
 }
 
@@ -88,12 +86,6 @@ int16_t fp_relu(int16_t x, uint16_t precision) {
 
 
 int16_t fp_leaky_relu(int16_t x, uint16_t precision) {
-    //UNUSED(precision);
-    //if (x >= 0) {
-    //    return x;
-    //}
-    //return x / 4;
-
     UNUSED(precision);
     int16_t isPositive = (int16_t) (x > 0);
 
@@ -107,43 +99,6 @@ int16_t fp_leaky_relu(int16_t x, uint16_t precision) {
 int16_t fp_linear(int16_t x, uint16_t precision) {
     UNUSED(precision);
     return x;
-}
-
-
-int16_t fp_exp(int16_t x, uint16_t precision) {
-    /**
-     * Approximates e^x using the Power Series
-     */
-    int16_t should_invert = 0;
-    if (x < 0) {
-        x = fp_neg(x);
-        should_invert = 1;
-    }
-
-    int16_t result = 1 << precision;
-    int16_t prev_result = 0;
-
-    int16_t acc = 1 << precision;
-    int16_t fact = 1 << precision;
-    int16_t term;
-    int i;
-    for (i = 1; i < POWER_SERIES_TERMS && prev_result != result; i++) {
-        acc = fp_mul(x, acc, precision);
-
-        int16_t factor = (int16_t) (i * (1 << precision));
-        fact = fp_mul(fact, factor, precision);
-
-        term = fp_div(acc, fact, precision);
-
-        prev_result = result;
-        result = fp_add(term, result);
-    }
-
-    if (should_invert) {
-        result = fp_div(int_to_fp(1, precision), result, precision);
-    }
-
-    return result;
 }
 
 
@@ -210,4 +165,86 @@ int16_t fp_sigmoid(int16_t x, uint16_t precision) {
     }
 
     return result;
+}
+
+
+// 32 bit fixed-point operations
+int32_t fp32_add(int32_t x, int32_t y) {
+    return x + y;
+}
+
+
+int32_t fp32_neg(int32_t x) {
+    return -1 * x;
+}
+
+
+int32_t fp32_sub(int32_t x, int32_t y) {
+    return fp32_add(x, fp32_neg(y));
+}
+
+
+int32_t fp32_mul(int32_t x, int32_t y, uint16_t precision) {
+    int64_t xLarge = (int64_t) x;
+    int64_t yLarge = (int64_t) y;
+
+    return (int32_t) ((xLarge * yLarge) >> precision);
+}
+
+
+int32_t fp32_div(int32_t x, int32_t y, uint16_t precision) {
+    int64_t xLarge = ((int64_t) x) << precision;
+    return (int32_t) (xLarge / y);
+}
+
+
+int32_t fp32_sqrt(int32_t x, uint16_t precision) {
+    if (x < 0) {
+        return 0;
+    }
+
+    int32_t hundred = int_to_fp32(100, precision);
+    int32_t ten = int_to_fp32(10, precision);
+    int32_t a = x;
+    int32_t n = 1 << precision;
+
+    while (a > hundred) {
+        a = fp32_div(a, hundred, precision);
+        n = fp32_mul(n, ten, precision);
+    }
+
+    int32_t one256 = 1 << (precision - 8);
+    int32_t one32 = 1 << (precision - 5);
+    int32_t oneEight = 1 << (precision - 3);
+    int32_t oneHalf = 1 << (precision - 1);
+    int32_t two = 1 << (precision + 1);
+    int32_t eight = 1 << (precision + 3);
+    int32_t thirtyTwo = 1 << (precision + 5);
+
+    int32_t sqrtPart = 0;
+
+    if (a <= one256) {
+        sqrtPart = fp32_add(a << 4, 1 << (precision - 6));  // 16x + 1/64
+    } else if (a <= one32) {
+        sqrtPart = fp32_add(a << 2, 1 << (precision - 5));  // 4x + 1/16
+    } else if (a <= oneEight) {
+        sqrtPart = fp32_add(a << 1, 1 << (precision - 3));  // 2x + 1/8
+    } else if (a <= oneHalf) {
+        sqrtPart = fp32_add(a, 1 << (precision - 2));  // x + 1/4
+    } else if (a <= two) {
+        sqrtPart = fp32_add(a >> 1, oneHalf);  // x/2 + 1/2
+    } else if (a <= eight) {
+        sqrtPart = fp32_add(a >> 2, 1 << precision);  // x/4 + 1
+    } else if (a <= thirtyTwo) {
+        sqrtPart = fp32_add(a >> 3, 1 << (precision + 1));  // x/8  + 2
+    } else {
+        sqrtPart = fp32_add(a >> 4, 1 << (precision + 2));  // x/16 + 4
+    }
+
+    return fp32_mul(sqrtPart, n, precision);
+}
+
+
+int32_t int_to_fp32(int32_t x, uint16_t precision) {
+    return ((int32_t) x) << precision;
 }

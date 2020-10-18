@@ -9,16 +9,30 @@ int main(void) {
 
     printf("Testing Division...\n");
     test_div_basic();
+
+    printf("Testing Mod...\n");
     test_mod();
-    test_exp_basic();
-    test_exp_neg();
+
+    printf("Testing tanh...\n");
     test_tanh_basic();
+
+    printf("Testing sigmoid...\n");
     test_sigmoid_basic();
+
+    printf("Testing Relu...\n");
     test_relu_basic();
+
+    printf("Testing Round...\n");
     test_round_to_int();
+
+    printf("Testing Leaky Relu...\n");
     test_leaky_relu();
 
-    printf("\nPassed All Tests.\n\n");
+    printf("Testing Sub32...\n");
+    test_sub32();
+
+    printf("Testing Div32...\n");
+    test_div32();
 }
 
 void test_mul_basic(void) {
@@ -81,26 +95,6 @@ void test_mod(void) {
 
     mod = fp_mod(int_to_fp(-11, precision), int_to_fp(4, precision), precision);
     assert(int_to_fp(1, precision) == mod);
-}
-
-
-void test_exp_basic(void) {
-    int fixed_point_bits = 5;
-    int16_t one = 1 << fixed_point_bits;
-    int16_t two = 1 << (fixed_point_bits + 1);
-
-    assert(86 == fp_exp(one, fixed_point_bits));
-    assert(233 == fp_exp(two, fixed_point_bits));
-}
-
-
-void test_exp_neg(void) {
-    int fixed_point_bits = 8;
-    int16_t one = 1 << fixed_point_bits; 
-    int16_t two = 1 << (fixed_point_bits + 1);
-
-    assert(95 == fp_exp(fp_neg(one), fixed_point_bits));
-    assert(43 == fp_exp(fp_neg(two), fixed_point_bits));
 }
 
 
@@ -180,7 +174,24 @@ void test_round_to_int(void) {
     assert(int_to_fp(-4, precision) == fp_round_to_int(float_to_fp(-3.5, precision), precision));
 }
 
-uint8_t test_equality(int16_t expected, int16_t result) {
+
+void test_div32(void) {
+    uint16_t precision = 10;
+
+    int32_t x = int_to_fp32(13, precision);
+    int32_t y = int_to_fp32(183, precision);
+    test_equality(72, fp32_div(x, y, precision));
+}
+
+
+void test_sub32(void) {
+    uint16_t precision = 10;
+
+    test_equality(-38156, fp32_sub(71680, 109836));
+}
+
+
+uint8_t test_equality(int32_t expected, int32_t result) {
     if (expected != result) {
         printf("Failed. Expected: %d, Got: %d\n", expected, result);
         return 0;

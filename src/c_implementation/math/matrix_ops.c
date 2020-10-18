@@ -1,5 +1,7 @@
 #include "matrix_ops.h"
 
+static uint16_t SPARSEMAX_BUFFER[NUM_OUTPUTS] = {0};
+
 #ifdef IS_MSP
 #include "DSPLib.h"
 
@@ -8,7 +10,7 @@
 DSPLIB_DATA(MULTIPLY_BUFFER, 4);
 static dtype MULTIPLY_BUFFER[1800];
 
-void dma_load(dtype *result, dtype *data, uint16_t n) {
+dtype *dma_load(dtype *result, dtype *data, uint16_t n) {
     /**
      * Loads the first n elements of the data array into the result array using
      * DMA.
@@ -20,6 +22,8 @@ void dma_load(dtype *result, dtype *data, uint16_t n) {
     DMA0CTL = DMADT_5 | DMASRCINCR_3 | DMADSTINCR_3; // Rpt, inc
     DMA0CTL |= DMAEN;                                // Enable DMA0
     DMA0CTL |= DMAREQ;
+
+    return result;
 }
 #endif
 
@@ -102,8 +106,6 @@ matrix *matrix_multiply(matrix *result, matrix *mat1, matrix *mat2, uint16_t pre
     msp_matrix_mpy_q15_params mulParams;
 
     // Initialze LEA metadata
-    msp_status status;
-    msp_matrix_mpy_q15_params mulParams;
     mulParams.srcARows = n;
     mulParams.srcACols = m;
     mulParams.srcBRows = m;
@@ -430,7 +432,7 @@ uint16_t *argsort(matrix *vec, uint16_t *result) {
 
 matrix *sparsemax(matrix *result, matrix *vec, uint16_t precision) {
     // Sort indices of the vector in descending order
-    uint16_t sortedIndices[vec->numRows];
+    uint16_t *sortedIndices = SPARSEMAX_BUFFER;
     argsort(vec, sortedIndices);
 
     // Compute the k(z) function

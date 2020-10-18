@@ -1,19 +1,8 @@
 #include "neural_network.h"
 
 // Buffer for intermediate states
-#if IS_MSP
-DSPLIB_DATA(DATA_BUFFER, 4)
-#endif
-static dtype DATA_BUFFER[10 * STATE_SIZE * VECTOR_COLS] = {0};
-
-#if IS_MSP
-DSPLIB_DATA(STATE_BUFFER, 4)
-#endif
+static dtype DATA_BUFFER[7 * STATE_SIZE * VECTOR_COLS] = {0};
 static dtype STATE_BUFFER[3 * STATE_SIZE * VECTOR_COLS + NUM_OUTPUT_FEATURES * VECTOR_COLS] = {0};
-
-#if IS_MSP
-DSPLIB_DATA(INPUT_BUFFER, 4)
-#endif
 static dtype INPUT_BUFFER[NUM_INPUT_FEATURES * VECTOR_COLS] = {0};
 
 
@@ -55,7 +44,7 @@ void process_input(matrix *input, matrix states[SEQ_LENGTH], matrix logits[NUM_O
         matrix prevSampleState = { STATE_BUFFER + stateBufferOffset, STATE_SIZE, VECTOR_COLS };
         stateBufferOffset += prevSampleState.numRows * prevSampleState.numCols;
 
-        if (step - NUM_OUTPUTS >= 0) {
+        if (step >= NUM_OUTPUTS) {
             matrix_replace(&prevSampleState, states + step - NUM_OUTPUTS);
         } else {
             matrix_set(&prevSampleState, 0);

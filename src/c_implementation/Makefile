@@ -6,8 +6,8 @@ CC=$(CCBIN) -Wall -Wextra -std=c99 -pedantic -g -Wno-unused-variable
 
 default: model
 
-model: utils/utils.h utils/neural_network_utils.h math/matrix.h neural_network_parameters.h math/fixed_point_ops.h math/matrix_ops.h controller/pid_control.h layers/cells.h layers/layers.h neural_network.h main.h math/fixed_point_ops.c math/matrix_ops.c controller/pid_control.c layers/layers.c neural_network.c main.c
-	$(CC) -o model math/fixed_point_ops.c math/matrix_ops.c controller/pid_control.c layers/layers.c neural_network.c main.c
+model: utils/utils.h utils/neural_network_utils.h math/matrix.h neural_network_parameters.h math/fixed_point_ops.h math/matrix_ops.h controller/budget_distribution.h controller/pid_control.h layers/cells.h layers/layers.h neural_network.h main.h math/fixed_point_ops.c math/matrix_ops.c controller/budget_distribution.c controller/pid_control.c layers/layers.c neural_network.c main.c
+	$(CC) -o model math/fixed_point_ops.c math/matrix_ops.c controller/budget_distribution.c controller/pid_control.c layers/layers.c neural_network.c main.c
 
 matrix_test: utils/utils.h math/matrix.h neural_network_parameters.h math/fixed_point_ops.h math/matrix_ops.h tests/matrix_tests.h math/fixed_point_ops.c math/matrix_ops.c tests/matrix_tests.c
 	$(CC) -o matrix_test math/fixed_point_ops.c math/matrix_ops.c tests/matrix_tests.c
