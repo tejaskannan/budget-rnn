@@ -48,7 +48,7 @@ ConfidenceBound get_budget(int32_t target, int32_t step, int32_t maxSteps, int32
      *  target: The target energy budget (over all steps) in fixed-point representation
      *  step: The current step (minimum 1) as a standard integer
      *  maxSteps: The maximum number of steps as a standard integer
-     *  priorEnergy: The estimates energy readings as fixed-point values
+     *  priorEnergy: The estimated energy readings as fixed-point values
      *  distribution: The current distribution
      *  precision: Number of fractional bits in the fixed-point representation
      *

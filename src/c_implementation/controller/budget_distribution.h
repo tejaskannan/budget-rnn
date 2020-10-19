@@ -8,11 +8,11 @@
 #define PRIOR_COUNT 1
 
 struct BudgetDistribution {
-    int32_t levelCounts[NUM_OUTPUTS];
-    int32_t observedEnergy[NUM_OUTPUTS];
-    int32_t observedCounts[NUM_OUTPUT_FEATURES];
-    int32_t estimatedCounts[NUM_OUTPUT_FEATURES];
-    int32_t classCounts[NUM_OUTPUT_FEATURES][NUM_OUTPUTS];
+    int32_t levelCounts[NUM_OUTPUTS];  // Counts number of samples ending at each level (fixed point)
+    int32_t observedEnergy[NUM_OUTPUTS];  // Sum of energy observed per level (fixed point)
+    int32_t observedCounts[NUM_OUTPUT_FEATURES];  // Counts of observed labels based on model predictions (fixed point)
+    int32_t estimatedCounts[NUM_OUTPUT_FEATURES];  // Estimated count of each label from validation set (fixed point)
+    int32_t classCounts[NUM_OUTPUT_FEATURES][NUM_OUTPUTS];  // Observed + Prior counts of level distribution for each label (fixed point) 
 };
 typedef struct BudgetDistribution BudgetDistribution;
 
