@@ -141,6 +141,8 @@ def get_budget_interpolation_values(target: float, budgets: np.ndarray, avg_leve
 
             lower_power = min_power
             upper_power = expected_power[0]
+            upper_idx = 0
+            lower_idx = -1
         else:
             # The budget is above the highest learned budget. We either fix the policy to the highest level
             # or interpolate given the position of the budget w.r.t. the highest power level.
@@ -149,6 +151,8 @@ def get_budget_interpolation_values(target: float, budgets: np.ndarray, avg_leve
 
             lower_power = expected_power[-1]
             upper_power = max_power
+            lower_idx = len(budgets) - 1
+            upper_idx = len(budgets)
     else:
         lower_power = expected_power[lower_idx]
         upper_power = expected_power[upper_idx]
@@ -222,7 +226,7 @@ class BudgetOptimizer:
 
         return loss, avg_power
 
-    def fit(self, train_data: ThresholdData, valid_data: ThresholdData, should_print: bool) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def fit(self, train_data: ThresholdData, valid_data: ThresholdData, should_print: bool) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
         """
         Fits thresholds to the budgets corresponding to this class.
 
@@ -234,10 +238,11 @@ class BudgetOptimizer:
             valid_data: A tuple of the same structure as train_data. The data is used to detect convergence.
             should_print: Whether we should print the results
         Returns:
-            A tuple of three elements.
+            A tuple of four elements.
                 (1) A [S] array containing thresholds for each budget (S budgets in total)
                 (2) A [S, L] array of the normalized level counts for each budget
                 (3) A [S] array containing the final generalization accuracy for each budget
+                (4) The number of training iterations
         """
         # Arrays to keep track of the best thresholds per budget
         best_thresholds: List[np.ndarray] = []  # Holds list of best thresholds for each budget
@@ -249,6 +254,8 @@ class BudgetOptimizer:
 
         min_init = np.median(train_data.stop_probs, axis=0)  # [L]
         max_init = 1.0
+
+        training_iterations = 0
 
         for budget in self._budgets:
             if should_print:
@@ -272,16 +279,18 @@ class BudgetOptimizer:
             init_thresholds = init_thresholds * mask
 
             # Fit thresholds for this budget
-            thresholds, loss = self.fit_single(train_data=train_data,
-                                               valid_data=valid_data,
-                                               init_thresholds=init_thresholds,
-                                               budget=budget,
-                                               stealing_iterations=STEAL_ITERATIONS,
-                                               rand=rand,
-                                               should_print=should_print)
+            thresholds, loss, iterations = self.fit_single(train_data=train_data,
+                                                           valid_data=valid_data,
+                                                           init_thresholds=init_thresholds,
+                                                           budget=budget,
+                                                           stealing_iterations=STEAL_ITERATIONS,
+                                                           rand=rand,
+                                                           should_print=should_print)
 
             best_thresholds.append(thresholds)
             best_loss.append(loss)
+
+            training_iterations += iterations * self._trials
 
         final_thresholds = np.vstack(best_thresholds)
 
@@ -291,7 +300,7 @@ class BudgetOptimizer:
         avg_level_counts = level_counts / (np.sum(level_counts, axis=-1, keepdims=True) + SMALL_NUMBER)
 
         self._thresholds = final_thresholds
-        return final_thresholds, avg_level_counts, -np.array(best_loss).reshape(-1)
+        return final_thresholds, avg_level_counts, -np.array(best_loss).reshape(-1), training_iterations
 
     def evaluate(self, model_correct: np.ndarray, stop_probs: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -323,7 +332,7 @@ class BudgetOptimizer:
                    budget: float,
                    stealing_iterations: int,
                    rand: np.random.RandomState,
-                   should_print: bool) -> Tuple[np.ndarray, np.ndarray]:
+                   should_print: bool) -> Tuple[np.ndarray, np.ndarray, int]:
         """
         Fits the optimizer to the given predictions of the logistic regression model and neural network model.
 
@@ -337,9 +346,10 @@ class BudgetOptimizer:
             init_thresholds: An [S, L] of initial thresholds for each budget (S) and level (L)
             should_print: Whether we should print intermediate results
         Returns:
-            A tuple of two elements:
+            A tuple of three elements:
             (1) A [S, L] array of thresholds for each budget
             (2) A [S, 1] array of loss values for the returned thresholds
+            (3) The number of completed iterations
         """
         # Copy the initial thresholds, [S, L] array. We set the last threshold to zero because
         # there is no decision to make once inference reaches the top level.
@@ -360,6 +370,7 @@ class BudgetOptimizer:
         budget_array = np.full(fill_value=budget, shape=thresholds.shape[0])
 
         num_levels = train_data.model_correct.shape[1]
+        completed_iterations = 0
 
         for i in range(self._max_iter):
 
@@ -436,6 +447,8 @@ class BudgetOptimizer:
                 print('\tApprox Train Power: {0}'.format(best_power))
                 print('\tBest Valid Loss: {0}'.format(best_valid_loss))
 
+            completed_iterations += 1
+
             # Detect convergence
             if lowest_loss < best_overall_loss:
                 best_overall_loss = lowest_loss
@@ -470,7 +483,7 @@ class BudgetOptimizer:
         equal_mask = np.isclose(final_loss, best_loss)
         best_idx = np.argmax(final_power * equal_mask)
 
-        return best_thresholds[best_idx], final_loss[best_idx]
+        return best_thresholds[best_idx], final_loss[best_idx], completed_iterations
 
 
 # Model Controllers
@@ -527,6 +540,7 @@ class AdaptiveController(Controller):
         self._fit_start_time: Optional[str] = None
         self._fit_end_time: Optional[str] = None
         self._is_fitted = False
+        self._training_iters = 0
 
         # Create the budget optimizer and power system
         self._power_system = make_power_system(mode=power_system_type,
@@ -593,10 +607,12 @@ class AdaptiveController(Controller):
                                    stop_probs=train_results.stop_probs[train_idx, :])
 
         # Fit the thresholds
-        self._thresholds, self._avg_level_counts, _ = self._budget_optimizer.fit(train_data=train_data,
-                                                                                 valid_data=valid_data,
-                                                                                 should_print=should_print)
+        self._thresholds, self._avg_level_counts, _, training_iters = self._budget_optimizer.fit(train_data=train_data,
+                                                                                                 valid_data=valid_data,
+                                                                                                 should_print=should_print)
         end_time = datetime.now()
+
+        self._training_iters = training_iters
 
         # Evaluate the model optimizer
         train_acc, _ = self._budget_optimizer.evaluate(model_correct=train_data.model_correct,
@@ -611,6 +627,7 @@ class AdaptiveController(Controller):
         print('Test Accuracy: {0}'.format(test_acc))
 
         print('Approximate Power: {0}'.format(valid_pwr))
+        print('Training Iterations: {0}'.format(training_iters))
 
         self._fit_start_time = start_time.strftime('%Y-%m-%d-%H-%M-%S')
         self._fit_end_time = end_time.strftime('%Y-%m-%d-%H-%M-%S')
@@ -662,13 +679,16 @@ class AdaptiveController(Controller):
 
     def estimate_level_distribution(self, budget: float) -> Dict[int, np.ndarray]:
         assert self._label_distribution is not None, 'Must call fit() first'
+        assert self._thresholds is not None, 'Must call fit() first'
 
         lower_idx, upper_idx, weight = get_budget_interpolation_values(target=budget,
                                                                        budgets=self._budgets,
                                                                        avg_level_counts=self._avg_level_counts,
                                                                        power_system=self._power_system)
         num_thresholds = self._thresholds.shape[0]
-        
+       
+        print('Lower Idx: {0}, Upper Idx: {1}, Weight: {2}'.format(lower_idx, upper_idx, weight))
+
         if lower_idx < 0:
             lower_counts = self._lowest_distribution
         elif lower_idx >= num_thresholds:
@@ -817,6 +837,7 @@ class AdaptiveController(Controller):
             'highest_distribution': self._highest_distribution,
             'fit_start_time': self._fit_start_time,
             'fit_end_time': self._fit_end_time,
+            'training_iters': self._training_iters,
             'power_system_type': self._power_system.system_type.name
         }
 
@@ -867,6 +888,7 @@ class AdaptiveController(Controller):
         controller._label_distribution = serialized_info.get('label_distribution')
         controller._lowest_distribution = serialized_info.get('lowest_distribution')
         controller._highest_distribution = serialized_info.get('highest_distribution')
+        controller._training_iters = serialized_info.get('training_iters', 0)
 
         return controller
 
@@ -1028,7 +1050,7 @@ class BudgetWrapper:
             else:
                 power = model_power
 
-            power = power + noise
+            power += noise
             pred = self._model_predictions[current_time, level]
 
         # If this inference pushes the system over budget, we actually cannot complete it. We thus clip
