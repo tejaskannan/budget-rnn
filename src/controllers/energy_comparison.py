@@ -14,7 +14,7 @@ from noise_generators import get_noise_generator, NoiseGenerator
 from model_controllers import AdaptiveController, CONTROLLER_PATH
 from controller_utils import execute_adaptive_model, ModelResults
 from runtime_system import SystemType, RuntimeSystem
-from power_utils import get_avg_power
+from controllers.power_utils import make_power_system, PowerType
 
 
 BudgetResult = namedtuple('BudgetResult', ['accuracy', 'budget'])
@@ -82,6 +82,7 @@ def get_nearest_budgets(adaptive_log: Dict[str, Dict[str, Any]],
                         lowest_accuracy: float,
                         highest_accuracy: float,
                         target_accuracy: float,
+                        sensor_type: str,
                         seq_length: int,
                         num_levels: int) -> Tuple[BudgetResult, BudgetResult, str]:
     """
@@ -99,6 +100,10 @@ def get_nearest_budgets(adaptive_log: Dict[str, Dict[str, Any]],
     """
     budgets = np.array(list(map(float, adaptive_log.keys())))
 
+    power_system = make_power_system(mode=PowerType[sensor_type.upper()],
+                                     num_levels=num_levels,
+                                     seq_length=seq_length)
+
     # Get the largest budget for which the accuracy is LESS than the target
     lower_budget = None
     lower_accuracy = None
@@ -114,7 +119,7 @@ def get_nearest_budgets(adaptive_log: Dict[str, Dict[str, Any]],
     # If there is no accuracy which is lower than the target,
     # then we return the lowest possible region.
     if lower_budget is None:
-        min_power = get_avg_power(1, seq_length, multiplier=int(seq_length / num_levels))
+        min_power = power_system.get_min_power()
         min_result = BudgetResult(accuracy=lowest_accuracy, budget=min_power)
 
         min_budget = np.min(budgets)
@@ -141,7 +146,7 @@ def get_nearest_budgets(adaptive_log: Dict[str, Dict[str, Any]],
     # If there is no accuracy that is greater than the target, then
     # we return the highest possible region
     if upper_budget is None:
-        max_power = get_avg_power(seq_length, seq_length)
+        max_power = power_system.get_max_power()
         max_result = BudgetResult(accuracy=highest_accuracy, budget=max_power)
 
         max_budget = np.max(budgets)
@@ -168,6 +173,7 @@ def energy_comparison(adaptive_results: Dict[str, Dict[str, Any]],
                       adaptive_result_dict: Dict[str, ModelResults],
                       seq_length: int,
                       num_levels: int,
+                      sensor_type: str,
                       noise_generator: NoiseGenerator) -> List[float]:
     """
     Compare the energy results between the adaptive and baseline systems.
@@ -185,6 +191,7 @@ def energy_comparison(adaptive_results: Dict[str, Dict[str, Any]],
                                                  target_accuracy=baseline_acc,
                                                  lowest_accuracy=lowest_accuracy,
                                                  highest_accuracy=highest_accuracy,
+                                                 sensor_type=sensor_type,
                                                  seq_length=seq_length,
                                                  num_levels=num_levels)
 
@@ -235,6 +242,7 @@ if __name__ == '__main__':
     parser.add_argument('--baseline-logs', type=str, required=True, nargs='+')
     parser.add_argument('--dataset-folder', type=str, required=True)
     parser.add_argument('--noise-loc', type=float, default=0.0)
+    parser.add_argument('--sensor-type', type=str, choices=['bluetooth', 'temp'], required=True)
     parser.add_argument('--should-print', action='store_true')
     args = parser.parse_args()
 
@@ -269,6 +277,7 @@ if __name__ == '__main__':
                                system_type=SystemType.ADAPTIVE,
                                model_path=model_path,
                                dataset_folder=args.dataset_folder,
+                               power_system_type=PowerType[args.sensor_type.upper()],
                                seq_length=seq_length,
                                num_levels=num_levels,
                                num_classes=num_classes)
@@ -301,6 +310,7 @@ if __name__ == '__main__':
                                         adaptive_result_dict=adaptive_result_dict,
                                         seq_length=seq_length,
                                         num_levels=num_levels,
+                                        sensor_type=args.sensor_type,
                                         noise_generator=noise_generator)
 
         # Save the results
