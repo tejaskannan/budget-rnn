@@ -6,14 +6,14 @@ with open('README.md', 'r') as f:
 
 
 setuptools.setup(
-        name='ml-models',
+        name='budget-rnn',
         version='0.1',
         scripts=['run.py'],
         author='Tejas Kannan',
         author_email='tkannan@uchicago.edu',
-        description='A library of Machine Learning Models',
+        description='An implementation of Budget RNNs for inference under energy budgets.',
         long_description=long_description,
         url='https://github.com/tejaskannan/ml-models',
-        packages=setuptools.find_packages(),
-        classifiers=[]
+        packages['src'],
+        install_requires=['tensorflow==1.14', 'numpy', 'matplotlib', 'more_itertools', 'scipy']
 )
