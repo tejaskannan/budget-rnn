@@ -6,6 +6,7 @@
 #define BUDGET_DISTRIBUTION_GUARD
 
 #define PRIOR_COUNT 1
+#define UPDATE_WINDOW 1
 
 struct BudgetDistribution {
     int32_t levelCounts[NUM_OUTPUTS];  // Counts number of samples ending at each level (fixed point)

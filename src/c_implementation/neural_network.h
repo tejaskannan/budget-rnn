@@ -16,13 +16,12 @@ struct execution_state {
     uint8_t isStopped;
     int8_t prediction;
     uint8_t isCompleted;
-    uint8_t budgetIndex;
     int16_t cumulativeUpdateProb;  // Used only for Skip RNNs
 };
 typedef struct execution_state ExecutionState;
 
 uint8_t should_process(uint16_t t, ExecutionState *execState);
-void process_input(matrix *input, matrix states[SEQ_LENGTH], matrix logits[NUM_OUTPUTS], uint16_t step, ExecutionState *execState);
+void process_input(matrix *input, matrix states[SEQ_LENGTH], matrix logits[NUM_OUTPUTS], uint16_t step, int16_t thresholds[NUM_OUTPUTS], ExecutionState *execState);
 matrix *apply_transformation(matrix *result, matrix *input, matrix *state, uint16_t precision);
 matrix *compute_logits(matrix *result, matrix *input, uint16_t precision);
 int16_t compute_stop_output(matrix *state, uint16_t precision);

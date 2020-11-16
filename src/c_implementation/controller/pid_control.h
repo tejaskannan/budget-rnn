@@ -23,6 +23,6 @@ typedef struct PidController PidController;
 
 void init_pid_controller(PidController *controller, uint16_t precision);
 void add_error(int16_t error, PidController *controller);
-int16_t control_step(int16_t y_true_lower, int16_t y_true_upper, int16_t y_pred, PidController *controller);
+int16_t control_step(int32_t y_true_lower, int32_t y_true_upper, int32_t y_pred, PidController *controller);
 
 #endif

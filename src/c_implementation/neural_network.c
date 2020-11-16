@@ -24,11 +24,16 @@ uint8_t should_process(uint16_t t, ExecutionState *execState) {
 }
 
 
-void process_input(matrix *input, matrix states[SEQ_LENGTH], matrix logits[NUM_OUTPUTS], uint16_t step, ExecutionState *execState) {
+void process_input(matrix *input, matrix states[SEQ_LENGTH], matrix logits[NUM_OUTPUTS], uint16_t step, int16_t thresholds[NUM_OUTPUTS], ExecutionState *execState) {
     /**
      * Processes the current input using the recurrent neural network. This function tracks when inference should stop
      * through the execution state struct.
      */
+    #ifndef IS_SAMPLE_RNN
+    UNUSED(thresholds);
+    UNUSED(logits);
+    #endif
+
     uint16_t currentLevel = getCurrentLevel(step);
 
     uint16_t stateBufferOffset = 0;
@@ -83,7 +88,7 @@ void process_input(matrix *input, matrix states[SEQ_LENGTH], matrix logits[NUM_O
     if ((step + 1) % SAMPLES_PER_SEQ == 0) {
     #endif
         int16_t stopProb = compute_stop_output(&nextState, FIXED_POINT_PRECISION);
-        int16_t threshold = THRESHOLDS[execState->budgetIndex][currentLevel];
+        int16_t threshold = thresholds[currentLevel];
 
         if (threshold < stopProb || currentLevel == NUM_OUTPUTS) {
             execState->levelsToExecute = currentLevel;

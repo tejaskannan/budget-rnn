@@ -9,6 +9,7 @@
 #include "math/matrix_ops.h"
 #include "controller/pid_control.h"
 #include "controller/budget_distribution.h"
+#include "controller/interpolation.h"
 #include "neural_network_parameters.h"
 
 #ifndef MAIN_GUARD

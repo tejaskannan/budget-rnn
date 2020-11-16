@@ -10,6 +10,11 @@ void init_pid_controller(PidController *controller, uint16_t precision) {
     controller->integralWindow = 80;
     controller->integralMin = int_to_fp(-16, precision);
     controller->integralMax = int_to_fp(16, precision);
+
+    uint16_t i = ERROR_QUEUE_SIZE;
+    for (; i > 0; i--) {
+        controller->errorQueue[i] = 0;
+    }
 }
 
 
@@ -24,7 +29,7 @@ void add_error(int16_t error, PidController *controller) {
 
 
 int16_t prev_error(PidController *controller, uint16_t pos) {
-    uint16_t prevIndex;
+    uint16_t prevIndex = 0;
     if (pos > 0) {
         prevIndex = pos - 1;
     } else {
@@ -38,7 +43,8 @@ int16_t prev_error(PidController *controller, uint16_t pos) {
 int16_t integral_error(PidController *controller) {
     uint16_t windowIdx = controller->integralWindow;
     uint16_t queueIdx = controller->queuePos;
-    int16_t prevError, error;
+    int16_t prevError = 0;
+    int16_t error = 0;
     int16_t integral = 0;
 
     for (; windowIdx > 0; windowIdx--) {
@@ -63,84 +69,51 @@ int16_t integral_error(PidController *controller) {
 }
 
 
-int16_t control_step(int16_t y_true_lower, int16_t y_true_upper, int16_t y_pred, PidController *controller) {
+int16_t control_step(int32_t y_true_lower, int32_t y_true_upper, int32_t y_pred, PidController *controller) {
     /**
      * Runs the controller for one iteration and returns the next output.
      *
      * Args:
-     *  y_true: The reference value (a standard integer)
-     *  y_pred: The prediction value (a standard integer)
-     *  time: The current time step
-     *  controller: Information of the PID controller.
+     *  y_true_lower: The reference value lower bound (a fixed-point integer)
+     *  y_true_upper: The reference value upper bound (a fixed-point integer)
+     *  y_pred: The prediction value (a fixed-point integer)
+     *  controller: The PID controller.
      *
      * Returns:
      *  The prediction for the next iteration. This is a standard integer.
      */
+
     // Create the error signal
-    int16_t error;
+    int32_t error = 0;
     if (y_true_lower <= y_pred && y_pred <= y_true_upper) {
         error = 0;
     } else if (y_pred < y_true_lower) {
-        error = fp_sub(y_true_lower, y_pred);
+        error = fp32_sub(y_true_lower, y_pred);
     } else {
-        error = fp_sub(y_true_upper, y_pred);
+        error = fp32_sub(y_true_upper, y_pred);
+    }
+
+    int16_t clippedError = 0;
+    if (error >= INT16_MAX) {
+        clippedError = INT16_MAX;
+    } else if (error <= -INT16_MAX) {
+        clippedError = -INT16_MAX;
+    } else {
+        clippedError = (int16_t) error;
     }
 
     // Add error to the error queue
-    add_error(error, controller);
+    add_error(clippedError, controller);
 
     int16_t integral = integral_error(controller);
     int16_t integral_term = fp_mul(controller->ki, integral, controller->precision);
 
-    int16_t proportional_term = fp_mul(controller->kp, error, controller->precision);
-
-    // TODO: Compute derivative term
+    int16_t proportional_term = fp_mul(controller->kp, clippedError, controller->precision);
 
     int16_t control_error = fp_add(integral_term, proportional_term);
 
     if (error == 0) {
         return 0;
     }
-    return control_error; 
-
-//    // Convert the true and reference values to fixed point
-//    y_true = int_to_fp(y_true, controller->precision);
-//    y_pred = int_to_fp(y_pred, controller->precision);
-//
-//
-//
-//
-//    // Calculate the error
-//    int16_t error = fp_add(y_true, fp_neg(y_pred));
-//
-//    // Calculate the proportional error
-//    int16_t prop_error = fp_mul(error, controller->kp, controller->precision);
-//
-//    // Calculate the (approximate) integral error
-//    int16_t time_delta = fp_add(time, fp_neg(controller->prev_time));
-//    int16_t height = fp_div(fp_add(error, controller->prev_error), int_to_fp(2, controller->precision), controller->precision);
-//    int16_t integral_error = fp_mul(time_delta, height, controller->precision);
-//    integral_error = fp_mul(integral_error, controller->ki, controller->precision);
-//    integral_error = fp_add(integral_error, controller->integral);
-//
-//    // Compute the control signal
-//    int16_t control_signal = fp_add(prop_error, integral_error);
-//
-//    // Update the controller
-//    controller->integral = integral_error;
-//    controller->prev_error = error;
-//    controller->prev_time = time;
-//
-//    // Apply the process control function
-//    int16_t next_pred = fp_add(y_pred, control_signal);
-//    next_pred = fp_round_to_int(next_pred, controller->precision);
-//
-//    // Convert back to an integer
-//    int16_t rounded_pred = (int16_t) (next_pred >> controller->precision);
-//    if (rounded_pred > controller->max_value) {
-//        return controller->max_value;
-//    } else if (rounded_pred < controller->min_value) {
-//        return controller->min_value;
-//    }
-//    return rounded_pred;
+    return control_error;
 }

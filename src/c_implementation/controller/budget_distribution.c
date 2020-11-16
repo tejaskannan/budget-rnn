@@ -19,8 +19,8 @@ BudgetDistribution *init_distribution(BudgetDistribution *distribution, int32_t 
     int32_t totalCount = 0;
     for (i = NUM_OUTPUT_FEATURES; i > 0; i--) {
         for (j = NUM_OUTPUTS; j > 0; j--) {
-            distribution->classCounts[i-1][j-1] = int_to_fp32(classCounts[i-1][j-1], precision);
-            totalCount += classCounts[i-1][j-1];
+            distribution->classCounts[i-1][j-1] = classCounts[i-1][j-1];
+            totalCount = fp32_add(classCounts[i-1][j-1], totalCount);
         }
     }
 
@@ -29,10 +29,10 @@ BudgetDistribution *init_distribution(BudgetDistribution *distribution, int32_t 
         countSum = 0;
 
         for (j = NUM_OUTPUTS; j > 0; j--) {
-            countSum += classCounts[i-1][j-1];
+            countSum = fp32_add(classCounts[i-1][j-1], countSum);
         }
 
-        frac = fp32_div(int_to_fp32(countSum, precision), int_to_fp32(totalCount, precision), precision);
+        frac = fp32_div(countSum, totalCount, precision);
         distribution->estimatedCounts[i-1] = fp32_mul(frac, int_to_fp32(maxSteps, precision), precision);
     }
 
@@ -96,7 +96,7 @@ ConfidenceBound get_budget(int32_t target, int32_t step, int32_t maxSteps, int32
     int32_t weight;
 
     for (j = NUM_OUTPUT_FEATURES; j > 0; j--) {
-        classIdx = j-1;
+        classIdx = j - 1;
         int32_t *classLevelCounts = distribution->classCounts[classIdx];
 
         // Count the number of elements
@@ -157,6 +157,3 @@ void update_distribution(uint16_t classIdx, uint16_t level, int32_t energy, Budg
     distribution->levelCounts[level] = fp32_add(distribution->levelCounts[level], one);
     distribution->observedEnergy[level] = fp32_add(distribution->observedEnergy[level], energy);
 }
-
-
-
