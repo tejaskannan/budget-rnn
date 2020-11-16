@@ -120,11 +120,10 @@ def create_matrix(name: str, mat: np.ndarray, is_msp: bool) -> str:
 
     declarations: List[str] = []
 
-    # 1) Create the weight matrix array. We package everything into 1d arrays.
-    # As a note, we only place matrices with dimensions > 1 into LEA RAM. The
-    # operations for these matrices are done without the LEA to avoid overhead.
-    if is_msp and should_use_lea_ram(mat):
-        fram_pragma = 'DSPLIB_DATA({0}, 4)'.format(name)
+    # 1) Create the weight matrix array. We package everything into 1d arrays. For MSP conversion,
+    #    we allocate memory in FRAM.
+    if is_msp:
+        fram_pragma = '#pragma PERSISTENT({0})'.format(name)
         declarations.append(fram_pragma)
 
     matrix_string = array_to_string(mat.reshape(-1))
@@ -160,7 +159,19 @@ def create_array(array: Union[List[float], np.ndarray], name: str, dtype: str) -
     Returns:
         The C declaration and initialization of the array
     """
-    if isinstance(array, np.ndarray) and len(array.shape) == 2:
+    if isinstance(array, np.ndarray) and len(array.shape) == 3:
+        mats: List[str] = []
+        for mat in array:
+            mat_rows: List[str] = []
+            for row in mat:
+                mat_rows.append(array_to_string(row))
+
+            mats.append('{{ {0} }}'.format(','.join(mat_rows)))
+
+        array_string = '{{ {0} }}'.format(','.join(mats))
+        dim0, dim1, dim2 = array.shape
+        array_variable = '{0}[{1}][{2}][{3}]'.format(name, dim0, dim1, dim2)
+    elif isinstance(array, np.ndarray) and len(array.shape) == 2:
         rows: List[str] = []
         for row in array:
             rows.append(array_to_string(row))
