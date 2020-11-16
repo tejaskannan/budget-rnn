@@ -9,10 +9,8 @@ from controllers.noise_generators import get_noise_generator, NoiseGenerator
 
 ModelResult = namedtuple('ModelResult', ['power', 'accuracy', 'validation_accuracy'])
 
-MODEL_REGEX = re.compile('.*model-([^-]+)-([^-]+)-([^0-9]+)-.*jsonl\.gz')
-
-BASELINE_MODELS = ['RNN', 'NBOW']
-ADAPTIVE_MODELS = ['SAMPLE_RNN', 'SAMPLE_NBOW', 'CASCADE_RNN', 'CASCADE_NBOW']
+MODEL_ORDER = ['RNN', 'PHASED_RNN', 'SKIP_RNN', 'SAMPLE_RNN FIXED_UNDER_BUDGET', 'SAMPLE_RNN FIXED_MAX_ACCURACY', 'SAMPLE_RNN RANDOMIZED', 'SAMPLE_RNN', 'SAMPLE_RNN ADAPTIVE']
+MODEL_REGEX = re.compile(r'.*model-([^-]+)-([^-]+)-([^0-9]+)-.*jsonl\.gz')
 
 DATASET_MAP = {
     'emg': 'EMG',
@@ -25,17 +23,33 @@ DATASET_MAP = {
 }
 
 
-def rename_system(system_name: str) -> str:
-    if 'CASCADE' in system_name:
-        return system_name.replace('CASCADE', 'SAMPLE')
-    return system_name
+FILL_MAP = {
+    'RNN': '#a1dab4',
+    'SAMPLE_RNN': '#ffffcc',
+    'SAMPLE_RNN ADAPTIVE': '#ffeda0',
+    'SAMPLE_RNN FIXED_UNDER_BUDGET': '#feb24c',
+    'SAMPLE_RNN FIXED_MAX_ACCURACY': '#feb24c',
+    'SAMPLE_RNN RANDOMIZED': '#f03b20',
+    'SKIP_RNN': '#225ea8',
+    'PHASED_RNN': '#41b6c4'
+}
 
 
 def rename_dataset(dataset_name: str) -> str:
-    return DATASET_MAP[dataset_name.lower()]
+    normalized_name = normalize_dataset_name(dataset_name)
+    return DATASET_MAP[normalized_name.lower()]
+
+
+def get_model_name(system_name: str) -> str:
+    tokens = system_name.split()
+    return tokens[0]
 
 
 def normalize_dataset_name(dataset_name: str) -> str:
+    tokens = dataset_name.split('-')
+    name_tokens = [t for t in tokens if t != 'merged']
+
+    dataset_name = '-'.join(name_tokens)
     dataset_name = dataset_name.replace('_', '-')
     dataset_name = dataset_name.replace(' ', '-')
     return dataset_name.lower()
@@ -44,7 +58,9 @@ def normalize_dataset_name(dataset_name: str) -> str:
 def to_label(name: str) -> str:
     space_separated = name.replace('_', ' ').replace('-', ' ')
     tokens = space_separated.split()
-    return ' '.join((t.capitalize() if t.lower() != 'rnn' else t.upper() for t in tokens))
+    result = ' '.join((t.capitalize() if not t.lower().startswith('rnn') else t.upper() for t in tokens))
+    result = result.replace('Sample RNN', 'Budget RNN')
+    return result
 
 
 def get_model_and_type(path: str) -> Optional[Tuple[str, str, str]]:
@@ -62,6 +78,10 @@ def make_noise_generator(noise_type: str,
                          noise_amplitude: Optional[float]) -> NoiseGenerator:
     noise_params = dict(loc=noise_loc, scale=noise_scale, period=noise_period, amplitude=noise_amplitude, noise_type=noise_type)
     return list(get_noise_generator(noise_params=noise_params, max_time=0))[0]
+
+
+def get_fill(system_name: str) -> Optional[str]:
+    return FILL_MAP.get(system_name)
 
 
 def select_adaptive_system(model_results: Dict[float, Dict[str, List[ModelResult]]], baseline_name: str) -> str:
@@ -104,7 +124,7 @@ def get_results(input_folders: List[str], noise_generator: NoiseGenerator, model
     # Create the key for this series
     noise_key = str(noise_generator)
     fixed_type = 'fixed_{0}'.format(baseline_mode)
-   
+
     model_results: Dict[str, DefaultDict[float, Dict[str, List[float]]]] = dict()
 
     for folder in input_folders:
@@ -112,10 +132,11 @@ def get_results(input_folders: List[str], noise_generator: NoiseGenerator, model
         for file_name in iterate_files(folder, pattern=r'.*\.jsonl\.gz'):
 
             model_info = get_model_and_type(file_name)
+
             if model_info is None:
                 continue
 
-            system_type, model_name, dataset_name = model_info 
+            system_type, model_name, dataset_name = model_info
 
             # Initialize new dataset entry
             dataset_name = normalize_dataset_name(dataset_name)
