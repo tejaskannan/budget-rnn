@@ -13,7 +13,7 @@ setuptools.setup(
         author_email='tkannan@uchicago.edu',
         description='An implementation of Budget RNNs for inference under energy budgets.',
         long_description=long_description,
-        url='https://github.com/tejaskannan/ml-models',
+        url='https://github.com/tejaskannan/budget-rnn',
         packages['src'],
         install_requires=['tensorflow==1.14', 'numpy', 'matplotlib', 'more_itertools', 'scipy']
 )
