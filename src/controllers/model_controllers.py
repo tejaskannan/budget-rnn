@@ -686,8 +686,6 @@ class AdaptiveController(Controller):
                                                                        avg_level_counts=self._avg_level_counts,
                                                                        power_system=self._power_system)
         num_thresholds = self._thresholds.shape[0]
-       
-        print('Lower Idx: {0}, Upper Idx: {1}, Weight: {2}'.format(lower_idx, upper_idx, weight))
 
         if lower_idx < 0:
             lower_counts = self._lowest_distribution

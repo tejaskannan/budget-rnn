@@ -1,0 +1,7 @@
+{
+    "noise_type": "square",
+    "loc": 0.0,
+    "scale": 0.01,
+    "period": 0.5,
+    "amplitude": 2.0
+}

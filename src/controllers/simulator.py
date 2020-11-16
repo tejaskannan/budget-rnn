@@ -6,7 +6,7 @@ import time
 from argparse import ArgumentParser
 from collections import defaultdict, namedtuple
 from scipy import integrate
-from typing import Tuple, List, Union, Optional, Dict, Any
+from typing import Tuple, List, Union, Optional, Dict, Any, Set
 
 from controllers.runtime_system import RuntimeSystem, SystemType
 from controllers.controller_utils import execute_adaptive_model, execute_standard_model, concat_model_results, LOG_FILE_FMT
@@ -25,7 +25,8 @@ from utils.constants import SMALL_NUMBER, METADATA_PATH, HYPERS_PATH, SEQ_LENGTH
 from utils.loading_utils import restore_neural_network
 
 
-SimulationResult = namedtuple('SimulationResult', ['accuracy', 'power', 'target_budgets'])
+SimulationResult = namedtuple('SimulationResult', ['accuracy', 'power', 'target_budgets', 'energy'])
+COLORS = ['#08589e', '#6e016b', '#8c96c6', '#41b6c4', '#fd8d3c', '#238443']
 
 
 def run_simulation(runtime_systems: List[RuntimeSystem], budget: float, max_time: int, noise_generator: NoiseGenerator) -> Tuple[Dict[str, SimulationResult], List[float]]:
@@ -48,12 +49,20 @@ def run_simulation(runtime_systems: List[RuntimeSystem], budget: float, max_time
     result: Dict[str, SimulationResult] = dict()
 
     for system in runtime_systems:
-        system_result = SimulationResult(power=system.get_energy() / times,
+        energy = system.get_energy()
+
+        system_result = SimulationResult(power=energy / times,
                                          accuracy=system.get_num_correct() / times,
+                                         energy=energy,
                                          target_budgets=system.get_target_budgets())
         result[system.name] = system_result
 
     return result, noise_terms
+
+
+def moving_avg_power(energy: np.ndarray, window: int) -> np.ndarray:
+    moving_avg = energy[window:] - energy[:-window]
+    return moving_avg[window - 1:] / window
 
 
 def plot_and_save(sim_results: Dict[str, SimulationResult],
@@ -65,11 +74,14 @@ def plot_and_save(sim_results: Dict[str, SimulationResult],
                   noise_terms: List[float],
                   power_system_type: PowerType,
                   should_plot: bool,
-                  save_plots: bool):
+                  save_plots: bool,
+                  baseline_to_plot: str):
     # Make the output folder if necessary
     make_dir(output_folder)
 
     # Log the test results for each adaptive system
+    model_names: Set[str] = set()
+
     system_dict = {system.name: system for system in runtime_systems}
     for system_name in sorted(sim_results.keys()):
         system = system_dict[system_name]
@@ -80,10 +92,10 @@ def plot_and_save(sim_results: Dict[str, SimulationResult],
         if system.system_type == SystemType.ADAPTIVE:
             valid_accuracy = system.estimate_validation_results(budget=budget,
                                                                 max_time=max_time)
-            # print('Budget: {0:.3f}, Valid Results: {1}'.format(budget, valid_accuracy))
-            # print(np.bincount(system.get_levels(), minlength=4))
         else:
             valid_accuracy = None
+
+        model_names.add(system_name.split()[0])
 
         log_file_name = LOG_FILE_FMT.format(system.system_type.name.lower(), system.model_name, power_system_type.name.lower())
         log_path = os.path.join(output_folder, log_file_name)
@@ -100,42 +112,55 @@ def plot_and_save(sim_results: Dict[str, SimulationResult],
     if not should_plot:
         return
 
+    # Filter the simulation results
+    systems_to_keep = []
+    if baseline_to_plot in ('under_budget', 'all'):
+        for name in model_names:
+            systems_to_keep.append('{0} FIXED_UNDER_BUDGET'.format(name))
+
+    if baseline_to_plot in ('max_accuracy', 'all'):
+        for name in model_names:
+            systems_to_keep.append('{0} FIXED_MAX_ACCURACY'.format(name))
+
+    sim_results = {system_name: result for system_name, result in sim_results.items() if system_name in systems_to_keep or 'ADAPTIVE' in system_name or 'RANDOMIZED' in system_name}
+    colors = {system_name: COLORS[i] for i, system_name in enumerate(sim_results.keys())}
+
     # List of times for plotting
     times = np.arange(max_time) + 1
 
     # Plot the results
-    with plt.style.context('ggplot'):
-        fig, (ax1, ax2, ax3, ax4) = plt.subplots(figsize=(16, 12), nrows=4, ncols=1, sharex=True)
+    with plt.style.context('seaborn-ticks'):
+        fig, (ax1, ax2, ax3) = plt.subplots(figsize=(16, 12), nrows=3, ncols=1, sharex=True)
 
-        # Plot the power noise terms
-        ax1.plot(times, noise_terms)
-        ax1.set_title('Power Noise')
-        ax1.set_ylabel('Power (mw)')
+        # Plot the energy noise terms
+        ax1.plot(times, noise_terms, color='#e34a33')
+        ax1.set_title('Per-Step Energy Noise')
+        ax1.set_ylabel('Energy (mJ)')
 
         # Plot the Setpoints of each system
         for system_name, sim_result in sorted(sim_results.items()):
-            ax2.plot(times, sim_result.target_budgets, label=system_name)
-        ax2.legend()
-        ax2.set_title('Target Power Setpoint for Each Policy')
-        ax2.set_ylabel('Power (mW)')
+            if 'adaptive' in system_name.lower():
+                ax2.plot(times, sim_result.target_budgets * max_time, label=system_name, color=colors[system_name])
 
-        # Plot the accuracy of each system
+        ax2.axhline(budget * max_time, color='k', linewidth=2)
+
+        ax2.legend(fontsize=9)
+        ax2.set_title('Budget Setpoint')
+        ax2.set_ylabel('Energy (mJ)')
+
+        # Plot the Moving Avg Power of each system
         for system_name, sim_result in sorted(sim_results.items()):
-            ax3.plot(times, sim_result.accuracy, label=system_name)
-        ax3.legend()
-        ax3.set_title('Cumulative Accuracy for Each Policy')
-        ax3.set_ylabel('Accuracy')
+            avg_power = moving_avg_power(sim_result.energy, window=20)
+            diff = len(times) - len(avg_power)
 
-        # Plot the Avg Power of each system
-        for system_name, sim_result in sorted(sim_results.items()):
-            ax4.plot(times, sim_result.power, label=system_name)
-        power_budget = [budget for _ in times]
-        ax4.plot(times, power_budget, label='Budget')
+            ax3.plot(times[diff:], avg_power, label=system_name, color=colors[system_name])
 
-        ax4.legend()
-        ax4.set_title('Cumulative Avg Power for Each Policy')
-        ax4.set_ylabel('Power (mW)')
-        ax4.set_xlabel('Time')
+        ax3.axhline(budget, color='k', linewidth=2)
+
+        ax3.legend(loc='lower center', fontsize=8)
+        ax3.set_title('Moving Average Power for Each Policy')
+        ax3.set_ylabel('Power (mW)')
+        ax3.set_xlabel('Time')
 
         plt.tight_layout()
 
@@ -214,6 +239,7 @@ if __name__ == '__main__':
     parser.add_argument('--power-system-type', type=str, choices=['bluetooth', 'temp'], default='temp')
     parser.add_argument('--skip-plotting', action='store_true')
     parser.add_argument('--save-plots', action='store_true')
+    parser.add_argument('--baseline-to-plot', type=str, choices=['all', 'under_budget', 'max_accuracy'], default='all')
     args = parser.parse_args()
 
     # Validate arguments
@@ -369,4 +395,5 @@ if __name__ == '__main__':
                               output_folder=args.output_folder,
                               should_plot=not args.skip_plotting,
                               save_plots=args.save_plots,
-                              power_system_type=power_system_type)
+                              power_system_type=power_system_type,
+                              baseline_to_plot=args.baseline_to_plot)

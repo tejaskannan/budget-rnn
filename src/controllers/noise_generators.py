@@ -55,13 +55,12 @@ class SquareNoise(NoiseGenerator):
 
     def __init__(self, period: int, amplitude: float, max_time: int, loc: float, scale: float, seed: int):
         super().__init__(max_time, loc, scale, seed)
-        self._period = period
+        self._period = period * max_time
         self._amplitude = amplitude
 
     def get_noise(self, t: int) -> float:
         parity = int(t / self._period) % 2
-        sign = 2 * parity - 1
-        return sign * self._amplitude + self._gaussian_noise[t]
+        return parity * self._amplitude + self._gaussian_noise[t]
 
     def __str__(self) -> str:
         return 'Square: Loc -> {0:.4f}, Scale -> {1:.4f}, Period -> {2:.4f}, Amp -> {3:.4f}'.format(self._loc, self._scale, self._period, self._amplitude)

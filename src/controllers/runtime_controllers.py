@@ -10,7 +10,8 @@ from utils.constants import SMALL_NUMBER
 
 ConfidenceBounds = namedtuple('ConfidenceBounds', ['lower', 'upper'])
 SMOOTHING_FACTOR = 1
-POWER_PRIOR_COUNT = 100
+POWER_PRIOR_COUNT = 1
+POWER_WINDOW = 100
 
 
 class PIDController:
@@ -104,11 +105,11 @@ class BudgetDistribution:
         self._max_time = max_time
         self._num_levels = num_levels
         self._num_classes = num_classes
+
         self._budget = budget
 
         # Initialize variables for budget distribution tracking
-        self._level_counts = np.zeros(shape=(num_levels, ))
-        self._observed_power = np.zeros(shape=(num_levels, ))
+        self._observed_power: deque = deque()
         self._seq_length = seq_length
 
         # Estimate the power prior based on profiling
@@ -135,7 +136,13 @@ class BudgetDistribution:
         estimated_remaining = np.sum(class_count_diff)
 
         # MLE estimate of the mean power, [L] array
-        power_estimates = (POWER_PRIOR_COUNT * self._prior_power + self._observed_power) / (POWER_PRIOR_COUNT + self._level_counts)
+        level_counts = np.zeros((self._num_levels, ))
+        observed_power = np.zeros((self._num_levels, ))
+        for level, power in self._observed_power:
+            level_counts[level] += 1
+            observed_power[level] += power
+
+        power_estimates = (POWER_PRIOR_COUNT * self._prior_power + observed_power) / (POWER_PRIOR_COUNT + level_counts)
 
         # We compute the MLE estimates for the mean and variance power given the observed samples
         # and the training set
@@ -157,7 +164,9 @@ class BudgetDistribution:
             expected_rest += power_mean * remaining_fraction
             variance_rest += np.square(class_count_diff[class_idx] / time) * power_var
 
-        expected_power = (1.0 / time) * (self._max_time * self._budget - time_delta * expected_rest)
+        target = self._budget
+        expected_power = (1.0 / time) * (self._max_time * target - time_delta * expected_rest)
+
         expected_power = clip(expected_power, (power_estimates[0], power_estimates[-1]))  # Clip the power to the feasible range
 
         estimator_variance = (1.0 / time) * variance_rest
@@ -169,5 +178,7 @@ class BudgetDistribution:
     def update(self, label: int, level: int, power: float):
         self._observed_label_counts[label] += 1
         self._prior_counts[label][level] += 1
-        self._level_counts[level] += 1
-        self._observed_power[level] += power
+
+        self._observed_power.append((level, power))
+        if len(self._observed_power) > POWER_WINDOW:
+            self._observed_power.popleft()
