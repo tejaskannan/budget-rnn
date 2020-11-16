@@ -1,7 +1,0 @@
-{
-    "mode": "gist",
-    "scales": [0.1, 0.5],
-    "angles": [0],
-    "filter_size": 3,
-    "num_chunks": 4
-}

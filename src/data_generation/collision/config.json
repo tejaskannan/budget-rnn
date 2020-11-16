@@ -1,3 +1,0 @@
-{
-    "param_files": ["params/collision_params.json", "params/no_collision_params.json"]
-}
