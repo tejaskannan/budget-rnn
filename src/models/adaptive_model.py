@@ -145,12 +145,17 @@ class AdaptiveModel(TFModel):
         predictions: List[np.ndarray] = []
         labels: List[np.ndarray] = []
 
+        extra_ops = ['embeddings', 'transformed', 'aggregation_weights', 'unpooled_logits', 'pooled_logits']
+
         for batch_num, batch in enumerate(test_batch_generator):
             if max_num_batches is not None and batch_num >= max_num_batches:
                 break
 
             feed_dict = self.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
-            results = self.execute(ops=[self.prediction_op_name], feed_dict=feed_dict)
+            results = self.execute(ops=[self.prediction_op_name] + extra_ops, feed_dict=feed_dict)
+
+            for op_name in extra_ops:
+                print('{0}: {1}'.format(op_name, results[op_name]))
 
             predictions.append(results[self.prediction_op_name])
             labels.append(np.vstack(batch[OUTPUT]))
@@ -397,6 +402,7 @@ class AdaptiveModel(TFModel):
                         should_activate_final=False,
                         dropout_keep_rate=dropout_keep_rate,
                         name=OUTPUT_LAYER_NAME)
+        self._ops['unpooled_logits'] = output
 
         # Apply the pooling layer to mix outputs from each level.
         pool_W = tf.get_variable(name='{0}-kernel'.format(AGGREGATION_NAME),
@@ -407,29 +413,15 @@ class AdaptiveModel(TFModel):
                                  shape=[1, 1],
                                  initializer=tf.initializers.random_uniform(minval=-0.7, maxval=0.7),
                                  trainable=True)
-        output = pool_predictions(pred=output,
-                                  states=transformed,
-                                  W=pool_W,
-                                  b=pool_b,
-                                  seq_length=self.num_outputs,
-                                  activation_noise=activation_noise,
-                                  name=AGGREGATION_NAME)
-
-        ## Add optional output pooling layer
-        #if self.hypers.model_params.get('pool_outputs', False):
-        #    # Compute output weights, [B, L, 1]
-        #    output_weights, _ = dense(inputs=transformed,
-        #                              units=1,
-        #                              activation='sigmoid',
-        #                              use_bias=True,
-        #                              activation_noise=activation_noise,
-        #                              name=AGGREGATION_NAME)
-
-        #    # Successively pool the logits, [B, L, K]
-        #    output = successive_pooling(inputs=output,
-        #                                aggregation_weights=output_weights,
-        #                                seq_length=self.num_outputs,
-        #                                name=AGGREGATION_NAME)
+        output, weights = pool_predictions(pred=output,
+                                           states=transformed,
+                                           W=pool_W,
+                                           b=pool_b,
+                                           seq_length=self.num_outputs,
+                                           activation_noise=activation_noise,
+                                           name=AGGREGATION_NAME)
+        self._ops['aggregation_weights'] = weights
+        self._ops['pooled_logits'] = output
 
         # Reshape to [B, 1, 1]
         expected_output = tf.expand_dims(self._placeholders[OUTPUT], axis=-1)
