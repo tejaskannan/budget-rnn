@@ -15,5 +15,5 @@ setuptools.setup(
         long_description=long_description,
         url='https://github.com/tejaskannan/ml-models',
         packages['src'],
-        install_requires=['tensorflow==1.14', 'numpy', 'matplotlib', 'more_itertools', 'scipy']
+        install_requires=['tensorflow==2.3.1', 'numpy', 'matplotlib', 'more_itertools', 'scipy']
 )
