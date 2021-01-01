@@ -10,18 +10,18 @@ def get_optimizer(name: str, learning_rate: float, learning_rate_decay: float, g
     momentum = momentum if momentum is not None else 0.0
     name = name.lower()
 
-    scheduled_learning_rate = tf.train.exponential_decay(learning_rate=learning_rate,
-                                                         global_step=global_step,
-                                                         decay_steps=decay_steps,
-                                                         decay_rate=learning_rate_decay)
+    scheduled_learning_rate = tf.compat.v1.train.exponential_decay(learning_rate=learning_rate,
+                                                                   global_step=global_step,
+                                                                   decay_steps=decay_steps,
+                                                                   decay_rate=learning_rate_decay)
     if name == 'sgd':
-        return tf.train.GradientDescentOptimizer(learning_rate=scheduled_learning_rate)
+        return tf.compat.v1.train.GradientDescentOptimizer(learning_rate=scheduled_learning_rate)
     elif name == 'nesterov':
-        return tf.train.MomentumOptimizer(learning_rate=scheduled_learning_rate, momentum=momentum)
+        return tf.compat.v1.train.MomentumOptimizer(learning_rate=scheduled_learning_rate, momentum=momentum)
     elif name == 'adagrad':
-        return tf.train.AdagradOptimizer(learning_rate=scheduled_learning_rate)
+        return tf.compat.v1.train.AdagradOptimizer(learning_rate=scheduled_learning_rate)
     elif name == 'adam':
-        return tf.train.AdamOptimizer(learning_rate=scheduled_learning_rate)
+        return tf.compat.v1.train.AdamOptimizer(learning_rate=scheduled_learning_rate)
     else:
         raise ValueError(f'Unknown optimizer {name}!')
 
@@ -93,6 +93,66 @@ def mask_last_element(values: tf.Tensor) -> tf.Tensor:
     return values * mask
 
 
+def sparsemax(logits: tf.Tensor) -> tf.Tensor:
+    """
+    Normalizes the logits along the final row using SparseMax.
+    Sparsemax is described here: https://arxiv.org/abs/1602.02068
+
+    This function is based on the following implementation from Tensorflow
+    addons: https://github.com/tensorflow/addons/blob/v0.11.2/tensorflow_addons/activations/sparsemax.py
+
+    Args:
+        logits: A [B, C] tensor of log probabilities for each class (C)
+    Returns:
+         A [B, C] tensor containing the normalizes probabilities along the
+            final axis.
+    """
+    logits_shape = tf.shape(logits)
+    batch_size, num_classes = logits_shape[0], logits_shape[1]
+
+    # Rename logits to z (this is the notation of the paper)
+    z = logits
+
+    # Sort Z
+    z_sorted, _ = tf.nn.top_k(z, k=num_classes)
+
+    # Calculate the k(z) function
+    z_cumsum = tf.math.cumsum(z_sorted, axis=-1)
+    k = tf.range(1, tf.cast(num_classes, logits.dtype) + 1, dtype=logits.dtype)
+    z_check = 1 + k * z_sorted > z_cumsum
+
+    # As the z_check vector is always [1,1,...1,0,0,...0] finding the
+    # (index + 1) of the last `1` is the same as just summing the number of 1.
+    k_z = tf.math.reduce_sum(tf.cast(z_check, tf.int32), axis=-1)
+
+    # Calculate tau(z)
+    # If there are inf values or all values are -inf, the k_z will be zero,
+    # this is mathematically invalid and will also cause the gather to fail.
+    # We prevent this issue for now by setting k_z = 1 if k_z = 0, this is then
+    # fixed later (see p_safe) by returning p = NaN. This results in the same
+    # behavior as softmax.
+    k_z_safe = tf.math.maximum(k_z, 1)
+    indices = tf.stack([tf.range(0, batch_size), tf.reshape(k_z_safe, [-1]) - 1], axis=1)
+    tau_sum = tf.gather_nd(z_cumsum, indices)
+    tau_z = (tau_sum - 1) / tf.cast(k_z, logits.dtype)
+
+    # Calculate p
+    p = tf.math.maximum(tf.cast(0, logits.dtype), z - tf.expand_dims(tau_z, -1))
+
+    # If k_z = 0 or if z = NaN, then the input is invalid
+    p_safe = tf.where(
+        tf.expand_dims(
+            tf.math.logical_or(tf.math.equal(k_z, 0), tf.math.is_nan(z_cumsum[:, -1])),
+            axis=-1,
+        ),
+        tf.fill([batch_size, num_classes], tf.cast(float('nan'), logits.dtype)),
+        p,
+    )
+
+    # Return the normalized values
+    return p_safe
+
+
 def pool_predictions(pred: tf.Tensor, states: tf.Tensor, seq_length: int, W: tf.Variable, b: tf.Variable, activation_noise: tf.Tensor, name: str) -> tf.Tensor:
     """
     Pools the given predictions using (trainable) weighted averages derived from the states.
@@ -128,7 +188,8 @@ def pool_predictions(pred: tf.Tensor, states: tf.Tensor, seq_length: int, W: tf.
         masked_weights = weights - index_mask  # [B, L, 1]
         masked_weights = tf.squeeze(masked_weights, axis=-1)  # [B, L]
 
-        normalized_weights = tf.contrib.sparsemax.sparsemax(masked_weights)  # [B, L]
+        # normalized_weights = tf.compat.v1.contrib.sparsemax.sparsemax(masked_weights)  # [B, L]
+        normalized_weights = sparsemax(logits=masked_weights)  # [B, L]
         weightsArray = weightsArray.write(value=masked_weights, index=index)
 
         normalized_weights = tf.expand_dims(normalized_weights, axis=-1)  # [B, L, 1]

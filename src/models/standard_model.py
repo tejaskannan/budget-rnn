@@ -9,6 +9,7 @@ from models.tf_model import TFModel
 from layers.cells.cell_factory import make_rnn_cell, CellClass, CellType
 from layers.dense import mlp, dense
 from layers.output_layers import OutputType, compute_binary_classification_output, compute_multi_classification_output
+from layers.conv import conv_1d
 from dataset.dataset import Dataset, DataSeries
 from utils.hyperparameters import HyperParameters
 from utils.misc import sample_sequence_batch, batch_sample_noise
@@ -88,23 +89,23 @@ class StandardModel(TFModel):
         output_dtype = tf.int32 if self.output_type == OutputType.MULTI_CLASSIFICATION else tf.float32
 
         if not is_frozen:
-            self._placeholders[INPUTS] = tf.placeholder(shape=input_shape,
-                                                        dtype=tf.float32,
-                                                        name=INPUTS)
-            self._placeholders[OUTPUT] = tf.placeholder(shape=(None, num_output_features),
-                                                        dtype=output_dtype,
-                                                        name=OUTPUT)
-            self._placeholders[DROPOUT_KEEP_RATE] = tf.placeholder(shape=(),
-                                                                   dtype=tf.float32,
-                                                                   name=DROPOUT_KEEP_RATE)
-            self._placeholders[ACTIVATION_NOISE] = tf.placeholder(shape=(),
+            self._placeholders[INPUTS] = tf.compat.v1.placeholder(shape=input_shape,
                                                                   dtype=tf.float32,
-                                                                  name=ACTIVATION_NOISE)
+                                                                  name=INPUTS)
+            self._placeholders[OUTPUT] = tf.compat.v1.placeholder(shape=(None, num_output_features),
+                                                                  dtype=output_dtype,
+                                                                  name=OUTPUT)
+            self._placeholders[DROPOUT_KEEP_RATE] = tf.compat.v1.placeholder(shape=(),
+                                                                             dtype=tf.float32,
+                                                                             name=DROPOUT_KEEP_RATE)
+            self._placeholders[ACTIVATION_NOISE] = tf.compat.v1.placeholder(shape=(),
+                                                                            dtype=tf.float32,
+                                                                            name=ACTIVATION_NOISE)
             # Phased RNNs have an extra leak rate placeholder
             if self.model_type == SequenceModelType.PHASED_RNN:
-                self._placeholders[LEAK_RATE] = tf.placeholder(shape=(),
-                                                               dtype=tf.float32,
-                                                               name=LEAK_RATE)
+                self._placeholders[LEAK_RATE] = tf.compat.v1.placeholder(shape=(),
+                                                                         dtype=tf.float32,
+                                                                         name=LEAK_RATE)
         else:
             self._placeholders[INPUTS] = tf.ones(shape=(1,) + input_shape[1:], dtype=tf.float32, name=INPUTS)
             self._placeholders[OUTPUT] = tf.ones(shape=(1, num_output_features), dtype=output_dtype, name=OUTPUT)
@@ -115,7 +116,7 @@ class StandardModel(TFModel):
                 self._placeholders[LEAK_RATE] = tf.ones(shape=(), dtype=tf.float32, name=LEAK_RATE)
 
     def make_model(self, is_train: bool):
-        with tf.variable_scope(MODEL, reuse=tf.AUTO_REUSE):
+        with tf.compat.v1.variable_scope(MODEL, reuse=tf.compat.v1.AUTO_REUSE):
             self._make_model(is_train)
 
     def _make_model(self, is_train: bool):
@@ -165,6 +166,30 @@ class StandardModel(TFModel):
                                              aggregation_weights=aggregation_weights,
                                              name='{0}-pool'.format(AGGREGATION_NAME),
                                              seq_length=self.metadata[SEQ_LENGTH])
+        elif self.model_type == SequenceModelType.CONV:
+            # Apply the convolution filter, [B, T, D]
+            filtered = conv_1d(inputs=embeddings,
+                               filter_width=self.hypers.model_params['conv_filter_width'],
+                               stride=1,
+                               activation=self.hypers.model_params['conv_activation'],
+                               activation_noise=activation_noise,
+                               dropout_keep_rate=dropout_keep_rate,
+                               use_dropout=True,
+                               name=TRANSFORM_NAME)
+
+            # Compute the aggregation weights, [B, T, 1]
+            aggregation_weights, _ = dense(inputs=filtered,
+                                           units=1,
+                                           activation='sigmoid',
+                                           activation_noise=activation_noise,
+                                           use_bias=True,
+                                           name=AGGREGATION_NAME)
+
+            # Pool the data in a successive fashion, [B, T, D]
+            transformed = successive_pooling(inputs=filtered,
+                                             aggregation_weights=aggregation_weights,
+                                             name='{0}-pool'.format(AGGREGATION_NAME),
+                                             seq_length=self.metadata[SEQ_LENGTH])
         elif self.model_type == SequenceModelType.RNN:
             cell = make_rnn_cell(cell_class=CellClass.STANDARD,
                                  cell_type=CellType[self.hypers.model_params['rnn_cell_type'].upper()],
@@ -174,11 +199,11 @@ class StandardModel(TFModel):
                                  name=RNN_CELL_NAME)
 
             initial_state = cell.zero_state(batch_size=batch_size, dtype=tf.float32)
-            rnn_outputs, state = tf.nn.dynamic_rnn(cell=cell,
-                                                   inputs=embeddings,
-                                                   initial_state=initial_state,
-                                                   dtype=tf.float32,
-                                                   scope=TRANSFORM_NAME)
+            rnn_outputs, state = tf.compat.v1.nn.dynamic_rnn(cell=cell,
+                                                             inputs=embeddings,
+                                                             initial_state=initial_state,
+                                                             dtype=tf.float32,
+                                                             scope=TRANSFORM_NAME)
             transformed = rnn_outputs  # [B, T, D]
         elif self.model_type == SequenceModelType.SKIP_RNN:
             cell = make_rnn_cell(cell_class=CellClass.SKIP,
@@ -192,11 +217,11 @@ class StandardModel(TFModel):
                                                    batch_size=batch_size,
                                                    dtype=tf.float32)
             # Apply RNN
-            rnn_outputs, states = tf.nn.dynamic_rnn(cell=cell,
-                                                    inputs=embeddings,
-                                                    initial_state=initial_state,
-                                                    dtype=tf.float32,
-                                                    scope=TRANSFORM_NAME)
+            rnn_outputs, states = tf.compat.v1.nn.dynamic_rnn(cell=cell,
+                                                              inputs=embeddings,
+                                                              initial_state=initial_state,
+                                                              dtype=tf.float32,
+                                                              scope=TRANSFORM_NAME)
             transformed = rnn_outputs.output  # [B, T, D]
             self._ops[SKIP_GATES] = tf.squeeze(rnn_outputs.state_update_gate, axis=-1)  # [B, T]
         elif self.model_type == SequenceModelType.PHASED_RNN:
@@ -216,11 +241,11 @@ class StandardModel(TFModel):
                                                    batch_size=batch_size,
                                                    dtype=tf.float32)
 
-            rnn_outputs, state = tf.nn.dynamic_rnn(cell=cell,
-                                                   inputs=embeddings,
-                                                   initial_state=initial_state,
-                                                   dtype=tf.float32,
-                                                   scope=TRANSFORM_NAME)
+            rnn_outputs, state = tf.compat.v1.nn.dynamic_rnn(cell=cell,
+                                                             inputs=embeddings,
+                                                             initial_state=initial_state,
+                                                             dtype=tf.float32,
+                                                             scope=TRANSFORM_NAME)
             transformed = rnn_outputs.output  # [B, T, D]
             self._ops[PHASE_GATES] = tf.squeeze(rnn_outputs.time_gate, axis=-1)  # [B, T]
         else:
@@ -336,7 +361,6 @@ class StandardModel(TFModel):
 
             if batch_result.get(PHASE_GATES) is not None:
                 phase_gates_list.append(batch_result[PHASE_GATES])
-                print(batch_result[PHASE_GATES])
 
             labels_list.append(np.vstack(batch[OUTPUT]))
             predictions_list.append(np.vstack(prediction))
@@ -365,7 +389,7 @@ class StandardModel(TFModel):
 
                 result[PREDICTION]['AVG_UPDATES'] = float(np.average(num_updates))
                 result[PREDICTION]['STD_UPDATES'] = float(np.std(num_updates))
-            
+
             if self.model_type == SequenceModelType.PHASED_RNN:
                 phase_gates = np.concatenate(phase_gates_list, axis=0)  # [B, T]
                 num_updates = np.count_nonzero(phase_gates, axis=-1)  # [B]

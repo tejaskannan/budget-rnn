@@ -27,13 +27,13 @@ def dense(inputs: tf.Tensor,
             This second entry is included for debugging purposes.
     """
     # Get the size of the input features, denoted by D
-    input_units = inputs.get_shape()[-1].value
+    input_units = inputs.get_shape()[-1]
 
     # Create the weight matrix
-    W = tf.get_variable(name='{0}-kernel'.format(name),
-                        shape=[input_units, units],
-                        initializer=tf.initializers.glorot_uniform(),
-                        trainable=True)
+    W = tf.compat.v1.get_variable(name='{0}-kernel'.format(name),
+                                  shape=[input_units, units],
+                                  initializer=tf.compat.v1.initializers.glorot_uniform(),
+                                  trainable=True)
 
     # Apply the given weights
     transformed = tf.matmul(inputs, W)  # [B, ..., K]
@@ -41,10 +41,10 @@ def dense(inputs: tf.Tensor,
     # Add the bias if specified
     if use_bias:
         # Bias vector of size [K]
-        b = tf.get_variable(name='{0}-bias'.format(name),
-                            shape=[1, units],
-                            initializer=tf.initializers.random_uniform(minval=-0.7, maxval=0.7),
-                            trainable=True)
+        b = tf.compat.v1.get_variable(name='{0}-bias'.format(name),
+                                      shape=[1, units],
+                                      initializer=tf.compat.v1.initializers.random_uniform(minval=-0.7, maxval=0.7),
+                                      trainable=True)
         transformed = transformed + b
 
     pre_activation = transformed
@@ -56,9 +56,9 @@ def dense(inputs: tf.Tensor,
 
     # Apply noise regularization
     transformed = apply_noise(transformed, scale=activation_noise)
-    
+
     if dropout_keep_rate is not None:
-        transformed = tf.nn.dropout(transformed, keep_prob=dropout_keep_rate)
+        transformed = tf.nn.dropout(transformed, rate=1.0 - dropout_keep_rate)
 
     return transformed, pre_activation
 

@@ -2,8 +2,8 @@ import tensorflow as tf
 from enum import Enum, auto
 from typing import Dict, Any
 
-from .skip_rnn_cells import SkipUGRNNCell, SkipGRUCell
-from .sample_rnn_cells import SampleUGRNNCell
+from .skip_rnn_cells import SkipUGRNNCell
+from .budget_rnn_cells import BudgetUGRNNCell
 from .standard_rnn_cells import UGRNNCell
 from .phased_rnn_cells import PhasedUGRNNCell
 from utils.tfutils import get_activation
@@ -12,7 +12,7 @@ from utils.tfutils import get_activation
 class CellClass(Enum):
     STANDARD = auto()
     SKIP = auto()
-    SAMPLE = auto()
+    BUDGET = auto()
     PHASED = auto()
 
 
@@ -27,7 +27,7 @@ def make_rnn_cell(cell_class: CellClass,
                   activation: str,
                   name: str,
                   recurrent_noise: tf.Tensor,
-                  **kwargs: Dict[str, Any]) -> tf.nn.rnn_cell.RNNCell:
+                  **kwargs: Dict[str, Any]) -> tf.compat.v1.nn.rnn_cell.RNNCell:
     """
     Creates an RNN Cell using the given parameters.
     """
@@ -37,11 +37,9 @@ def make_rnn_cell(cell_class: CellClass,
     elif cell_class == CellClass.SKIP:
         if cell_type == CellType.UGRNN:
             return SkipUGRNNCell(units=units, activation=activation, name=name, recurrent_noise=recurrent_noise)
-        elif cell_type == CellType.GRU:
-            return SkipGRUCell(units=units, activation=activation, name=name, recurrent_noise=recurrent_noise)
-    elif cell_class == CellClass.SAMPLE:
+    elif cell_class == CellClass.BUDGET:
         if cell_type == CellType.UGRNN:
-            return SampleUGRNNCell(units=units, activation=activation, name=name, recurrent_noise=recurrent_noise)
+            return BudgetUGRNNCell(units=units, activation=activation, name=name, recurrent_noise=recurrent_noise)
     elif cell_class == CellClass.PHASED:
         if cell_type == CellType.UGRNN:
             return PhasedUGRNNCell(units=units,

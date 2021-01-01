@@ -16,7 +16,7 @@ from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_
 from utils.constants import EMBEDDING_NAME, TRANSFORM_NAME, AGGREGATION_NAME, OUTPUT_LAYER_NAME, LOSS_WEIGHTS
 from utils.constants import STOP_OUTPUT_NAME, STOP_OUTPUT_LOGITS, STOP_PREDICTION, RNN_CELL_NAME, ACTIVATION_NOISE
 from utils.loss_utils import get_loss_weights, get_temperate_loss_weight
-from utils.sequence_model_utils import SequenceModelType, is_rnn, is_nbow, is_sample
+from utils.sequence_model_utils import SequenceModelType, is_nbow, is_conv
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, get_multi_classification_metric
 
 
@@ -25,7 +25,11 @@ class AdaptiveModel(TFModel):
     def __init__(self, hyper_parameters: HyperParameters, save_folder: str, is_train: bool):
         super().__init__(hyper_parameters, save_folder, is_train)
 
+        # Extract the model type. We translate SAMPLE_RNN to BUDGET_RNN for backward
+        # compatibility reasons. A previous version of the BUDGET_RNN was named
+        # SAMPLE_RNN.
         model_type = self.hypers.model_params['model_type'].upper()
+        model_type = 'BUDGET_RNN' if model_type == 'SAMPLE_RNN' else model_type
         self.model_type = SequenceModelType[model_type]
 
         self.name = model_type
@@ -64,7 +68,7 @@ class AdaptiveModel(TFModel):
     def output_op_name(self) -> str:
         return self.prediction_op_name
 
-    def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool, epoch_num: int) -> Dict[tf.Tensor, np.ndarray]:
+    def batch_to_feed_dict(self, batch: Dict[str, List[Any]], is_train: bool, epoch_num: int) -> Dict[tf.compat.v1.placeholder, np.ndarray]:
         dropout = self.hypers.dropout_keep_rate if is_train else 1.0
         activation_noise = self.hypers.input_noise if is_train else 0.0
         input_batch = np.array(batch[INPUTS])
@@ -112,25 +116,25 @@ class AdaptiveModel(TFModel):
         output_dtype = tf.int32 if self.output_type == OutputType.MULTI_CLASSIFICATION else tf.float32
 
         if not is_frozen:
-            self._placeholders[INPUTS] = tf.placeholder(shape=[None, self.seq_length] + list(input_features_shape),
-                                                        dtype=tf.float32,
-                                                        name=INPUTS)
+            self._placeholders[INPUTS] = tf.compat.v1.placeholder(shape=[None, self.seq_length] + list(input_features_shape),
+                                                                  dtype=tf.float32,
+                                                                  name=INPUTS)
             # [B, K]
-            self._placeholders[OUTPUT] = tf.placeholder(shape=[None, num_output_features],
-                                                        dtype=output_dtype,
-                                                        name=OUTPUT)
-            self._placeholders[DROPOUT_KEEP_RATE] = tf.placeholder(shape=[],
-                                                                   dtype=tf.float32,
-                                                                   name=DROPOUT_KEEP_RATE)
-            self._placeholders[LOSS_WEIGHTS] = tf.placeholder(shape=[self.num_outputs],
-                                                              dtype=tf.float32,
-                                                              name=LOSS_WEIGHTS)
-            self._placeholders[STOP_LOSS_WEIGHT] = tf.placeholder(shape=[],
-                                                                  dtype=tf.float32,
-                                                                  name=STOP_LOSS_WEIGHT)
-            self._placeholders[ACTIVATION_NOISE] = tf.placeholder(shape=[],
-                                                                  dtype=tf.float32,
-                                                                  name=ACTIVATION_NOISE)
+            self._placeholders[OUTPUT] = tf.compat.v1.placeholder(shape=[None, num_output_features],
+                                                                  dtype=output_dtype,
+                                                                  name=OUTPUT)
+            self._placeholders[DROPOUT_KEEP_RATE] = tf.compat.v1.placeholder(shape=[],
+                                                                             dtype=tf.float32,
+                                                                             name=DROPOUT_KEEP_RATE)
+            self._placeholders[LOSS_WEIGHTS] = tf.compat.v1.placeholder(shape=[self.num_outputs],
+                                                                        dtype=tf.float32,
+                                                                        name=LOSS_WEIGHTS)
+            self._placeholders[STOP_LOSS_WEIGHT] = tf.compat.v1.placeholder(shape=[],
+                                                                            dtype=tf.float32,
+                                                                            name=STOP_LOSS_WEIGHT)
+            self._placeholders[ACTIVATION_NOISE] = tf.compat.v1.placeholder(shape=[],
+                                                                            dtype=tf.float32,
+                                                                            name=ACTIVATION_NOISE)
         else:
             self._placeholders[INPUTS] = tf.ones(shape=[1, self.seq_length] + list(input_features_shape), dtype=tf.float32, name=INPUTS)
             self._placeholders[OUTPUT] = tf.ones(shape=[1, num_output_features], dtype=output_dtype, name=OUTPUT)
@@ -145,17 +149,12 @@ class AdaptiveModel(TFModel):
         predictions: List[np.ndarray] = []
         labels: List[np.ndarray] = []
 
-        extra_ops = ['embeddings', 'transformed', 'aggregation_weights', 'unpooled_logits', 'pooled_logits']
-
         for batch_num, batch in enumerate(test_batch_generator):
             if max_num_batches is not None and batch_num >= max_num_batches:
                 break
 
             feed_dict = self.batch_to_feed_dict(batch, is_train=False, epoch_num=0)
-            results = self.execute(ops=[self.prediction_op_name] + extra_ops, feed_dict=feed_dict)
-
-            for op_name in extra_ops:
-                print('{0}: {1}'.format(op_name, results[op_name]))
+            results = self.execute(ops=[self.prediction_op_name], feed_dict=feed_dict)
 
             predictions.append(results[self.prediction_op_name])
             labels.append(np.vstack(batch[OUTPUT]))
@@ -176,7 +175,7 @@ class AdaptiveModel(TFModel):
         return result
 
     def make_model(self, is_train: bool):
-        with tf.variable_scope(MODEL, reuse=tf.AUTO_REUSE):
+        with tf.compat.v1.variable_scope(MODEL, reuse=tf.compat.v1.AUTO_REUSE):
             if is_nbow(self.model_type):
                 self._make_nbow_model(is_train)
             else:
@@ -195,8 +194,8 @@ class AdaptiveModel(TFModel):
                              units=state_size,
                              activation=self.hypers.model_params['embedding_activation'],
                              activation_noise=activation_noise,
-                             use_bias=True,
-                             name=EMBEDDING_NAME)
+                             use_bias=true,
+                             name=embedding_name)
 
         # Apply the transformation layer, [B, T, D]
         transformed, _ = mlp(inputs=embedding,
@@ -238,7 +237,7 @@ class AdaptiveModel(TFModel):
         if self.stride_length > 1:
             pooled_states = tf.gather(pooled_states, indices=sequence_indices, axis=1)  # [B, T, D]
 
-        # Create the output prediction, [B, K]
+        # Create the output prediction, [B, K]. These are the log probabilities.
         output, _ = mlp(inputs=pooled_states,
                         output_size=self.num_output_features,
                         hidden_sizes=self.hypers.model_params['output_hidden_units'],
@@ -303,10 +302,8 @@ class AdaptiveModel(TFModel):
                               use_bias=True,
                               name=EMBEDDING_NAME)
 
-        self._ops['embeddings'] = embeddings
-
         # Create the RNN Cell
-        rnn_cell_class = CellClass.STANDARD if self.stride_length == 1 else CellClass.SAMPLE
+        rnn_cell_class = CellClass.STANDARD if self.stride_length == 1 else CellClass.BUDGET
         rnn_cell = make_rnn_cell(cell_class=rnn_cell_class,
                                  cell_type=CellType[self.hypers.model_params['rnn_cell_type'].upper()],
                                  units=state_size,
@@ -319,11 +316,11 @@ class AdaptiveModel(TFModel):
             initial_state = rnn_cell.get_initial_state(inputs=embeddings,
                                                        batch_size=batch_size,
                                                        dtype=tf.float32)
-            rnn_outputs, _ = tf.nn.dynamic_rnn(cell=rnn_cell,
-                                               inputs=embeddings,
-                                               initial_state=initial_state,
-                                               dtype=tf.float32,
-                                               scope=TRANSFORM_NAME)
+            rnn_outputs, _ = tf.compat.v1.nn.dynamic_rnn(cell=rnn_cell,
+                                                         inputs=embeddings,
+                                                         initial_state=initial_state,
+                                                         dtype=tf.float32,
+                                                         scope=TRANSFORM_NAME)
 
             # Collect the outputs at the end of every chunk
             output_stride = int(self.seq_length / self.num_outputs)
@@ -331,11 +328,11 @@ class AdaptiveModel(TFModel):
             transformed = tf.gather(rnn_outputs, indices=output_indices, axis=1)  # [B, L, D]
             stop_states = transformed  # [B, L, D]
         else:
-            prev_states = tf.get_variable(name='prev-states',
-                                          initializer=tf.zeros_initializer(),
-                                          shape=[1, 1, state_size],
-                                          dtype=tf.float32,
-                                          trainable=False)
+            prev_states = tf.compat.v1.get_variable(name='prev-states',
+                                                    initializer=tf.zeros_initializer(),
+                                                    shape=[1, 1, state_size],
+                                                    dtype=tf.float32,
+                                                    trainable=False)
             prev_states = tf.tile(prev_states, multiples=(batch_size, self.samples_per_seq, 1))  # [B, S, D]
 
             level_outputs: List[tf.Tensor] = []
@@ -356,13 +353,11 @@ class AdaptiveModel(TFModel):
                 initial_state = rnn_cell.get_initial_state(inputs=rnn_inputs,
                                                            batch_size=batch_size,
                                                            dtype=tf.float32)
-                rnn_outputs, final_state = tf.nn.dynamic_rnn(cell=rnn_cell,
-                                                             inputs=rnn_inputs,
-                                                             initial_state=initial_state,
-                                                             dtype=tf.float32,
-                                                             scope=TRANSFORM_NAME)
-
-                self._ops['rnn_outputs_{0}'.format(i)] = rnn_outputs
+                rnn_outputs, final_state = tf.compat.v1.nn.dynamic_rnn(cell=rnn_cell,
+                                                                       inputs=rnn_inputs,
+                                                                       initial_state=initial_state,
+                                                                       dtype=tf.float32,
+                                                                       scope=TRANSFORM_NAME)
 
                 level_outputs.append(tf.expand_dims(final_state, axis=1))
                 level_stop_states.append(tf.expand_dims(rnn_outputs.output[:, 0, :], axis=1))
@@ -373,9 +368,6 @@ class AdaptiveModel(TFModel):
             # Concatenate the outputs and first states from each sub-sequence into [B, L, D] tensors
             transformed = tf.concat(level_outputs, axis=1)
             stop_states = tf.concat(level_stop_states, axis=1)
-
-        self._ops['transformed'] = transformed
-        self._ops['stop_states'] = stop_states
 
         # Compute the stop output, Result is a [B, L, 1] tensor.
         stop_output, _ = mlp(inputs=stop_states,
@@ -402,17 +394,16 @@ class AdaptiveModel(TFModel):
                         should_activate_final=False,
                         dropout_keep_rate=dropout_keep_rate,
                         name=OUTPUT_LAYER_NAME)
-        self._ops['unpooled_logits'] = output
 
         # Apply the pooling layer to mix outputs from each level.
-        pool_W = tf.get_variable(name='{0}-kernel'.format(AGGREGATION_NAME),
-                                 shape=[state_size * 2, 1],
-                                 initializer=tf.initializers.glorot_uniform(),
-                                 trainable=True)
-        pool_b = tf.get_variable(name='{0}-bias'.format(AGGREGATION_NAME),
-                                 shape=[1, 1],
-                                 initializer=tf.initializers.random_uniform(minval=-0.7, maxval=0.7),
-                                 trainable=True)
+        pool_W = tf.compat.v1.get_variable(name='{0}-kernel'.format(AGGREGATION_NAME),
+                                           shape=[state_size * 2, 1],
+                                           initializer=tf.compat.v1.initializers.glorot_uniform(),
+                                           trainable=True)
+        pool_b = tf.compat.v1.get_variable(name='{0}-bias'.format(AGGREGATION_NAME),
+                                           shape=[1, 1],
+                                           initializer=tf.compat.v1.initializers.random_uniform(minval=-0.7, maxval=0.7),
+                                           trainable=True)
         output, weights = pool_predictions(pred=output,
                                            states=transformed,
                                            W=pool_W,
@@ -420,8 +411,6 @@ class AdaptiveModel(TFModel):
                                            seq_length=self.num_outputs,
                                            activation_noise=activation_noise,
                                            name=AGGREGATION_NAME)
-        self._ops['aggregation_weights'] = weights
-        self._ops['pooled_logits'] = output
 
         # Reshape to [B, 1, 1]
         expected_output = tf.expand_dims(self._placeholders[OUTPUT], axis=-1)

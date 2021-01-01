@@ -27,7 +27,7 @@ class TFModel(Model):
     def __init__(self, hyper_parameters: HyperParameters, save_folder: str, is_train: bool):
         super().__init__(hyper_parameters, save_folder, is_train)
 
-        self._sess = tf.Session(graph=tf.Graph())
+        self._sess = tf.compat.v1.Session(graph=tf.Graph())
 
         self._ops: Dict[str, tf.Tensor] = dict()
         self._placeholders: Dict[str, tf.Tensor] = dict()
@@ -64,7 +64,7 @@ class TFModel(Model):
         raise NotImplementedError()
 
     @property
-    def sess(self) -> tf.Session:
+    def sess(self) -> tf.compat.v1.Session:
         return self._sess
 
     @property
@@ -73,7 +73,7 @@ class TFModel(Model):
 
     @property
     def trainable_vars(self) -> List[tf.Variable]:
-        return list(self.sess.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES))
+        return list(self.sess.graph.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES))
 
     @property
     def output_type(self) -> OutputType:
@@ -216,7 +216,7 @@ class TFModel(Model):
         Initializes all variables in the computation graph.
         """
         with self.sess.graph.as_default():
-            init_op = tf.global_variables_initializer()
+            init_op = tf.compat.v1.global_variables_initializer()
             self.sess.run(init_op)
 
     def count_parameters(self) -> int:
@@ -281,7 +281,7 @@ class TFModel(Model):
         optimizer_op = self._optimizer.apply_gradients(pruned_gradients)
 
         # Increment global step counter
-        global_step_op = tf.assign_add(self._global_step, 1)
+        global_step_op = tf.compat.v1.assign_add(self._global_step, 1)
 
         # Add operations. By coupling the optimizer and the global step ops, we don't need
         # to worry about applying these operations separately.
