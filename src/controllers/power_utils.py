@@ -2,16 +2,29 @@ import numpy as np
 from enum import Enum, auto
 from typing import List
 
+from utils.sequence_model_utils import SequenceModelType
+
+
 # Constants from taking readings from the DHT-11 sensor
 TEMP_VCC = 3.3                  # Supply Voltage (3.3 V)
 TEMP_FREQ = 0.5                 # Sample Freq (Hz)
-TEMP_COLLECT_CURRENT = 0.8566    # Current when taking a sample
-TEMP_BASE_CURRENT = 0.055    # Current when skipping a sample (based on LPM0)
+TEMP_COLLECT_CURRENT = 0.8566   # Current when taking a sample (mA)
+TEMP_BASE_CURRENT = 0.055       # Current when skipping a sample (based on LPM0)
 
 # Constants based on bluetooth-based data collection
 BT_ENERGY_PER_SAMPLE = 29.63  # Energy to collect a sample (mJ)
 BT_BASE_POWER = 1.594  # Baseline power when system is idle (mW)
 BT_FREQ = 0.5
+
+VCC = 3.3
+CLK_RATE = 1  # In MHz
+CURRENT_PER_MHZ = 0.409  # mA / 10^6 cycles
+CELL_CYCLES = 0.200  # 10^6 cycles
+OUTPUT_CYCLES = 0.035  # 10^6 cycles
+MERGE_CYCLES = 0.115  # 10^6 cycles
+POOL_CYCLES = 0.064  # 10^6 cycles
+HALT_CYCLES = 0.027  # 10^6 cycles
+CONTROLLER_CYCLES = 0.0311  # 10^6 cycles
 
 
 class PowerType(Enum):
@@ -21,10 +34,11 @@ class PowerType(Enum):
 
 class PowerSystem:
 
-    def __init__(self, total_levels: int, seq_length: int):
+    def __init__(self, total_levels: int, seq_length: int, model_type: SequenceModelType):
         self._total_levels = total_levels
         self._seq_length = seq_length
         self._multiplier = int(seq_length / total_levels)
+        self._model_type = model_type
 
     @property
     def total_levels(self) -> int:
@@ -53,7 +67,25 @@ class PowerSystem:
         total_time = self.sample_period * self._seq_length
         num_samples = num_levels * self._multiplier
 
-        return self.get_energy(num_samples=num_samples) / total_time
+        sampling_power = self.get_energy(num_samples=num_samples) / total_time
+
+        # Calculate the computation energy using the total
+        # number of cycles required for inference
+        cycles = CELL_CYCLES * num_samples
+
+        if self._model_type == SequenceModelType.BUDGET_RNN:
+            cycles += (num_levels - 1) * self._multiplier * MERGE_CYCLES  # Merging
+            cycles += num_levels * OUTPUT_CYCLES  # Output layer
+            cycles += num_levels * HALT_CYCLES  # Halting layer
+            cycles += POOL_CYCLES  # Pooling layer
+            cycles += CONTROLLER_CYCLES  # Controller module
+        else:
+            cycles += OUTPUT_CYCLES
+
+        cpu_energy = VCC * CURRENT_PER_MHZ * CLK_RATE * cycles
+        cpu_power = cpu_energy / total_time
+
+        return sampling_power + cpu_power
 
     def get_avg_power_multiple(self, num_levels: np.ndarray) -> float:
         """
@@ -138,10 +170,10 @@ class TemperaturePowerSystem(PowerSystem):
         return TEMP_VCC * self.sample_period * (current_on + current_off)
 
 
-def make_power_system(mode: PowerType, num_levels: int, seq_length: int) -> PowerSystem:
-    if mode == PowerType.BLUETOOTH:
-        return BluetoothPowerSystem(total_levels=num_levels, seq_length=seq_length)
-    elif mode == PowerType.TEMP:
-        return TemperaturePowerSystem(total_levels=num_levels, seq_length=seq_length)
+def make_power_system(power_type: PowerType, num_levels: int, seq_length: int, model_type: SequenceModelType) -> PowerSystem:
+    if power_type == PowerType.BLUETOOTH:
+        return BluetoothPowerSystem(total_levels=num_levels, seq_length=seq_length, model_type=model_type)
+    elif power_type == PowerType.TEMP:
+        return TemperaturePowerSystem(total_levels=num_levels, seq_length=seq_length, model_type=model_type)
     else:
         raise ValueError('Unknown power system type: {0}'.format(mode.name))

@@ -199,6 +199,11 @@ def create_multi_model_systems(folder: str, model_type: str, power_system_type: 
     test_results_concat = concat_model_results(test_results)
     valid_results_concat = concat_model_results(valid_results)
 
+    power_system = make_power_system(num_levels=seq_length,
+                                     seq_length=seq_length,
+                                     model_type=model.model_type,
+                                     power_type=power_system_type)
+
     under_budget = RuntimeSystem(test_results=test_results_concat,
                                  valid_results=valid_results_concat,
                                  system_type=SystemType.FIXED_UNDER_BUDGET,
@@ -207,7 +212,7 @@ def create_multi_model_systems(folder: str, model_type: str, power_system_type: 
                                  seq_length=seq_length,
                                  num_levels=len(model_paths),
                                  num_classes=num_classes,
-                                 power_system_type=power_system_type)
+                                 power_system=power_system)
     runtime_systems.append(under_budget)
 
     max_accuracy = RuntimeSystem(test_results=test_results_concat,
@@ -218,7 +223,7 @@ def create_multi_model_systems(folder: str, model_type: str, power_system_type: 
                                  seq_length=seq_length,
                                  num_levels=len(model_paths),
                                  num_classes=num_classes,
-                                 power_system_type=power_system_type)
+                                 power_system=power_system)
     runtime_systems.append(max_accuracy)
 
     return runtime_systems
@@ -265,6 +270,11 @@ if __name__ == '__main__':
         valid_results = execute_adaptive_model(model, dataset, series=DataSeries.VALID)
         test_results = execute_adaptive_model(model, dataset, series=DataSeries.TEST)
 
+        adaptive_power_system = make_power_system(num_levels=num_levels,
+                                                  seq_length=seq_length,
+                                                  power_type=power_system_type,
+                                                  model_type=model.model_type)
+
         adaptive_system = RuntimeSystem(valid_results=valid_results,
                                         test_results=test_results,
                                         system_type=SystemType.ADAPTIVE,
@@ -273,7 +283,7 @@ if __name__ == '__main__':
                                         seq_length=seq_length,
                                         num_levels=num_levels,
                                         num_classes=num_classes,
-                                        power_system_type=power_system_type)
+                                        power_system=adaptive_power_system)
         runtime_systems.append(adaptive_system)
 
         adaptive_fixed_under_budget = RuntimeSystem(valid_results=valid_results,
@@ -284,7 +294,7 @@ if __name__ == '__main__':
                                                     seq_length=seq_length,
                                                     num_levels=num_levels,
                                                     num_classes=num_classes,
-                                                    power_system_type=power_system_type)
+                                                    power_system=adaptive_power_system)
         runtime_systems.append(adaptive_fixed_under_budget)
 
         adaptive_fixed_max_accuracy = RuntimeSystem(valid_results=valid_results,
@@ -295,7 +305,7 @@ if __name__ == '__main__':
                                                     seq_length=seq_length,
                                                     num_levels=num_levels,
                                                     num_classes=num_classes,
-                                                    power_system_type=power_system_type)
+                                                    power_system=adaptive_power_system)
         runtime_systems.append(adaptive_fixed_max_accuracy)
 
         randomized_system = RuntimeSystem(valid_results=valid_results,
@@ -306,7 +316,7 @@ if __name__ == '__main__':
                                           seq_length=seq_length,
                                           num_levels=num_levels,
                                           num_classes=num_classes,
-                                          power_system_type=power_system_type)
+                                          power_system_type=adaptive_power_system)
         runtime_systems.append(randomized_system)
 
     # Make the baseline systems
@@ -319,6 +329,11 @@ if __name__ == '__main__':
     seq_length = model.metadata[SEQ_LENGTH]
     num_classes = model.metadata[NUM_CLASSES]
 
+    standard_power_system = make_power_system(num_levels=seq_length,
+                                              seq_length=seq_length,
+                                              power_type=power_system_type,
+                                              model_type=model.model_type)
+
     greedy_system = RuntimeSystem(test_results=test_results,
                                   valid_results=valid_results,
                                   system_type=SystemType.GREEDY,
@@ -327,7 +342,7 @@ if __name__ == '__main__':
                                   seq_length=seq_length,
                                   num_levels=seq_length,
                                   num_classes=num_classes,
-                                  power_system_type=power_system_type)
+                                  power_system=standard_power_system)
     runtime_systems.append(greedy_system)
 
     fixed_under_budget = RuntimeSystem(test_results=test_results,
@@ -338,7 +353,7 @@ if __name__ == '__main__':
                                        seq_length=seq_length,
                                        num_levels=seq_length,
                                        num_classes=num_classes,
-                                       power_system_type=power_system_type)
+                                       power_system=standard_power_system)
     runtime_systems.append(fixed_under_budget)
 
     fixed_max_accuracy = RuntimeSystem(test_results=test_results,
@@ -349,7 +364,7 @@ if __name__ == '__main__':
                                        seq_length=seq_length,
                                        num_levels=seq_length,
                                        num_classes=num_classes,
-                                       power_system_type=power_system_type)
+                                       power_system=standard_power_system)
     runtime_systems.append(fixed_max_accuracy)
 
     # Add the Skip RNN models if provided

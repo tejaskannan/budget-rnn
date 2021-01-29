@@ -6,8 +6,7 @@ from enum import Enum, auto
 from typing import List, Dict, Any, Tuple
 
 from controllers.controller_utils import clip, get_budget_index, ModelResults
-# from controllers.power_utils import get_power_estimates, get_avg_power_multiple
-from controllers.power_utils import PowerType, make_power_system
+from controllers.power_utils import PowerType, PowerSystem
 from controllers.model_controllers import AdaptiveController, FixedController, RandomController, BudgetWrapper
 from controllers.model_controllers import CONTROLLER_PATH, levels_to_execute, classification_for_levels, MultiModelController
 from controllers.runtime_controllers import PIDController, BudgetController, BudgetDistribution
@@ -49,7 +48,7 @@ class RuntimeSystem:
                  num_classes: int,
                  num_levels: int,
                  seq_length: int,
-                 power_system_type: PowerType):
+                 power_system: PowerSystem):
         self._system_type = system_type
         self._test_results = test_results
         self._valid_results = valid_results
@@ -73,6 +72,8 @@ class RuntimeSystem:
         self._test_accuracy = test_results.accuracy  # [L]
         self._stop_probs = test_results.stop_probs
         self._labels = test_results.labels
+
+        self._power_system = power_system
 
         # Results from the validation set. These are used by a few controllers
         # to select the model or model level
@@ -164,21 +165,18 @@ class RuntimeSystem:
                                                         seq_length=self._seq_length,
                                                         max_time=max_time,
                                                         allow_violations=allow_violations,
-                                                        power_system_type=self._power_system_type)
+                                                        power_system=self._power_system)
             else:
-                power_system = make_power_system(mode=self._power_system_type,
-                                                 num_levels=self._num_levels,
-                                                 seq_length=self._seq_length)
-
                 level = get_budget_index(budget=budget,
                                          valid_accuracy=self._valid_accuracy,
                                          max_time=max_time,
-                                         power_estimates=power_system.get_power_estimates(),
+                                         power_estimates=self._power_system.get_power_estimates(),
                                          allow_violations=allow_violations)
+
                 self._controller = FixedController(model_index=level,
                                                    num_levels=self._num_levels,
                                                    seq_length=self._seq_length,
-                                                   power_system_type=self._power_system_type)
+                                                   power_system=self._power_system)
         elif self._system_type == SystemType.ADAPTIVE:
             # Make the budget distribution and PID controller
             self._pid_controller = BudgetController(kp=KP,
@@ -187,8 +185,6 @@ class RuntimeSystem:
                                                     integral_bounds=INTEGRAL_BOUNDS,
                                                     integral_window=INTEGRAL_WINDOW)
 
-            # Create the power distribution. TODO: Remove (explicit) dependence on the validation results.
-            # Instead, we should mix the label counts from the bounded sides using a weighted average.
             prior_counts = self._controller.estimate_level_distribution(budget=budget)
 
             self._budget_distribution = BudgetDistribution(prior_counts=prior_counts,

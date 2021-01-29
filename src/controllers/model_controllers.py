@@ -490,10 +490,8 @@ class BudgetOptimizer:
 
 class Controller:
 
-    def __init__(self, num_levels: int, seq_length: int, power_system_type: PowerType):
-        self._power_system = make_power_system(mode=power_system_type,
-                                               num_levels=num_levels,
-                                               seq_length=seq_length)
+    def __init__(self, num_levels: int, seq_length: int, power_system: PowerSystem):
+        self._power_system = power_system
 
     @property
     def power_system(self) -> PowerSystem:
@@ -508,14 +506,15 @@ class Controller:
 
 class AdaptiveController(Controller):
 
-    def __init__(self, model_path: str,
+    def __init__(self,
+                 model_path: str,
                  dataset_folder: str,
                  precision: int,
                  budgets: List[float],
                  trials: int,
                  patience: int,
                  max_iter: int,
-                 power_system_type: PowerType):
+                 power_system: PowerSystem):
         self._model_path = model_path
         self._dataset_folder = dataset_folder
 
@@ -533,6 +532,7 @@ class AdaptiveController(Controller):
         self._trials = trials
         self._patience = patience
         self._max_iter = max_iter
+        self._power_system = power_system
 
         self._thresholds = None
         self._est_accuracy = None
@@ -541,11 +541,6 @@ class AdaptiveController(Controller):
         self._fit_end_time: Optional[str] = None
         self._is_fitted = False
         self._training_iters = 0
-
-        # Create the budget optimizer and power system
-        self._power_system = make_power_system(mode=power_system_type,
-                                               num_levels=self._num_levels,
-                                               seq_length=self._seq_length)
 
         self._budget_optimizer = BudgetOptimizer(budgets=self._budgets,
                                                  power_system=self._power_system,
@@ -836,7 +831,7 @@ class AdaptiveController(Controller):
             'fit_start_time': self._fit_start_time,
             'fit_end_time': self._fit_end_time,
             'training_iters': self._training_iters,
-            'power_system_type': self._power_system.system_type.name
+            'power_system': self._power_system
         }
 
     def save(self, output_file: Optional[str] = None):
@@ -872,7 +867,7 @@ class AdaptiveController(Controller):
                                         trials=serialized_info['trials'],
                                         patience=serialized_info.get('patience', 10),
                                         max_iter=serialized_info.get('max_iter', 100),
-                                        power_system_type=PowerType[serialized_info.get('power_system_type', 'TEMP').upper()])
+                                        power_system=PowerType['power_system'])
 
         # Set remaining fields
         controller._thresholds = serialized_info['thresholds']
@@ -893,11 +888,9 @@ class AdaptiveController(Controller):
 
 class FixedController(Controller):
 
-    def __init__(self, model_index: int, num_levels: int, seq_length: int, power_system_type: PowerType):
+    def __init__(self, model_index: int, num_levels: int, seq_length: int, power_system: PowerSystem):
+        super().__init__(power_system=power_system, num_levels=num_levels, seq_length=seq_length)
         self._model_index = model_index
-        self._power_system = make_power_system(mode=power_system_type,
-                                               num_levels=num_levels,
-                                               seq_length=seq_length)
 
     def predict_sample(self, stop_probs: np.ndarray, budget: int) -> Tuple[int, Optional[float]]:
         """
@@ -908,15 +901,13 @@ class FixedController(Controller):
 
 class RandomController(Controller):
 
-    def __init__(self, budgets: List[float], seq_length: int, num_levels: int, power_system_type: PowerType):
+    def __init__(self, budgets: List[float], seq_length: int, num_levels: int, power_system: PowerSystem):
+        super().__init__(power_system=power_system, num_levels=num_levels, seq_length=seq_length)
+
         self._budgets = np.array(budgets)
         self._num_levels = num_levels
         self._seq_length = seq_length
         self._levels = np.arange(num_levels)
-
-        self._power_system = make_power_system(mode=power_system_type,
-                                               num_levels=num_levels,
-                                               seq_length=seq_length)
 
         self._threshold_dict: Dict[float, np.ndarray] = dict()
 
@@ -957,10 +948,8 @@ class RandomController(Controller):
 
 class MultiModelController(Controller):
 
-    def __init__(self, sample_counts: List[np.ndarray], model_accuracy: List[float], seq_length: int, max_time: int, allow_violations: bool, power_system_type: PowerType):
-        self._power_system = make_power_system(mode=power_system_type,
-                                               num_levels=seq_length,
-                                               seq_length=seq_length)
+    def __init__(self, sample_counts: List[np.ndarray], model_accuracy: List[float], seq_length: int, max_time: int, allow_violations: bool, power_system: PowerType):
+        self._power_system = power_system
 
         model_power: List[float] = []
         for counts in sample_counts:
@@ -971,9 +960,6 @@ class MultiModelController(Controller):
         self._model_accuracy = np.array(model_accuracy).reshape(-1)
         self._max_time = max_time
         self._allow_violations = allow_violations
-        self._power_system = make_power_system(mode=power_system_type,
-                                               num_levels=seq_length,
-                                               seq_length=seq_length)
 
     def predict_sample(self, stop_probs: np.ndarray, budget: float) -> Tuple[int, Optional[float]]:
         """
@@ -1091,6 +1077,14 @@ if __name__ == '__main__':
     for model_path in args.model_paths:
         print('Starting model at {0}'.format(model_path))
 
+        # Create the power system
+        model, _ = restore_neural_network(model_path, dataset_folder=args.dataset_folder)
+
+        power_system = make_power_system(num_levels=model.num_outputs,
+                                         seq_length=model.seq_length,
+                                         model_type=model.model_type,
+                                         power_type=PowerType[args.power_system_type.upper()])
+
         # Create the adaptive model
         controller = AdaptiveController(model_path=model_path,
                                         dataset_folder=args.dataset_folder,
@@ -1099,7 +1093,7 @@ if __name__ == '__main__':
                                         trials=args.trials,
                                         patience=args.patience,
                                         max_iter=args.max_iter,
-                                        power_system_type=PowerType[args.power_system_type.upper()])
+                                        power_system=power_system)
 
         # Fit the model on the validation set
         controller.fit(series=DataSeries.VALID, should_print=args.should_print)
