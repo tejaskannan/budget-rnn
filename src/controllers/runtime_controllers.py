@@ -4,7 +4,7 @@ from typing import Tuple, Union, List, Dict
 from collections import deque, defaultdict, namedtuple
 
 from controllers.controller_utils import clip
-from controllers.power_utils import PowerType, make_power_system
+from controllers.power_utils import PowerType, PowerSystem
 from utils.constants import SMALL_NUMBER
 
 
@@ -100,7 +100,7 @@ class BudgetDistribution:
                  num_levels: int,
                  seq_length: int,
                  num_classes: int,
-                 power_system_type: PowerType):
+                 power_system: PowerSystem):
         self._prior_counts = prior_counts  # key: class index, value: array [L] counts for each level
         self._max_time = max_time
         self._num_levels = num_levels
@@ -113,9 +113,6 @@ class BudgetDistribution:
         self._seq_length = seq_length
 
         # Estimate the power prior based on profiling
-        power_system = make_power_system(mode=power_system_type,
-                                         num_levels=num_levels,
-                                         seq_length=seq_length)
         self._prior_power = power_system.get_power_estimates()  # [L]
 
         # Estimated count of each label over the time window

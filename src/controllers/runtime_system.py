@@ -59,7 +59,7 @@ class RuntimeSystem:
         self._num_classes = num_classes
         self._num_levels = num_levels
         self._seq_length = seq_length
-        self._power_system_type = power_system_type
+        self._power_system = power_system
 
         save_folder, model_file_name = os.path.split(model_path)
         model_name = extract_model_name(model_file_name)
@@ -95,7 +95,9 @@ class RuntimeSystem:
 
         # For some systems, we can load the controller now. Otherwise, we wait until later
         if self._system_type == SystemType.ADAPTIVE:
-            controller_path = CONTROLLER_PATH.format(self._power_system_type.name.lower(), model_name)
+            power_name = self._power_system.system_type.name.lower()
+            controller_path = CONTROLLER_PATH.format(power_name, model_name)
+
             self._controller = AdaptiveController.load(os.path.join(save_folder, controller_path),
                                                        dataset_folder=dataset_folder,
                                                        model_path=model_path)
@@ -144,14 +146,14 @@ class RuntimeSystem:
             self._controller = RandomController(budgets=[budget],
                                                 seq_length=self._seq_length,
                                                 num_levels=self._num_levels,
-                                                power_system_type=self._power_system_type)
+                                                power_system=self._power_system)
             self._controller.fit(series=None)
         elif self._system_type == SystemType.GREEDY:
             level = np.argmax(self._valid_accuracy)
             self._controller = FixedController(model_index=level,
                                                num_levels=self._num_levels,
                                                seq_length=self._seq_length,
-                                               power_system_type=self._power_system_type)
+                                               power_system=self._power_system)
         elif self._system_type in (SystemType.FIXED_UNDER_BUDGET, SystemType.FIXED_MAX_ACCURACY):
             allow_violations = self._system_type == SystemType.FIXED_MAX_ACCURACY
 
@@ -193,7 +195,7 @@ class RuntimeSystem:
                                                            num_levels=self._num_levels,
                                                            num_classes=self._num_classes,
                                                            seq_length=self._seq_length,
-                                                           power_system_type=self._power_system_type)
+                                                           power_system=self._power_system)
 
         # Apply budget wrapper to the controller
         assert self._controller is not None, 'Must have a valid controller'

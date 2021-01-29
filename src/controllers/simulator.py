@@ -12,7 +12,7 @@ from controllers.runtime_system import RuntimeSystem, SystemType
 from controllers.controller_utils import execute_adaptive_model, execute_standard_model, concat_model_results, LOG_FILE_FMT
 from controllers.controller_utils import save_test_log, execute_skip_rnn_model, ModelResults, execute_phased_rnn_model
 from controllers.noise_generators import get_noise_generator, NoiseGenerator
-from controllers.power_utils import PowerType
+from controllers.power_utils import PowerType, make_power_system
 from models.base_model import Model
 from models.model_factory import get_model
 from models.adaptive_model import AdaptiveModel
@@ -316,7 +316,7 @@ if __name__ == '__main__':
                                           seq_length=seq_length,
                                           num_levels=num_levels,
                                           num_classes=num_classes,
-                                          power_system_type=adaptive_power_system)
+                                          power_system=adaptive_power_system)
         runtime_systems.append(randomized_system)
 
     # Make the baseline systems

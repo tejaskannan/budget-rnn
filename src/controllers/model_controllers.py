@@ -867,7 +867,7 @@ class AdaptiveController(Controller):
                                         trials=serialized_info['trials'],
                                         patience=serialized_info.get('patience', 10),
                                         max_iter=serialized_info.get('max_iter', 100),
-                                        power_system=PowerType['power_system'])
+                                        power_system=serialized_info['power_system'])
 
         # Set remaining fields
         controller._thresholds = serialized_info['thresholds']
