@@ -14,17 +14,11 @@ TEMP_BASE_CURRENT = 0.055       # Current when skipping a sample (based on LPM0)
 # Constants based on bluetooth-based data collection
 BT_ENERGY_PER_SAMPLE = 29.63  # Energy to collect a sample (mJ)
 BT_BASE_POWER = 1.594  # Baseline power when system is idle (mW)
-BT_FREQ = 0.5
+BT_FREQ = 0.5  # Sampling Freq (Hz)
 
-VCC = 3.3
-CLK_RATE = 1  # In MHz
-CURRENT_PER_MHZ = 0.409  # mA / 10^6 cycles
-CELL_CYCLES = 0.200  # 10^6 cycles
-OUTPUT_CYCLES = 0.035  # 10^6 cycles
-MERGE_CYCLES = 0.115  # 10^6 cycles
-POOL_CYCLES = 0.064  # 10^6 cycles
-HALT_CYCLES = 0.027  # 10^6 cycles
-CONTROLLER_CYCLES = 0.0311  # 10^6 cycles
+# Energy consumption for computation
+STANDARD_ENERGY = 0.3423  # mJ per element
+BUDGET_ENERGY = 0.5033  # mJ per element
 
 
 class PowerType(Enum):
@@ -61,31 +55,41 @@ class PowerSystem:
     def get_min_power(self) -> float:
         return self.get_avg_power(1)
 
+    def get_sample_comp_energy(self) -> float:
+        if self._model_type == SequenceModelType.BUDGET_RNN:
+            return BUDGET_ENERGY  # in mJ
+        else:
+            return STANDARD_ENERGY  # in mJ
+
     def get_avg_power(self, num_levels: int) -> float:
         assert num_levels > 0, 'Must have a positive number of levels'
 
         total_time = self.sample_period * self._seq_length
         num_samples = num_levels * self._multiplier
 
-        sampling_power = self.get_energy(num_samples=num_samples) / total_time
+        sampling_energy = self.get_energy(num_samples=num_samples)
+        comp_energy = num_samples * self.get_sample_comp_energy()
+
+        sampling_power = (sampling_energy + comp_energy) / total_time
+        return sampling_power
 
         # Calculate the computation energy using the total
         # number of cycles required for inference
-        cycles = CELL_CYCLES * num_samples
+        #cycles = CELL_CYCLES * num_samples
 
-        if self._model_type == SequenceModelType.BUDGET_RNN:
-            cycles += (num_levels - 1) * self._multiplier * MERGE_CYCLES  # Merging
-            cycles += num_levels * OUTPUT_CYCLES  # Output layer
-            cycles += num_levels * HALT_CYCLES  # Halting layer
-            cycles += POOL_CYCLES  # Pooling layer
-            cycles += CONTROLLER_CYCLES  # Controller module
-        else:
-            cycles += OUTPUT_CYCLES
+        #if self._model_type == SequenceModelType.BUDGET_RNN:
+        #    cycles += (num_levels - 1) * self._multiplier * MERGE_CYCLES  # Merging
+        #    cycles += num_levels * OUTPUT_CYCLES  # Output layer
+        #    cycles += num_levels * HALT_CYCLES  # Halting layer
+        #    cycles += POOL_CYCLES  # Pooling layer
+        #    cycles += CONTROLLER_CYCLES  # Controller module
+        #else:
+        #    cycles += OUTPUT_CYCLES
 
-        cpu_energy = VCC * CURRENT_PER_MHZ * CLK_RATE * cycles
-        cpu_power = cpu_energy / total_time
+        #cpu_energy = VCC * CURRENT_PER_MHZ * CLK_RATE * cycles
+        #cpu_power = cpu_energy / total_time
 
-        return sampling_power + cpu_power
+        #return sampling_power + cpu_power
 
     def get_avg_power_multiple(self, num_levels: np.ndarray) -> float:
         """
