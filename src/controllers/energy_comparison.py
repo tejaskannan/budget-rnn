@@ -14,7 +14,7 @@ from noise_generators import get_noise_generator, NoiseGenerator
 from model_controllers import AdaptiveController, CONTROLLER_PATH
 from controller_utils import execute_adaptive_model, ModelResults
 from runtime_system import SystemType, RuntimeSystem
-from controllers.power_utils import make_power_system, PowerType
+from controllers.power_utils import make_power_system, PowerType, PowerSystem
 
 
 BudgetResult = namedtuple('BudgetResult', ['accuracy', 'budget'])
@@ -82,7 +82,7 @@ def get_nearest_budgets(adaptive_log: Dict[str, Dict[str, Any]],
                         lowest_accuracy: float,
                         highest_accuracy: float,
                         target_accuracy: float,
-                        sensor_type: str,
+                        power_systems: Dict[str, PowerSystem],
                         seq_length: int,
                         num_levels: int) -> Tuple[BudgetResult, BudgetResult, str]:
     """
@@ -100,10 +100,6 @@ def get_nearest_budgets(adaptive_log: Dict[str, Dict[str, Any]],
     """
     budgets = np.array(list(map(float, adaptive_log.keys())))
 
-    power_system = make_power_system(mode=PowerType[sensor_type.upper()],
-                                     num_levels=num_levels,
-                                     seq_length=seq_length)
-
     # Get the largest budget for which the accuracy is LESS than the target
     lower_budget = None
     lower_accuracy = None
@@ -119,7 +115,7 @@ def get_nearest_budgets(adaptive_log: Dict[str, Dict[str, Any]],
     # If there is no accuracy which is lower than the target,
     # then we return the lowest possible region.
     if lower_budget is None:
-        min_power = power_system.get_min_power()
+        min_power = max(pwr.get_min_power() for pwr in power_systems.values())
         min_result = BudgetResult(accuracy=lowest_accuracy, budget=min_power)
 
         min_budget = np.min(budgets)
@@ -146,7 +142,7 @@ def get_nearest_budgets(adaptive_log: Dict[str, Dict[str, Any]],
     # If there is no accuracy that is greater than the target, then
     # we return the highest possible region
     if upper_budget is None:
-        max_power = power_system.get_max_power()
+        max_power = max(pwr.get_max_power() for pwr in power_systems.values())
         max_result = BudgetResult(accuracy=highest_accuracy, budget=max_power)
 
         max_budget = np.max(budgets)
@@ -173,7 +169,7 @@ def energy_comparison(adaptive_results: Dict[str, Dict[str, Any]],
                       adaptive_result_dict: Dict[str, ModelResults],
                       seq_length: int,
                       num_levels: int,
-                      sensor_type: str,
+                      power_systems: Dict[str, PowerSystem],
                       noise_generator: NoiseGenerator) -> List[float]:
     """
     Compare the energy results between the adaptive and baseline systems.
@@ -191,7 +187,7 @@ def energy_comparison(adaptive_results: Dict[str, Dict[str, Any]],
                                                  target_accuracy=baseline_acc,
                                                  lowest_accuracy=lowest_accuracy,
                                                  highest_accuracy=highest_accuracy,
-                                                 sensor_type=sensor_type,
+                                                 power_systems=power_systems,
                                                  seq_length=seq_length,
                                                  num_levels=num_levels)
 
@@ -249,9 +245,13 @@ if __name__ == '__main__':
     # Load the target data-set
     dataset = get_dataset(dataset_type='standard', data_folder=args.dataset_folder)
 
+    # Unpack the power system type
+    power_type = PowerType[args.sensor_type.upper()]
+
     # Load the adaptive model results and controllers
     adaptive_result_dict: Dict[str, ModelResults] = dict()
     adaptive_system_dict: Dict[str, RuntimeSystem] = dict()
+    power_system_dict: Dict[str, PowerSystem] = dict()
 
     for model_path in args.adaptive_model_paths:
         model, _ = restore_neural_network(model_path=model_path,
@@ -271,13 +271,18 @@ if __name__ == '__main__':
 
         max_time = test_results.stop_probs.shape[0]
 
+        power_system = make_power_system(num_levels=num_levels,
+                                         seq_length=seq_length,
+                                         model_type=model.model_type,
+                                         power_type=power_type)
+
         # Make the run-time system
         system = RuntimeSystem(test_results=test_results,
                                valid_results=valid_results,
                                system_type=SystemType.ADAPTIVE,
                                model_path=model_path,
                                dataset_folder=args.dataset_folder,
-                               power_system_type=PowerType[args.sensor_type.upper()],
+                               power_system=power_system,
                                seq_length=seq_length,
                                num_levels=num_levels,
                                num_classes=num_classes)
@@ -285,9 +290,10 @@ if __name__ == '__main__':
         key = 'SAMPLE_RNN({0}) ADAPTIVE'.format(model.stride_length)
         adaptive_result_dict[key] = test_results
         adaptive_system_dict[key] = system
+        power_system_dict[key] = power_system
 
     # Make the noise generator to get the log key
-    noise_params = dict(noise_type='gaussian', loc=args.noise_loc, scale=0.01)
+    noise_params = dict(noise_type='gaussian', loc=args.noise_loc, scale=0.05)
     noise_generator = list(get_noise_generator(noise_params, max_time=max_time))[0]
     noise_type = str(noise_generator)
 
@@ -310,7 +316,7 @@ if __name__ == '__main__':
                                         adaptive_result_dict=adaptive_result_dict,
                                         seq_length=seq_length,
                                         num_levels=num_levels,
-                                        sensor_type=args.sensor_type,
+                                        power_systems=power_system_dict,
                                         noise_generator=noise_generator)
 
         # Save the results
