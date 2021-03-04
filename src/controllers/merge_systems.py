@@ -9,7 +9,6 @@ from utils.loading_utils import restore_neural_network
 from utils.file_utils import read_by_file_suffix, save_by_file_suffix, extract_model_name, make_dir, iterate_files
 from controllers.controller_utils import ModelResults, execute_adaptive_model, LOG_FILE_FMT, get_budget_index
 from controllers.model_controllers import CONTROLLER_PATH, AdaptiveController
-# from controllers.power_utils import PowerType, make_power_system
 
 
 def get_avg_accuracy(validation_accuracy: Dict[float, float], budget: float) -> float:

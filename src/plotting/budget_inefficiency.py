@@ -12,6 +12,11 @@ STRIDE = 1
 WIDTH = 0.2
 
 
+def geometric_mean(values: List[float]) -> float:
+    prod = np.prod(values)
+    return np.power(prod, (1.0 / len(values)))
+
+
 def get_budget_diff(model_results: Dict[str, Dict[str, Dict[str, List[ModelResult]]]]) -> Dict[str, DefaultDict[str, float]]:
     perc_diff: Dict[str, DefaultDict[str, List[float]]] = dict()
 
@@ -22,20 +27,26 @@ def get_budget_diff(model_results: Dict[str, Dict[str, Dict[str, List[ModelResul
             budget = float(budget_str)
 
             for model_name, result in budget_results.items():
-                power = np.average([r.power for r in result])
+                assert len(result) == 1, 'Only supports 1 result per model'
+
+                power = result[0].power
+
+                # power = np.average([r.power for r in result])
                 # diff = ((budget - power) / budget) * 100
                 utilization = power / budget
                 perc_diff[dataset_name][model_name].append(utilization)
 
-    avg_diff: Dict[str, Dict[str, float]] = dict()
+    return perc_diff
 
-    for dataset_name, dataset_diff in perc_diff.items():
-        avg_diff[dataset_name] = dict()
+    #avg_diff: Dict[str, Dict[str, float]] = dict()
 
-        for model_name, model_diff in dataset_diff.items():
-            avg_diff[dataset_name][model_name] = (np.average(model_diff), np.std(model_diff))
+    #for dataset_name, dataset_diff in perc_diff.items():
+    #    avg_diff[dataset_name] = dict()
 
-    return avg_diff
+    #    for model_name, model_diff in dataset_diff.items():
+    #        avg_diff[dataset_name][model_name] = (np.average(model_diff), np.std(model_diff), geometric_mean(model_diff))
+
+    #return avg_diff
 
 
 def plot(perc_diff: Dict[str, DefaultDict[str, List[float]]], model_names: List[str], series_mode: str, sensor_type: str, output_file: Optional[str]):
@@ -111,4 +122,13 @@ if __name__ == '__main__':
 
     model_names = ['RNN FIXED_UNDER_BUDGET', 'SKIP_RNN FIXED_UNDER_BUDGET', 'PHASED_RNN FIXED_UNDER_BUDGET', 'SAMPLE_RNN ADAPTIVE']
 
-    plot(perc_diff, model_names, series_mode=args.series_mode, sensor_type=args.sensor_type, output_file=args.output_file)
+    # Print the mean utilization across all budgets and data-sets
+    for model_name in model_names:
+        diffs: List[float] = []
+
+        for dataset_name in perc_diff.keys():
+            diffs.extend(perc_diff[dataset_name][model_name])
+
+        print('{0}: {1:.3f}'.format(model_name, geometric_mean(diffs)))
+
+    # plot(perc_diff, model_names, series_mode=args.series_mode, sensor_type=args.sensor_type, output_file=args.output_file)

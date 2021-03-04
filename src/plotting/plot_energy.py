@@ -13,7 +13,7 @@ from plotting_constants import NORMAL_FONT, SMALL_FONT, LARGE_FONT, STYLE, CAPSI
 WIDTH = 0.2
 STRIDE = 1.2
 XMARGIN = 0.1
-YMARGIN = 0.05
+YMARGIN = 0.03
 ComparisonResult = namedtuple('ComparisonResult', ['mean', 'std', 'median', 'first', 'third', 'geom_mean'])
 MODEL_NAMES = ['RNN', 'PHASED_RNN', 'SKIP_RNN', 'SAMPLE_RNN']
 
@@ -73,7 +73,9 @@ def plot(comparison_logs: Dict[str, Dict[str, ComparisonResult]], output_file: O
             avg = geometric_mean(avg_energy)
 
             ys = avg_energy + [avg]
-            ax.bar(xs + offset, ys, linewidth=1, edgecolor='k', width=WIDTH, label=to_label(model_name), color=FILL_MAP[model_name])
+            label = to_label(model_name)
+            color = FILL_MAP[label.replace('_', ' ')]
+            ax.bar(xs + offset, ys, linewidth=1, edgecolor='k', width=WIDTH, label=label, color=color)
 
             # Place the annotations. The shifting is data-specific to prevent overlaps.
             for i, (x, y) in enumerate(zip(xs, ys)):
@@ -81,17 +83,23 @@ def plot(comparison_logs: Dict[str, Dict[str, ComparisonResult]], output_file: O
 
                 if idx == 0:
                     xshift = offset - 3 * XMARGIN
-                    if i == 7:
+                    if i == 0:
+                        yshift = 0.5 * YMARGIN
+                    elif i == 4:
+                        xshift = offset - 2 * XMARGIN
+                    elif i == 7:
                         xshift = offset - 2.5 * XMARGIN
                 elif idx == 1:
-                    if i in (0, 2):
+                    if i == 0:
+                        xshift = offset - 2 * XMARGIN
+                    elif i == 2:
                         xshift = offset - 3 * XMARGIN
                     else:
                         xshift = offset - XMARGIN
                 elif idx == 2:
                     xshift = offset - 0.5 * XMARGIN
                     if i == 3:
-                        yshift = 1.5 * YMARGIN
+                        yshift = 3.5 * YMARGIN
                         xshift = offset - XMARGIN
                 else:
                     if i == 3:
@@ -107,6 +115,10 @@ def plot(comparison_logs: Dict[str, Dict[str, ComparisonResult]], output_file: O
         ax.set_xticks(xs)
         ax.set_xticklabels(datasets + ['All'], fontsize=16)
 
+        # increase the y-tick font size
+        for tick in ax.yaxis.get_major_ticks():
+            tick.label.set_fontsize(16)
+
         # Set gridline to denote the x-axis
         ax.axhline(0, linestyle='-', color='k', linewidth=1)
 
@@ -114,9 +126,9 @@ def plot(comparison_logs: Dict[str, Dict[str, ComparisonResult]], output_file: O
         ax.axvline((xs[-2] + xs[-1]) / 2, linestyle='--', color='k', linewidth=0.5)
 
         ax.legend(fontsize=16)
-        ax.set_title('Mean Greater Budget Required for Accuracy Equal to the Budget RNN', fontsize=20)
-        ax.set_xlabel('Dataset', fontsize=16)
-        ax.set_ylabel('Mean Greater Energy Budget', fontsize=16)
+        ax.set_title('Mean Normalized Budget Required for Accuracy Equal to the Budget RNN', fontsize=22)
+        ax.set_xlabel('Dataset', fontsize=18)
+        ax.set_ylabel('Mean Normalized Energy Budget', fontsize=18)
 
         plt.tight_layout()
         if output_file is None:

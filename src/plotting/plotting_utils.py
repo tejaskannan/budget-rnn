@@ -9,13 +9,15 @@ from controllers.noise_generators import get_noise_generator, NoiseGenerator
 
 ModelResult = namedtuple('ModelResult', ['power', 'accuracy', 'validation_accuracy'])
 
-MODEL_ORDER = ['RNN', 'PHASED_RNN', 'SKIP_RNN', 'SAMPLE_RNN FIXED_UNDER_BUDGET', 'SAMPLE_RNN FIXED_MAX_ACCURACY', 'SAMPLE_RNN RANDOMIZED', 'SAMPLE_RNN', 'SAMPLE_RNN ADAPTIVE']
+# MODEL_ORDER = ['RNN', 'PHASED_RNN', 'SKIP_RNN', 'SAMPLE_RNN FIXED_UNDER_BUDGET', 'SAMPLE_RNN FIXED_MAX_ACCURACY', 'SAMPLE_RNN RANDOMIZED', 'SAMPLE_RNN', 'SAMPLE_RNN ADAPTIVE']
+MODEL_ORDER = ['RNN', 'PHASED_RNN', 'SKIP_RNN', 'BUDGET_RNN']
 MODEL_REGEX = re.compile(r'.*model-([^-]+)-([^-]+)-([^0-9]+)-.*jsonl\.gz')
 
 DATASET_MAP = {
     'emg': 'EMG',
     'forda': 'Ford A',
     'melbourne-pedestrian': 'Pedestrian',
+    'pedestrian': 'Pedestrian',
     'pavement': 'Pavement',
     'pen-digits': 'Pen Digits',
     'whale': 'Whale',
@@ -24,14 +26,13 @@ DATASET_MAP = {
 
 
 FILL_MAP = {
-    'RNN': '#a1dab4',
-    'SAMPLE_RNN': '#ffffcc',
-    'SAMPLE_RNN ADAPTIVE': '#ffeda0',
-    'SAMPLE_RNN FIXED_UNDER_BUDGET': '#feb24c',
-    'SAMPLE_RNN FIXED_MAX_ACCURACY': '#feb24c',
-    'SAMPLE_RNN RANDOMIZED': '#f03b20',
-    'SKIP_RNN': '#225ea8',
-    'PHASED_RNN': '#41b6c4'
+    'RNN': '#2c7bb6',
+    'Budget RNN': '#d7191c',
+    'Skip RNN': '#fdae61',
+    'Phased RNN': '#abd9e9',
+    'BUDGET RNN': '#d7191c',
+    'SKIP RNN': '#fdae61',
+    'PHASED RNN': '#abd9e9'
 }
 
 

@@ -6,8 +6,13 @@ from typing import Dict, List, Set, DefaultDict
 from plotting_utils import ModelResult, get_results, make_noise_generator, to_label, rename_dataset, get_model_name
 
 
-DatasetResult = namedtuple('DatasetResult', ['mean', 'std', 'maximum', 'minimum', 'first', 'third'])
+DatasetResult = namedtuple('DatasetResult', ['mean', 'std', 'maximum', 'minimum', 'first', 'third', 'geom', 'raw'])
 NEWLINE = '\\\\'
+
+
+def geometric_mean(values: np.ndarray) -> float:
+    prod = np.prod(values)
+    return np.power(prod, (1.0 / len(values)))
 
 
 def create_table(model_results: Dict[str, Dict[str, DatasetResult]], models_to_keep: List[str]):
@@ -37,9 +42,9 @@ def create_table(model_results: Dict[str, Dict[str, DatasetResult]], models_to_k
             assert model in results, 'Dataset {0} does not have {1}'.format(dataset, model)
 
             accuracy = results[model]
-            row.append('{0:.3f}'.format(accuracy.mean))
+            row.append('{0:.3f}'.format(accuracy.geom))
 
-            acc_dict[model].append(accuracy.mean)
+            acc_dict[model].append(accuracy.raw)
 
         rows.append(' & '.join(row) + NEWLINE)
 
@@ -48,7 +53,9 @@ def create_table(model_results: Dict[str, Dict[str, DatasetResult]], models_to_k
     # Compute the total average over all data-sets
     row = ['All']
     for model in models_to_keep:
-        row.append('{0:.3f}'.format(np.average(acc_dict[model])))
+        accuracy_values = np.concatenate(acc_dict[model])
+        mean = geometric_mean(accuracy_values)
+        row.append('{0:.3f}'.format(mean))
 
     rows.append(' & '.join(row))
 
@@ -69,18 +76,18 @@ def merge_results(model_results: Dict[str, DefaultDict[float, Dict[str, List[Mod
         merged[dataset_name] = defaultdict(list)
 
         for budget, results in dataset_results.items():
-            if budget > 3:
-                continue
-
             baseline_acc = np.average([r.accuracy for r in results[baseline_name]])
 
             for model_name in models_to_keep:
                 # Ensure the model name is valid
                 assert model_name in results, 'Could not find {0} in {1}'.format(model_name, list(results.keys()))
+                assert len(results[model_name]) == 1, 'Only supports 1 trial per model'
+            
+                accuracy = results[model_name][0].accuracy
+                
+                # merged[dataset_name][model_name].append(accuracy - baseline_acc)
+                merged[dataset_name][model_name].append(accuracy)
 
-                accuracy = np.average([r.accuracy for r in results[model_name]])
-
-                merged[dataset_name][model_name].append(accuracy - baseline_acc)
 
     aggregated: Dict[str, Dict[str, DatasetResult]] = dict()
     for dataset_name, merged_results in merged.items():
@@ -88,12 +95,15 @@ def merge_results(model_results: Dict[str, DefaultDict[float, Dict[str, List[Mod
         dataset_aggregate = dict()
         for model_name in models_to_keep:
             model_accuracy = np.array(merged_results[model_name])
+
             model_aggregate = DatasetResult(mean=np.average(model_accuracy),
                                             std=np.std(model_accuracy),
                                             maximum=np.max(model_accuracy),
                                             minimum=np.min(model_accuracy),
                                             first=np.percentile(model_accuracy, 25),
-                                            third=np.percentile(model_accuracy, 75))
+                                            third=np.percentile(model_accuracy, 75),
+                                            geom=geometric_mean(model_accuracy),
+                                            raw=model_accuracy)
             dataset_aggregate[model_name] = model_aggregate
 
         aggregated[dataset_name] = dataset_aggregate
@@ -110,7 +120,7 @@ if __name__ == '__main__':
 
     noise = make_noise_generator(noise_type='gaussian',
                                  noise_loc=args.noise_loc,
-                                 noise_scale=0.01,
+                                 noise_scale=0.05,
                                  noise_period=None,
                                  noise_amplitude=None)
 
@@ -124,7 +134,7 @@ if __name__ == '__main__':
     if args.mode == 'sample':
         to_keep = ['SAMPLE_RNN FIXED_UNDER_BUDGET', 'SAMPLE_RNN RANDOMIZED', 'SAMPLE_RNN ADAPTIVE']
     else:
-        to_keep = ['PHASED_RNN FIXED_UNDER_BUDGET', 'SKIP_RNN FIXED_UNDER_BUDGET', 'SAMPLE_RNN ADAPTIVE']
+        to_keep = ['RNN FIXED_UNDER_BUDGET', 'PHASED_RNN FIXED_UNDER_BUDGET', 'SKIP_RNN FIXED_UNDER_BUDGET', 'SAMPLE_RNN ADAPTIVE']
 
     merged = merge_results(model_results=model_results,
                            baseline_name=baseline_name,

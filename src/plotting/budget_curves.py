@@ -11,10 +11,11 @@ from utils.file_utils import read_by_file_suffix, iterate_files
 from utils.testing_utils import ClassificationMetric
 from utils.constants import SMALL_NUMBER
 from plotting.plotting_constants import MARKER_SIZE, STYLE, NORMAL_FONT, LARGE_FONT
-from plotting.plotting_utils import get_results, ModelResult, to_label, make_noise_generator
+from plotting.plotting_utils import get_results, ModelResult, to_label, make_noise_generator, FILL_MAP
 
 
-MARKERS = ['o', 's', 'X', '+']
+MARKERS = ['o']
+MODEL_ORDER = ['RNN Fixed Under Budget', 'Phased RNN Fixed Under Budget', 'Skip RNN Fixed Under Budget', 'Budget RNN Adaptive']
 
 
 def plot_curves(model_results: Dict[str, DefaultDict[float, List[ModelResult]]],
@@ -27,7 +28,7 @@ def plot_curves(model_results: Dict[str, DefaultDict[float, List[ModelResult]]],
 
     with plt.style.context(STYLE):
 
-        fig, ax = plt.subplots(figsize=(6, 4))
+        fig, ax = plt.subplots(figsize=(8, 6))
 
         budgets: Set[float] = set()
         ys: DefaultDict[str, List[float]] = defaultdict(list)  # Map from model name to list of accuracy values for each budget
@@ -36,8 +37,9 @@ def plot_curves(model_results: Dict[str, DefaultDict[float, List[ModelResult]]],
 
             for model_name, budget_results in sorted(results.items()):
                 accuracy_values = [r.accuracy for r in budget_results]
-                avg_accuracy = np.average(accuracy_values)
-                ys[model_name].append(avg_accuracy)
+                assert len(accuracy_values) == 1, 'Only supports 1 trial per model'
+
+                ys[to_label(model_name)].append(accuracy_values[0])
 
             budgets.add(round(budget, 3))
 
@@ -45,12 +47,23 @@ def plot_curves(model_results: Dict[str, DefaultDict[float, List[ModelResult]]],
         xs = np.array(xs)
         xs = xs * (sample_rate * seq_length * dataset_size)
 
-        for i, (system_name, accuracy) in enumerate(sorted(ys.items())):
-            # Format the model name
-            if 'adaptive' in system_name.lower():
-                system_name = system_name.split()[0]
+        for model_name in MODEL_ORDER:
 
-            ax.plot(xs, accuracy, marker=MARKERS[i % len(MARKERS)], markersize=MARKER_SIZE, label=to_label(system_name))
+            if model_name.startswith('RNN'):
+                system_name = model_name.split()[0]
+            else:
+                system_name = ' '.join(model_name.split()[0:2])
+
+            accuracy = ys[model_name]
+
+            ax.plot(xs, accuracy,
+                    marker='o',
+                    markersize=8,
+                    label=system_name,
+                    linewidth=3,
+                    color=FILL_MAP[system_name])
+
+            print('{0}: {1}'.format(system_name, np.average(accuracy)))
 
         ax.legend(fontsize=LARGE_FONT)
         ax.set_xlabel('Budget (mJ)', fontsize=LARGE_FONT)
