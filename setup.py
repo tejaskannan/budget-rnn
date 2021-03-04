@@ -15,5 +15,5 @@ setuptools.setup(
         long_description=long_description,
         url='https://github.com/tejaskannan/budget-rnn',
         packages['src'],
-        install_requires=['tensorflow==1.14', 'numpy', 'matplotlib', 'more_itertools', 'scipy']
+        install_requires=['tensorflow==2.4.0', 'numpy', 'matplotlib', 'more_itertools', 'scipy']
 )
