@@ -76,6 +76,9 @@ def tensor_to_fixed_point(tensor: Union[List[float], np.ndarray], precision: int
 
 
 def create_constant(name: str, value: Optional[int], should_add_newline: bool = True) -> str:
+    """
+    Creates at C constant with the given name and optional value.
+    """
     if value is None:
         const = '#define {0}'.format(name)
     else:
