@@ -108,7 +108,7 @@ def select_adaptive_system(model_results: Dict[float, Dict[str, List[ModelResult
     return best_model
 
 
-def get_results(input_folders: List[str], noise_generator: NoiseGenerator, model_type: str, baseline_mode: str) -> Dict[str, DefaultDict[float, Dict[str, List[ModelResult]]]]:
+def get_results(input_folders: List[str], noise_generator: NoiseGenerator, model_type: str) -> Dict[str, DefaultDict[float, Dict[str, List[ModelResult]]]]:
     """
     Gets the results for all models in the given folder with the given power shift value.
 
@@ -124,6 +124,7 @@ def get_results(input_folders: List[str], noise_generator: NoiseGenerator, model
     """
     # Create the key for this series
     noise_key = str(noise_generator)
+    baseline_mode = 'under_budget'
     fixed_type = 'fixed_{0}'.format(baseline_mode)
 
     model_results: Dict[str, DefaultDict[float, Dict[str, List[float]]]] = dict()

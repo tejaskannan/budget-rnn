@@ -16,7 +16,7 @@ from utils.constants import INPUT_SHAPE, NUM_OUTPUT_FEATURES, SEQ_LENGTH, INPUT_
 from utils.constants import EMBEDDING_NAME, TRANSFORM_NAME, AGGREGATION_NAME, OUTPUT_LAYER_NAME, LOSS_WEIGHTS
 from utils.constants import STOP_OUTPUT_NAME, STOP_OUTPUT_LOGITS, STOP_PREDICTION, RNN_CELL_NAME, ACTIVATION_NOISE
 from utils.loss_utils import get_loss_weights, get_temperate_loss_weight
-from utils.sequence_model_utils import SequenceModelType, is_nbow, is_conv
+from utils.sequence_model_utils import SequenceModelType
 from utils.testing_utils import ClassificationMetric, RegressionMetric, get_binary_classification_metric, get_regression_metric, get_multi_classification_metric
 
 
@@ -176,111 +176,7 @@ class AdaptiveModel(TFModel):
 
     def make_model(self, is_train: bool):
         with tf.compat.v1.variable_scope(MODEL, reuse=tf.compat.v1.AUTO_REUSE):
-            if is_nbow(self.model_type):
-                self._make_nbow_model(is_train)
-            else:
-                self._make_rnn_model(is_train)
-
-    def _make_nbow_model(self, is_train: bool):
-        state_size = self.hypers.model_params['state_size']
-        activation_noise = self._placeholders[ACTIVATION_NOISE]
-        dropout_keep_rate = self._placeholders[DROPOUT_KEEP_RATE]
-
-        # Apply input noise
-        inputs = apply_noise(self._placeholders[INPUTS], scale=activation_noise)
-
-        # Apply the embedding layer, [B, T, D]
-        embedding, _ = dense(inputs=inputs,
-                             units=state_size,
-                             activation=self.hypers.model_params['embedding_activation'],
-                             activation_noise=activation_noise,
-                             use_bias=true,
-                             name=embedding_name)
-
-        # Apply the transformation layer, [B, T, D]
-        transformed, _ = mlp(inputs=embedding,
-                             output_size=state_size,
-                             hidden_sizes=self.hypers.model_params['transform_units'],
-                             activations=self.hypers.model_params['transform_activation'],
-                             activation_noise=activation_noise,
-                             dropout_keep_rate=dropout_keep_rate,
-                             should_activate_final=True,
-                             should_bias_final=True,
-                             should_dropout_final=True,
-                             name=TRANSFORM_NAME)
-
-        # Compute the attention aggregation weights, [B, T, 1]
-        aggregation_weights, _ = dense(inputs=transformed,
-                                       units=1,
-                                       activation='sigmoid',
-                                       activation_noise=activation_noise,
-                                       use_bias=True,
-                                       name=AGGREGATION_NAME)
-
-        # For stride lengths > 1, we re-order the tensor based on the subsequences
-        if self.stride_length > 1:
-            subsequence_indices = np.arange(start=0, stop=self.seq_length, step=self.stride_length)
-            subsequence_indices = np.tile(subsequence_indices, reps=(self.stride_length, ))  # [T]
-
-            offsets = np.repeat(np.arange(start=0, stop=self.stride_length), repeats=self.samples_per_seq)  # [T]
-
-            sequence_indices = subsequence_indices + offsets  # [T]
-
-            # Apply the sub-sequence shuffling
-            transformed = tf.gather(transformed, indices=sequence_indices, axis=1)  # [B, T, D]
-            aggregation_weights = tf.gather(aggregation_weights, indices=sequence_indices, axis=1)  # [B, T, 1]
-
-        # Pool the transformed states, [B, T, D] output
-        pooled_states = successive_pooling(transformed, aggregation_weights, self.seq_length, name=AGGREGATION_NAME)
-
-        # For stride lengths > 1, we undo the shuffling for consistency purposes
-        if self.stride_length > 1:
-            pooled_states = tf.gather(pooled_states, indices=sequence_indices, axis=1)  # [B, T, D]
-
-        # Create the output prediction, [B, K]. These are the log probabilities.
-        output, _ = mlp(inputs=pooled_states,
-                        output_size=self.num_output_features,
-                        hidden_sizes=self.hypers.model_params['output_hidden_units'],
-                        activations=self.hypers.model_params['output_hidden_activation'],
-                        dropout_keep_rate=dropout_keep_rate,
-                        activation_noise=activation_noise,
-                        should_activate_final=False,
-                        should_bias_final=True,
-                        should_dropout_final=False,
-                        name=OUTPUT_LAYER_NAME)
-
-        # Create the stop output, [B, T, 1]
-        stop_output_logits, _ = mlp(inputs=pooled_states,
-                                    output_size=1,
-                                    hidden_sizes=self.hypers.model_params['stop_output_units'],
-                                    activations=self.hypers.model_params['stop_output_activation'],
-                                    dropout_keep_rate=dropout_keep_rate,
-                                    activation_noise=activation_noise,
-                                    should_activate_final=False,
-                                    should_bias_final=True,
-                                    should_dropout_final=False,
-                                    name=STOP_PREDICTION)
-        self.ops[STOP_OUTPUT_LOGITS] = stop_output_logits
-        self.ops[STOP_OUTPUT_NAME] = tf.math.sigmoid(stop_output_logits)
-
-        # Expand dimensions on the expected output for later broadcasting
-        expected_output = tf.expand_dims(self._placeholders[OUTPUT], axis=1)  # [B, 1, 1]
-
-        if self.output_type == OutputType.BINARY_CLASSIFICATION:
-            classification_output = compute_binary_classification_output(model_output=output,
-                                                                         labels=expected_output)
-
-            self._ops[LOGITS] = classification_output.logits
-            self._ops[PREDICTION] = classification_output.predictions
-            self._ops[ACCURACY] = classification_output.accuracy
-        elif self.output_type == OutputType.MULTI_CLASSIFICATION:
-            classification_output = compute_multi_classification_output(model_output=output,
-                                                                        labels=expected_output)
-            self._ops[LOGITS] = classification_output.logits
-            self._ops[PREDICTION] = classification_output.predictions
-            self._ops[ACCURACY] = classification_output.accuracy
-        else:
-            self._ops[PREDICTION] = output
+            self._make_rnn_model(is_train)
 
     def _make_rnn_model(self, is_train: bool):
         """
