@@ -20,7 +20,7 @@ def merge_datasets(folders: List[str], output_folder: str, file_prefix: str, fil
                 sample_id += 1
                 
                 if (sample_id + 1) % chunk_size == 0:
-                    print(f'Completed {sample_id + 1} samples.', end='\r')
+                    print('Completed {0} samples.'.format(sample_id + 1), end='\r')
         print()
 
 if __name__ == '__main__':

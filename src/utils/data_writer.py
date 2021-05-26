@@ -2,7 +2,7 @@ import os
 import re
 
 from enum import Enum, auto
-from typing import List, Any, Iterable
+from typing import List, Any, Iterable, Dict
 
 from utils.file_utils import save_by_file_suffix, iterate_files, make_dir
 from utils.constants import INDEX_FILE, DATA_FIELD_FORMAT

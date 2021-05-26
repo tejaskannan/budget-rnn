@@ -21,7 +21,7 @@ def get_label_distribution(folder: str, file_type: str):
 
     for key, value in sorted(label_counter.items()):
         frac = float(value) / float(total) * 100
-        print(f'{key}: {value} ({frac:.02f})')
+        print('{0}: {1} ({2:.02f})'.format(key, value, frac))
 
     print(f'Total: {total}')
 
