@@ -14,6 +14,6 @@ setuptools.setup(
         long_description=long_description,
         url='https://github.com/tejaskannan/budget-rnn',
         packages=['budgetrnn'],
-        install_requires=['tensorflow==2.2', 'numpy', 'matplotlib', 'more_itertools', 'scipy', 'scikit-learn==0.22'],
+        install_requires=['tensorflow==2.5.0', 'numpy', 'matplotlib', 'more_itertools', 'scipy', 'scikit-learn==0.22'],
         exclude_package_data={'': ['budgetrnn/data/*', 'budgetrnn/saved_models/*', 'budgetrnn/final_models/*', '.git/*']}
 )
