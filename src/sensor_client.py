@@ -10,6 +10,7 @@ from ble_manager import BLEManager, ResponseType
 from utils.file_utils import save_by_file_suffix
 
 
+# NOTE: CHANGE THIS ADDRESS WITH THAT OF YOUR BLUETOOTH MODULE
 MAC_ADDRESS = '00:35:FF:13:A3:1E'
 BLE_HANDLE = 18
 HCI_DEVICE = 'hci1'
@@ -204,15 +205,15 @@ def execute_client(sample_freq: float, seq_length: int, max_sequences: int, data
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--sample-freq', type=float, required=True)
-    parser.add_argument('--seq-length', type=int, required=True)
-    parser.add_argument('--max-sequences', type=int, required=True)
-    parser.add_argument('--inputs-path', type=str, required=True)
-    parser.add_argument('--labels-path', type=str, required=True)
-    parser.add_argument('--output-file', type=str, required=True)
-    parser.add_argument('--budget', type=float, required=True)
-    parser.add_argument('--is-skip', action='store_true')
-    parser.add_argument('--start-index', type=int, required=True)
+    parser.add_argument('--sample-freq', type=float, required=True, help='The sample frequency in seconds')
+    parser.add_argument('--seq-length', type=int, required=True, help='The sequence length of this dataset')
+    parser.add_argument('--max-sequences', type=int, required=True, help='The maximum number of sequences to test')
+    parser.add_argument('--inputs-path', type=str, required=True, help='The path to the input data (txt) file')
+    parser.add_argument('--labels-path', type=str, required=True, help='The path to the label (txt) file')
+    parser.add_argument('--output-file', type=str, required=True, help='Path to the output (jsonl.gz) file')
+    parser.add_argument('--budget', type=float, required=True, help='The energy budget')
+    parser.add_argument('--is-skip', action='store_true', help='Whether this is a Skip RNN')
+    parser.add_argument('--start-index', type=int, required=True, help='The optional element to start inference at')
     args = parser.parse_args()
 
     if os.path.exists(args.output_file):
