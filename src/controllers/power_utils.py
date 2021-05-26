@@ -73,24 +73,6 @@ class PowerSystem:
         sampling_power = (sampling_energy + comp_energy) / total_time
         return sampling_power
 
-        # Calculate the computation energy using the total
-        # number of cycles required for inference
-        #cycles = CELL_CYCLES * num_samples
-
-        #if self._model_type == SequenceModelType.BUDGET_RNN:
-        #    cycles += (num_levels - 1) * self._multiplier * MERGE_CYCLES  # Merging
-        #    cycles += num_levels * OUTPUT_CYCLES  # Output layer
-        #    cycles += num_levels * HALT_CYCLES  # Halting layer
-        #    cycles += POOL_CYCLES  # Pooling layer
-        #    cycles += CONTROLLER_CYCLES  # Controller module
-        #else:
-        #    cycles += OUTPUT_CYCLES
-
-        #cpu_energy = VCC * CURRENT_PER_MHZ * CLK_RATE * cycles
-        #cpu_power = cpu_energy / total_time
-
-        #return sampling_power + cpu_power
-
     def get_avg_power_multiple(self, num_levels: np.ndarray) -> float:
         """
         Computes the weighted average power over the

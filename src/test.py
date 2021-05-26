@@ -71,11 +71,11 @@ def test(model_name: str, dataset_folder: str, save_folder: str, hypers: HyperPa
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--model-path', type=str, required=True)
-    parser.add_argument('--batch-size', type=int)
-    parser.add_argument('--max-num-batches', type=int)
-    parser.add_argument('--dataset-folder', type=str)
-    parser.add_argument('--series', type=str, default='test')
+    parser.add_argument('--model-path', type=str, required=True, help='Path to the trained model parameters.')
+    parser.add_argument('--dataset-folder', type=str, required=True, help='Path to the dataset to test on.')
+    parser.add_argument('--batch-size', type=int, help='The test batch size.')
+    parser.add_argument('--max-num-batches', type=int, help='The maximum number of batches to execute.')
+    parser.add_argument('--series', type=str, default='test', choices=['train', 'valid', 'test'], help='The series to execute on.')
     args = parser.parse_args()
 
     model_test(args.model_path, batch_size=args.batch_size, max_num_batches=args.max_num_batches, dataset_folder=args.dataset_folder, series=args.series)

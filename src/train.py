@@ -32,12 +32,12 @@ def train(data_folder: str, save_folder: str, hypers: HyperParameters, should_pr
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--data-folders', type=str, nargs='+')
-    parser.add_argument('--save-folder', type=str, required=True)
-    parser.add_argument('--params-files', type=str, nargs='+')
-    parser.add_argument('--trials', type=int, default=1)
-    parser.add_argument('--should-print', action='store_true')
-    parser.add_argument('--testrun', action='store_true')
+    parser.add_argument('--data-folders', type=str, nargs='+', help='Paths to dataset folders.')
+    parser.add_argument('--save-folder', type=str, required=True, help='Directory in which to place the saved models.')
+    parser.add_argument('--params-files', type=str, nargs='+', help='Paths to parameter files.')
+    parser.add_argument('--trials', type=int, default=1, help='The number of trials to execute. Default is 1.')
+    parser.add_argument('--should-print', action='store_true', help='Whether to print training information to stdout.')
+    parser.add_argument('--testrun', action='store_true', help='Whether to cap execution at a single epoch.')
     args = parser.parse_args()
 
     assert args.params_files is not None and len(args.params_files) > 0, f'Must provide at least one set of parameters'

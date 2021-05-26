@@ -33,7 +33,6 @@ class SystemType(Enum):
     ADAPTIVE = auto()
     RANDOMIZED = auto()
     GREEDY = auto()
-    FIXED_MAX_ACCURACY = auto()
     FIXED_UNDER_BUDGET = auto()
 
 
@@ -154,9 +153,7 @@ class RuntimeSystem:
                                                num_levels=self._num_levels,
                                                seq_length=self._seq_length,
                                                power_system=self._power_system)
-        elif self._system_type in (SystemType.FIXED_UNDER_BUDGET, SystemType.FIXED_MAX_ACCURACY):
-            allow_violations = self._system_type == SystemType.FIXED_MAX_ACCURACY
-
+        elif self._system_type == SystemType.FIXED_UNDER_BUDGET:
             # Create the fixed policy based on the model type. Skip RNNs use a similar strategy as those seen in
             # other model types. For Skip RNNs, however, the policy applies to model selection as opposed to
             # sample size selection.
@@ -166,14 +163,14 @@ class RuntimeSystem:
                                                         model_accuracy=self._valid_accuracy,
                                                         seq_length=self._seq_length,
                                                         max_time=max_time,
-                                                        allow_violations=allow_violations,
+                                                        allow_violations=False,
                                                         power_system=self._power_system)
             else:
                 level = get_budget_index(budget=budget,
                                          valid_accuracy=self._valid_accuracy,
                                          max_time=max_time,
                                          power_estimates=self._power_system.get_power_estimates(),
-                                         allow_violations=allow_violations)
+                                         allow_violations=False)
 
                 self._controller = FixedController(model_index=level,
                                                    num_levels=self._num_levels,
