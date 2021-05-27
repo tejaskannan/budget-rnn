@@ -1,7 +1,7 @@
 #include "main.h"
 
-#define STEPS 200
-#define BUDGET 20
+#define STEPS 100
+#define BUDGET 9
 
 
 int main(int argc, char **argv) {

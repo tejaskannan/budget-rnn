@@ -6,7 +6,7 @@ from argparse import ArgumentParser
 from collections import namedtuple
 from typing import Optional, Iterable, List
 
-from ble_manager import BLEManager, ResponseType
+from device.ble_manager import BLEManager, ResponseType
 from utils.file_utils import save_by_file_suffix
 
 
@@ -156,7 +156,7 @@ def execute_client(sample_freq: float, seq_length: int, max_sequences: int, data
                     stride_length = response.value.stride
                     num_levels = response.value.num_levels
                     to_execute = response.value.to_execute
-                    # print(response.value)
+                    print(response.value)
                 else:
                     prediction = response.value.prediction
 

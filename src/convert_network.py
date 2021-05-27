@@ -126,7 +126,7 @@ def convert_network(model_path: str, model_parameters: Dict[str, np.ndarray], pr
         out_file.write('#include <stdint.h>\n')
 
         if is_msp:
-            out_file.write('#include <msp430.h>\n"')
+            out_file.write('#include <msp430.h>\n')
 
         out_file.write('#include "math/matrix.h"\n\n')
 
