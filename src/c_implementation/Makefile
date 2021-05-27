@@ -1,8 +1,5 @@
 CCBIN=/usr/bin/gcc
-CC=$(CCBIN) -Wall -Wextra -std=c99 -pedantic -g -Wno-unused-variable
-
-CCBIN=/usr/bin/gcc
-CC=$(CCBIN) -Wall -Wextra -std=c99 -pedantic -g -Wno-unused-variable
+CC=$(CCBIN) -Wall -Wextra -std=c99 -pedantic -g -Wno-unused-variable -fsanitize=address
 
 default: model
 

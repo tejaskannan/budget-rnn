@@ -1,7 +1,7 @@
 #include "main.h"
 
 #define STEPS 200
-#define BUDGET 7
+#define BUDGET 20
 
 
 int main(int argc, char **argv) {
@@ -65,16 +65,16 @@ int main(int argc, char **argv) {
         levelCounts[i] = 0;
     }
 
+    int32_t energyBudget = int_to_fp32(BUDGET * STEPS, FIXED_POINT_PRECISION);
+    int16_t thresholds[NUM_OUTPUTS] = { 0 };
+
+    // Create the budget distribution
+    #ifdef IS_BUDGET_RNN
     // Load the initial class counts
     int16_t budget = int_to_fp(BUDGET, FIXED_POINT_PRECISION);
     int32_t classCounts[NUM_OUTPUT_FEATURES][NUM_OUTPUTS];
     interpolate_counts(classCounts, budget, FIXED_POINT_PRECISION);
 
-    int32_t energyBudget = int_to_fp32(BUDGET * STEPS, FIXED_POINT_PRECISION);
-    int16_t thresholds[NUM_OUTPUTS];
-
-    // Create the budget distribution
-    #ifdef IS_SAMPLE_RNN
     BudgetDistribution distribution;
     init_distribution(&distribution, classCounts, STEPS, FIXED_POINT_PRECISION);
 
@@ -112,6 +112,7 @@ int main(int argc, char **argv) {
         execState.cumulativeUpdateProb = int_to_fp(1, FIXED_POINT_PRECISION);
 
         #ifdef IS_RNN
+        execState.levelsToExecute = 7;
         execState.isStopped = 1;
         #endif
 
@@ -150,9 +151,10 @@ int main(int argc, char **argv) {
         // printf("Prediction: %d\n", execState.prediction);
         numCorrect += (uint16_t) (execState.prediction == label);
         numLevels += execState.levelsToExecute + 1;
+
+        #ifdef IS_BUDGET_RNN
         levelCounts[execState.levelsToExecute] += 1;
 
-        #ifdef IS_SAMPLE_RNN
         if (updateCounter == 0) {
             bound = get_budget(energyBudget, time, STEPS, ENERGY_ESTIMATES, &distribution, FIXED_POINT_PRECISION);
         }
@@ -171,10 +173,6 @@ int main(int argc, char **argv) {
         }
 
         #endif
-
-        //if (time >= STEPS) {
-        //    break;
-        //}
 
         if (time % 1000 == 0) {
             printf("Finished %d samples\n", time);

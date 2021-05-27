@@ -105,9 +105,7 @@ venv.bak/
 
 # Data files
 src/saved_models/*
-src/datasets/*
-src/raw_datasets/*
-src/data_generation/collision/simulated_datasets/*
+src/data/*
 *.npz
 *.jsonl.gz
 *.png
@@ -168,6 +166,3 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
-
-
-

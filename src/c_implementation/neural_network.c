@@ -7,7 +7,7 @@ static dtype INPUT_BUFFER[NUM_INPUT_FEATURES * VECTOR_COLS] = {0};
 
 
 uint8_t should_process(uint16_t t, ExecutionState *execState) {
-    #if defined(IS_SAMPLE_RNN)
+    #if defined(IS_BUDGET_RNN)
         uint16_t currentLevel  = getCurrentLevel(t);
         return currentLevel <= execState->levelsToExecute || !execState->isStopped;
     #elif defined(IS_SKIP_RNN)
@@ -29,7 +29,7 @@ void process_input(matrix *input, matrix states[SEQ_LENGTH], matrix logits[NUM_O
      * Processes the current input using the recurrent neural network. This function tracks when inference should stop
      * through the execution state struct.
      */
-    #ifndef IS_SAMPLE_RNN
+    #ifndef IS_BUDGET_RNN
     UNUSED(thresholds);
     UNUSED(logits);
     #endif
@@ -44,7 +44,7 @@ void process_input(matrix *input, matrix states[SEQ_LENGTH], matrix logits[NUM_O
     if (step == 0) {
         matrix_set(&currentState, 0);
     } else {
-    #if defined(IS_SAMPLE_RNN) && STRIDE_LENGTH > 1
+    #if defined(IS_BUDGET_RNN) && STRIDE_LENGTH > 1
         // Set state from the last sample in the current sub-sequence
         matrix prevSampleState = { STATE_BUFFER + stateBufferOffset, STATE_SIZE, VECTOR_COLS };
         stateBufferOffset += prevSampleState.numRows * prevSampleState.numCols;
@@ -81,7 +81,7 @@ void process_input(matrix *input, matrix states[SEQ_LENGTH], matrix logits[NUM_O
 
     apply_transformation(&nextState, &inputFeatures, &currentState, FIXED_POINT_PRECISION);
 
-    #ifdef IS_SAMPLE_RNN
+    #ifdef IS_BUDGET_RNN
     #if STRIDE_LENGTH > 1
     if (step < NUM_OUTPUTS) {
     #else
@@ -107,13 +107,12 @@ void process_input(matrix *input, matrix states[SEQ_LENGTH], matrix logits[NUM_O
     scalar_product(&nextState, &nextState, gate, FIXED_POINT_PRECISION);
     scalar_product(&prevState, &currentState, oneMinusGate, FIXED_POINT_PRECISION);
     matrix_add(&nextState, &nextState, &prevState);
-
     #endif
 
     // Save next state into the states array
     matrix_replace(states + step, &nextState);
 
-    #if defined(IS_SAMPLE_RNN) || defined(IS_RNN)
+    #if defined(IS_BUDGET_RNN)
     // If we reach the last element of the highest level, we compute the output.
     uint8_t isEnd = isLastSampleInLevel(step, execState->levelsToExecute);
 
@@ -124,8 +123,16 @@ void process_input(matrix *input, matrix states[SEQ_LENGTH], matrix logits[NUM_O
     if ((currentLevel == execState->levelsToExecute && execState->isStopped && isEnd) || (step == SEQ_LENGTH - 1)) {
         matrix pooledLogits = { STATE_BUFFER + stateBufferOffset, NUM_OUTPUT_FEATURES, VECTOR_COLS };
         pool_logits(&pooledLogits, logits, states, currentLevel + 1, FIXED_POINT_PRECISION);
-
         execState->prediction = argmax(&pooledLogits);
+        execState->isCompleted = 1;
+    }
+    #elif defined(IS_RNN)
+    uint8_t isEnd = isLastSampleInLevel(step, execState->levelsToExecute);
+
+    if (isEnd) {
+        matrix logProbs = { STATE_BUFFER + stateBufferOffset, NUM_OUTPUT_FEATURES, VECTOR_COLS };
+        compute_logits(&logProbs, &nextState, FIXED_POINT_PRECISION);
+        execState->prediction = argmax(&logProbs);
         execState->isCompleted = 1;
     }
     #else
@@ -137,7 +144,7 @@ void process_input(matrix *input, matrix states[SEQ_LENGTH], matrix logits[NUM_O
 
 
 uint16_t getCurrentLevel(uint16_t seqIndex) {
-    #ifdef IS_SAMPLE_RNN
+    #ifdef IS_BUDGET_RNN
     if (STRIDE_LENGTH > 1) {
         return seqIndex % NUM_OUTPUTS;
     } else {
@@ -150,7 +157,7 @@ uint16_t getCurrentLevel(uint16_t seqIndex) {
 
 
 uint8_t isLastSampleInLevel(uint16_t seqIndex, uint16_t fixedSeqIndex) {
-    #ifdef IS_SAMPLE_RNN
+    #ifdef IS_BUDGET_RNN
     UNUSED(fixedSeqIndex);
     if (STRIDE_LENGTH > 1) {
         return (SEQ_LENGTH - seqIndex) <= NUM_OUTPUTS;
@@ -247,7 +254,7 @@ matrix *compute_logits(matrix *result, matrix *input, uint16_t precision) {
 }
 
 
-#ifdef IS_SAMPLE_RNN
+#ifdef IS_BUDGET_RNN
 int16_t compute_stop_output(matrix *state, uint16_t precision) {
     /**
      * Computes the stop output from the given state.
@@ -344,7 +351,7 @@ matrix *pool_logits(matrix *result, matrix logits[NUM_OUTPUTS], matrix states[SE
 #endif
 
 
-#if defined(IS_SAMPLE_RNN) && STRIDE_LENGTH > 1
+#if defined(IS_BUDGET_RNN) && STRIDE_LENGTH > 1
 matrix *fuse_states(matrix *result, matrix *current, matrix *previous, uint16_t precision) {
     /**
      * Combines the given states using a learned weighted average.

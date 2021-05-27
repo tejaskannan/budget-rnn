@@ -1,5 +1,8 @@
 #include "fixed_point_ops.h"
 
+#define MAX_VAL 32767
+#define MIN_VAL -32767
+
 
 int16_t fp_add(int16_t x, int16_t y) {
     return x + y;
@@ -13,7 +16,16 @@ int16_t fp_sub(int16_t x, int16_t y) {
 
 int16_t fp_mul(int16_t x, int16_t y, uint16_t precision) {
     int32_t mul = ((int32_t) x) * ((int32_t) y);
-    return (int16_t) (mul >> precision);
+    int32_t shifted = mul >> precision;
+    return (int16_t) shifted;
+
+    //if (shifted > MAX_VAL) {
+    //    return (int16_t) MAX_VAL;
+    //} else if (shifted < MIN_VAL) {
+    //    return (int16_t) MIN_VAL;
+    //} else {
+    //    return (int16_t) shifted;
+    //}
 }
 
 
