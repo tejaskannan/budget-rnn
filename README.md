@@ -290,7 +290,7 @@ We facilitate computation by pre-quantizing each dataset. The script `create_mcu
 1. `--data-folder`: The folder of the dataset to prepare. The script will automatically use the testing fold.
 2. `--precision`: The number of fractional bits used during fixed point quantization. This should match the quantization applied to the model.
 
-The outputs will be written to two files placed in the dataset folder: `test_<N>_inputs.txt` and `test_<N>_labels.txt` where `<N>` is the `precision`.
+The outputs will be written to two files placed in the dataset folder: `test_<N>_inputs.txt` and `test_<N>_outputss.txt` where `<N>` is the `precision`.
 
 ### MSP430 Execution
 The folder `msp` contains an implementation of each RNN designed for an TI MSP430 FR5994. To run this code, you must copy the `neural_network_parameters.h` file into this folder, compile the code, and load it onto the MSP device.

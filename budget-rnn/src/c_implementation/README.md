@@ -6,5 +6,5 @@ $ ./model <path-to-inputs> <path-to-labels>
 ```
 The paths refer to the quantized txt files created by the script `create_mcu_dataset.py` in the directory above. Below is a concrete example of the execution command.
 ```
-$ ./model ../../../data/pen_digits/folds_8/test_9_inputs.txt ../../../data/pen_digits/folds_8/test_9_labels.txt
+$ ./model ../../../data/pen_digits/folds_8/test_9_inputs.txt ../../../data/pen_digits/folds_8/test_9_outputs.txt
 ```
