@@ -1,0 +1,8 @@
+# MSP430 Implementation
+This folder contains the implementation for RNNs on a TI MSP430 FR5994. The system works by receiving inputs over a BLE link, processing inputs sequentially, and then responding with a result at a sequence's completion.
+
+The code has been tested using a HM-10 BLE module with Pin 6.1 designating Rx and Pin 6.2 representing TX. Thus, the HM-10's TX is connected to Pin 6.1 and RX is connected to Pin 6.2. The code also contains logic to read an analog input of the voltage over a capacitor. This functionality is used by Budget RNNs to set the halting thresholds. The code reads this voltage by configuring Pin 1.2 for ADC and calculates the energy in the capacitor using the capacitance specified in `adc.c`. You can find the initialization code for both ADC and UART in the file `init.c`.
+
+To run this implementation, first convert neural network into a header file using the script `convert_network.py` (with the `--msp` flag set) in the directory above. Then copy the `neural_network_parameters.h` file into this directory, compile the code, and load the executable onto the MSP430 device. This compilation and loading was tested using Texas Instruments' Code Composer Studio 10.
+
+Finally, the implementation assumes a neural network with an output layer with a single hidden layer. For Budget RNNs, the halting output uses a single hidden layer. These parameters are hard-coded for simplicity. You can add additional `dense()` calls to add more layers. The matrix multiply implementation uses the on-board LEA. You must link this code into the executable. The DSP library can be found [here](https://www.ti.com/tool/MSP-DSPLIB).

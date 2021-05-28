@@ -7,7 +7,7 @@ There are three components of this repository: neural network training, halting 
 As a general note, the code often makes references to a model named Sample RNN. This name was the old name for Budget RNNs. Thus, within this codebase, Sample RNNs and Budget RNNs are equivalent.
 
 ## Installation
-The repository has a few dependencies on popular python libraries. To install the relevant packages, execute the shell script `install.sh` from the command line. That is, from the directory `budget-rnn`, run the following.
+The repository has a few dependencies on popular python libraries. To install the relevant packages, navigate into the `budget-rnn` directory and execute the shell script `install.sh` from the command line. That is, from the directory `budget-rnn`, run the following.
 ```
 $ ./install.sh
 ```
@@ -38,19 +38,23 @@ $ pip3 uninstall virtualenv
 Finally, this installation process was tested on Linux. If running on Windows, please use [Windows Subsystem for Linux](https://docs.microsoft.com/en-us/windows/wsl/install-win10).
 
 ## Directory Structure
-The repository uses the structure below. Each submodule contains its own documentation.
-1. `controllers/`: This directory holds implementations of the runtime systems used to select subsequences during budgeted inference.
-2. `data/`: This folder contains the datasets used for training and evaluation. Each dataset has a folder entitled `<dataset-name>/folds_<N>` where `<dataset-name>` is the name of the dataset and `<N>` is the sequence length. The `folds_<N>` folder has three sub-directories containing the `train`, `validation`, and `test` folds.
-3. `dataset/`: This directory contains code that manages data loading.
-4. `layers/`: This folder holds the implementation of neural network layers. The 'layers/cells' folder contains each RNN cell.
-5. `models/`: This folder contains the implementation of each neural network. In particular, the `adaptive_model.py` file describes the logic for Budget RNNs. The `standard_model.py` file implements the baseline RNNs. The `tf_model.py` file contains the logic to train and execute models within Tensorflow.
-6. `params/`: This directory holds the parameter files that govern each neural network. The provided parameter files were used to train the existing RNNs.
-7. `results/`: This folder contains the results of budgeted inference obtained in the simulated environment. The repository includes results from both the Bluetooth and the Temperature energy profiles.
-8. `trained_models/`: This folder holds already-trained models on each dataset. The Budget RNNs come with trained halting thresholds.
-9. `utils/`: This module provides useful utility functions such as file reading and writing. Of particular interest is the `utils/tf_utils.py` file which implements utility Tensorflow operations.
+The repository uses the structure below. Each submodule contains its own documentation. Most code files are located in the `budget-rnn/src` directory.
+1. `data/`: This folder contains the datasets used for training and evaluation. Each dataset has a folder entitled `<dataset-name>/folds_<N>` where `<dataset-name>` is the name of the dataset and `<N>` is the sequence length. The `folds_<N>` folder has three sub-directories containing the `train`, `validation`, and `test` folds.
+2. `results/`: This folder contains the results of budgeted inference obtained in the simulated environment. The repository includes results from both the Bluetooth and the Temperature energy profiles.
+3. `trained_models/`: This folder holds already-trained models on each dataset. The Budget RNNs come with trained halting thresholds.
+4. `budget-rnn/src/c_implementation`: This folder contains a C implementation of the considered RNNs. This implementation is used for debugging the MSP430 implementation on a standard system.
+5. `budget-rnn/src/controllers/`: This directory holds implementations of the runtime systems used to select subsequences during budgeted inference.
+6. `budget-rnn/src/conversion/`: This folder holds utility files for converting Tensorflow models into C header files for MSP430 inference.
+7. `budget-rnn/src/dataset/`: This directory contains code that manages data loading.
+8. `budget-rnn/src/layers/`: This folder holds the implementation of neural network layers. The 'layers/cells' folder contains each RNN cell.
+9. `budget-rnn/src/models/`: This folder contains the implementation of each neural network. In particular, the `adaptive_model.py` file describes the logic for Budget RNNs. The `standard_model.py` file implements the baseline RNNs. The `tf_model.py` file contains the logic to train and execute models within Tensorflow.
+10. `budget-rnn/src/msp`: This module contains the MSP430 implementation. This code will not run on a standard system (e.g. laptop).
+11. `budget-rnn/src/params/`: This directory holds the parameter files that govern each neural network. The provided parameter files were used to train the existing RNNs.
+12. `budget-rnn/src/results/`: This folder contains the results of budgeted inference obtained in the simulated environment. The repository includes results from both the Bluetooth and the Temperature energy profiles.
+13. `budget-rnn/src/utils/`: This module provides useful utility functions such as file reading and writing. Of particular interest is the `utils/tf_utils.py` file which implements utility Tensorflow operations.
 
 ## Overview
-This document starts by describing how to recreate the plots in the paper using the raw data from already-run simulations. The following sections describe how to train Budget RNNs and execute new simulations from scratch. This end-to-end process may be time-consuming. For this reason, we include already-trained neural networks, optimized halting thresholds, and traces from the simulations used in the paper. Thus, one may (partially) validate the final results without completing each step.
+This document starts by describing how to recreate the plots in the paper using the raw data from already-run simulations. The following sections describe how to train Budget RNNs and execute new simulations from scratch. This end-to-end process may be time-consuming. For this reason, we include already-trained neural networks, optimized halting thresholds, and traces from the simulations used in the paper. Thus, one may (partially) validate the final results without completing each step. All scripts can be found in the folder `budget-rnn/src`, and you should run the scripts from this directory. The existing results and models are located in the base of the repository.
 
 ## Generating Results
 This section covers how to generate the main results in the paper. The folders `results/<sensor-name>/merged/<dataset-name>` contain the raw simulation results using the included RNNs. If you are generating results for new simulations, alter the arguments in the following commands to point to the new simulation logs.
@@ -64,7 +68,7 @@ The first component involves plotting the accuracy for each considered budget. T
 
 As an example, the following command will recreate figure 6 in the paper.
 ```
-$ python plot_budget_curve.py --input-folder results/bluetooth/merged/pen_digits/ --noise-loc 0.0 --dataset-folder data/pen_digits/folds_8/
+$ python plot_budget_curve.py --input-folder ../../results/bluetooth/merged/pen_digits/ --noise-loc 0.0 --dataset-folder ../../data/pen_digits/folds_8/
 ```
 ### Accuracy Tables
 The second component is to compute the aggregate accuracy across all budgets for each system. The script `accuracy_table.py` implements this behavior. This script takes the following arguments.
@@ -74,7 +78,7 @@ The second component is to compute the aggregate accuracy across all budgets for
 
 For example, the following command will recreate the left-hand side of figure 5.
 ```
-$ python accuracy_table.py --input-folders results/bluetooth/merged/emg/ results/bluetooth/merged/fordA/ results/bluetooth/merged/pavement/ results/bluetooth/merged/pedestrian/ results/bluetooth/merged/pen_digits/ results/bluetooth/merged/uci_har/ results/bluetooth/merged/whale --mode baseline --noise-loc 0.0
+$ python accuracy_table.py --input-folders ../../results/bluetooth/merged/emg/ ../../results/bluetooth/merged/fordA/ ../../results/bluetooth/merged/pavement/ ../../results/bluetooth/merged/pedestrian/ ../../results/bluetooth/merged/pen_digits/ ../../results/bluetooth/merged/uci_har/ ../../results/bluetooth/merged/whale --mode baseline --noise-loc 0.0
 ```
 Switching the Bluetooth results for the temperature results will recreate the right half of this figure. Furthermore, changing the `--mode` to `budget` will recreate figure 9.
 
@@ -92,7 +96,7 @@ The final component of result generation involves the mean energy budget compari
 
 As an example, the following command will recreate figure 7 from the paper.
 ```
-python plot_energy.py --input-folders results/bluetooth/merged/emg/ results/bluetooth/merged/fordA/ results/bluetooth/merged/pavement/ results/bluetooth/merged/pedestrian/ results/bluetooth/merged/pen_digits/ results/bluetooth/merged/uci_har/ results/bluetooth/merged/whale
+python plot_energy.py --input-folders ../../results/bluetooth/merged/emg/ ../../results/bluetooth/merged/fordA/ ../../results/bluetooth/merged/pavement/ ../../results/bluetooth/merged/pedestrian/ ../../results/bluetooth/merged/pen_digits/ ../../results/bluetooth/merged/uci_har/ ../../results/bluetooth/merged/whale
 ```
 
 ### Training Time
@@ -247,7 +251,7 @@ The script merges the logs from the Budget RNN systems. Further, it will copy th
 
 As an example, the command below will merge the logs on the pen digits dataset.
 ```
-$ python merge_systems.py --models trained_models/pen_digits/budget/ --dataset-folder data/pen_digits/folds_8/ --log-folder results/bluetooth/pen_digits/ --output-folder results/pen_digits_merged --power-system-type bluetooth
+$ python merge_systems.py --models ../../trained_models/pen_digits/budget/ --dataset-folder ../../data/pen_digits/folds_8/ --log-folder ../../results/bluetooth/pen_digits/ --output-folder ../../results/pen_digits_merged --power-system-type bluetooth
 ```
 The merged logs from the already-trained models are located in the `results/<sensor-name>/merged/<dataset-name>` directories.
 
@@ -264,6 +268,42 @@ The script will create a file called `energy_comparison.jsonl.gz` the same direc
 
 The command below will compare the Budget RNN to the standard RNN on the pen digits dataset. This comparison uses the Bluetooth profile on the existing simulation results. As a note, this script can take a long time to execute.
 ```
-python energy_comparison.py --adaptive-model-paths trained_models/pen_digits/budget/ --adaptive-log results/bluetooth/merged/pen_digits/model-adaptive-SAMPLE_RNN-pen_digits-merged-bluetooth.jsonl.gz --baseline results/bluetooth/merged/pen_digits/model-fixed_under_budget-RNN-pen-digits-2020-08-28-23-24-40_model_best-bluetooth.jsonl.gz --dataset-folder data/pen_digits/folds_8/ --sensor-type bluetooth --should-print
+python energy_comparison.py --adaptive-model-paths ../../trained_models/pen_digits/budget/ --adaptive-log ../../results/bluetooth/merged/pen_digits/model-adaptive-SAMPLE_RNN-pen_digits-merged-bluetooth.jsonl.gz --baseline ../../results/bluetooth/merged/pen_digits/model-fixed_under_budget-RNN-pen-digits-2020-08-28-23-24-40_model_best-bluetooth.jsonl.gz --dataset-folder ../../data/pen_digits/folds_8/ --sensor-type bluetooth --should-print
 ```
 Adding additional baseline logs (e.g. Skip and Phased) will expand this comparison. Furthermore, changing `bluetooth` to `temp` will compare systems on the temperature sensor profile.
+
+## MSP430 Experimentation
+
+There are three main steps involved with getting the implemented RNNs to run on a TI MSP430 FR5994: (1) model conversion, (2) dataset conversion, (3) loading onto the device. The sections below cover each part.
+
+### Neural Network Conversion
+To run on the MSP430, the neural network parameters must be converted into a C header file. This process is accomplished by the script `convert_network.py` which takes the following arguments.
+1. `--model-path`: Path to the trained RNN model. This must be the pickle file containing the trained parameters.
+2. `--sensor-type`: The sensor type (`bluetooth` or `temperature`). This parameter is used to obtain the halting thresholds and the offline power profile.
+3. `--precision`: The fixed point precision (in bits). For example, a precision of `9` means that `9` of the `16` bits per value will be fractional (`5` will not non-fractional and `1` will be the sign).
+4. `--msp`: Whether to prepare the model for the MSP430. If not set, then the model can be run on a standard system using the provided `c_implementation`.
+
+The output of this script is a file called `neural_network_parameters.h`. You should copy this file into the folder containing the model's C implementation.
+
+### Dataset Conversion
+We facilitate computation by pre-quantizing each dataset. The script `create_mcu_dataset.py` performs this quantization and takes in the following two parameters.
+1. `--data-folder`: The folder of the dataset to prepare. The script will automatically use the testing fold.
+2. `--precision`: The number of fractional bits used during fixed point quantization. This should match the quantization applied to the model.
+
+The outputs will be written to two files placed in the dataset folder: `test_<N>_inputs.txt` and `test_<N>_labels.txt` where `<N>` is the `precision`.
+
+### MSP430 Execution
+The folder `msp` contains an implementation of each RNN designed for an TI MSP430 FR5994. To run this code, you must copy the `neural_network_parameters.h` file into this folder, compile the code, and load it onto the MSP device.
+
+Once the MSP430 is ready, you can use the script `sensor_client.py` to send inputs to the MSP430 and have it respond with inference results. This experimental setup uses the Bluetooth link as a `sensor` so allow for testing with pre-collected data. This script takes the following parameters.
+1. `--sample-freq`: The sample frequency in Hz
+2. `--seq-length`: The sequence length of this dataset
+3. `--max-sequences`: The maximum number of sequences to test. This parameter must match the corresponding constant in the MSP430 code.
+4. `--inputs-path`: The path to the quantized input data (txt) file. This file is one output of the data conversion step above.
+5. `--labels-path`:  The path to the label (txt) file. This file is the other output of the data conversion step above.
+6. `--output-file`: Path to the output (jsonl.gz) file. The results will be stored in this file.
+7. `--budget BUDGET`: The energy budget. This parameter must match the corresponding constant in the MSP430 code.
+8. `--is-skip`: Whether this script is used to drive a Skip RNN.
+9. `--start-index`: The optional element to start inference at. This parameter defaults to `0`.
+
+This client will communicate with the MSP430 over a Bluetooth Low Energy link. The MAC address and BLE device are specified at the top of the `sensor_client.py`; these values should be changed to match the employed hardware.
